@@ -200,7 +200,7 @@ function resolveLevaConfig(value, projectRoot) {
 export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd() } = {}) {
   const merged = merge(DEFAULT_CONFIG, raw)
   const rootBase = configPath ? path.dirname(configPath) : cwd
-  const projectRoot = path.resolve(merged.projectRoot ?? rootBase)
+  const projectRoot = path.resolve(rootBase, merged.projectRoot ?? ".")
   const stateDir = path.resolve(projectRoot, merged.stateDir)
   const leva = resolveLevaConfig(merged.controls?.leva, projectRoot)
 
@@ -305,12 +305,39 @@ function wsPortPin(wsPort) {
 
 /** True when the agent is allowed to read/write this path. */
 export function isEditableSourcePath(config, absolutePath, relativePath) {
-  const probe = relativePath ?? absolutePath
-  if (SOURCE_DENY_PATTERNS.some((pattern) => pattern.test(probe))) return false
+  const lexicalProbe = relativePath ?? absolutePath
+  if (SOURCE_DENY_PATTERNS.some((pattern) => pattern.test(lexicalProbe))) return false
   if (!config.source.extensions.includes(path.extname(absolutePath).toLowerCase())) return false
-  if (config.source.roots.length === 0) return true
-  return config.source.roots.some((root) => {
-    const rel = path.relative(root, absolutePath)
+
+  let target
+  let projectRoot
+  try {
+    target = fs.realpathSync(absolutePath)
+    projectRoot = fs.realpathSync(config.projectRoot)
+  } catch {
+    return false
+  }
+
+  const projectRelative = path.relative(projectRoot, target)
+  if (
+    projectRelative === "" ||
+    projectRelative.startsWith("..") ||
+    path.isAbsolute(projectRelative) ||
+    SOURCE_DENY_PATTERNS.some((pattern) => pattern.test(projectRelative)) ||
+    !config.source.extensions.includes(path.extname(target).toLowerCase())
+  ) {
+    return false
+  }
+
+  const roots = config.source.roots.length === 0 ? [config.projectRoot] : config.source.roots
+  return roots.some((root) => {
+    let canonicalRoot
+    try {
+      canonicalRoot = fs.realpathSync(root)
+    } catch {
+      return false
+    }
+    const rel = path.relative(canonicalRoot, target)
     return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)
   })
 }

@@ -14,6 +14,7 @@
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import http from "node:http"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
@@ -313,6 +314,7 @@ function prototypeCases(inventory) {
 
 async function sourceDefaultCases() {
   console.log("\nSource-backed control defaults")
+  const { parseArgs } = await import(path.join(ROOT, "design-editor/cli.mjs"))
   const { browserPrelude, resolveConfig } = await import(path.join(ROOT, "design-editor/config.mjs"))
   const { createControlDefaults } = await import(
     path.join(ROOT, "design-editor/server/control-defaults.mjs")
@@ -347,6 +349,21 @@ async function sourceDefaultCases() {
     assert.deepEqual(generic.chrome.trustedSelectors, [])
     assert.equal(generic.chrome.trustedSelector, "")
     assert.equal(generic.controls.leva, null)
+  })
+
+  check("CLI open flags preserve an explicit false override", () => {
+    assert.equal(parseArgs([]).open, undefined)
+    assert.equal(parseArgs(["--open"]).open, true)
+    assert.equal(parseArgs(["--no-open"]).open, false)
+  })
+
+  check("a relative projectRoot resolves from the config file, not process cwd", () => {
+    const configPath = path.join(ROOT, ".local", "configs", "design-editor.config.mjs")
+    const resolved = resolveConfig(
+      { projectRoot: "../.." },
+      { configPath, cwd: path.join(ROOT, "unrelated-cwd") }
+    )
+    assert.equal(resolved.projectRoot, path.resolve(ROOT))
   })
 
   check("the browser prelude excludes source-default file and export details", () => {
@@ -432,6 +449,34 @@ async function sourceDefaultCases() {
       { cwd: ROOT }
     )
     assert.throws(() => createControlDefaults(unsafe), /outside editable source roots/)
+  })
+
+  await checkAsync("refuses a source-root symlink that resolves outside the project", async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "design-editor-outside-"))
+    const outsideFile = path.join(outsideDir, "defaults.ts")
+    const linkedFile = path.join(fixtureDir, "linked-defaults.ts")
+    try {
+      await fs.writeFile(outsideFile, 'export const DEFAULTS = { "Card": { "gap": 8 } }\n')
+      await fs.symlink(outsideFile, linkedFile)
+      const unsafe = resolveConfig(
+        {
+          projectRoot: ROOT,
+          source: { roots: [fixtureDir], extensions: [".ts"] },
+          controls: {
+            leva: {
+              storeGlobal: "__STORE",
+              sourceDefaults: { file: linkedFile, exportName: "DEFAULTS" },
+              bindings: [],
+            },
+          },
+        },
+        { cwd: ROOT }
+      )
+      assert.throws(() => createControlDefaults(unsafe), /outside editable source roots/)
+    } finally {
+      await fs.rm(linkedFile, { force: true })
+      await fs.rm(outsideDir, { recursive: true, force: true })
+    }
   })
 
   await fs.rm(fixtureDir, { recursive: true, force: true })

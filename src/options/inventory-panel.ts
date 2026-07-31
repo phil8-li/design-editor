@@ -79,6 +79,7 @@ function chips(control: LevaControl, editor: EditorContext): HTMLElement {
       {
         class: "de-opt-chip",
         type: "button",
+        disabled: control.disabled,
         "aria-pressed": String(values[index] === control.value),
         title: `Set ${control.path} to "${name}"`,
         onclick: () => {
@@ -110,7 +111,11 @@ function valueEditor(control: LevaControl, editor: EditorContext): HTMLElement {
   }
 
   if (control.type === "BOOLEAN") {
-    const input = el("input", { type: "checkbox", "aria-label": control.label }) as HTMLInputElement
+    const input = el("input", {
+      type: "checkbox",
+      "aria-label": control.label,
+      disabled: control.disabled,
+    }) as HTMLInputElement
     input.checked = control.value === true
     input.addEventListener("change", () => commit(input.checked))
     return el("label", { class: "de-opt-check" }, [input, control.value === true ? "on" : "off"])
@@ -124,6 +129,7 @@ function valueEditor(control: LevaControl, editor: EditorContext): HTMLElement {
       inputmode: numeric ? "decimal" : undefined,
       "aria-label": `${control.label} value`,
       value: control.valueText,
+      disabled: control.disabled,
     }) as HTMLInputElement
     const send = () => {
       if (!numeric) return commit(input.value)
@@ -165,8 +171,8 @@ function sourceDefaultActions(control: LevaControl, editor: EditorContext): HTML
     defaultStateCache.set(url, exists)
     status.textContent = exists ? "saved default" : "live only"
     apply.textContent = exists ? "Update default" : "Apply to code"
-    ;(apply as HTMLButtonElement).disabled = false
-    ;(remove as HTMLButtonElement).disabled = !exists
+    ;(apply as HTMLButtonElement).disabled = control.disabled
+    ;(remove as HTMLButtonElement).disabled = control.disabled || !exists
   }
 
   const refresh = async () => {
@@ -603,7 +609,12 @@ export function installOptionsBrowser(editor: EditorContext): void {
   const root = el("div", { class: "de-options-root" }, [panel, launcher])
   document.body.append(root)
 
+  let returnFocus: HTMLElement | null = null
+
   function open(): void {
+    if (panel.hidden) {
+      returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    }
     panel.hidden = false
     launcher.setAttribute("aria-expanded", "true")
     render()
@@ -612,8 +623,22 @@ export function installOptionsBrowser(editor: EditorContext): void {
   function close(): void {
     panel.hidden = true
     launcher.setAttribute("aria-expanded", "false")
+    const target = returnFocus?.isConnected ? returnFocus : launcher
+    returnFocus = null
+    target.focus()
   }
   launcher.addEventListener("click", () => (panel.hidden ? open() : close()))
+  window.addEventListener("design-editor:open-options", open)
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape" || panel.hidden) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      close()
+    },
+    true
+  )
 
   const refresh = () => {
     // Invariant 5: never rebuild a surface out from under a focused control.

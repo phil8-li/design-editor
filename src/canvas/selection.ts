@@ -26,6 +26,7 @@ export type HandleId = (typeof HANDLES)[number][0]
 /** Handles read as 7px but grab at 13px: Fitts' law without the visual bulk. */
 const HANDLE_SIZE = 7
 const HANDLE_HIT = 13
+const BADGE_MAX_WIDTH = 96
 
 export interface NodePool {
   /** Returns a visible node; call `flush()` once per pass to hide the rest. */
@@ -95,6 +96,8 @@ export function installSelectionFrame(context: EditorContext): void {
 
   // Per-element outlines for a multi-selection; `boundsOutline` wraps the set.
   const members = createNodePool(layer, "de-outline")
+  const related = createNodePool(layer, "de-outline de-outline--related")
+  let highlighted: Element[] = []
 
   const handles = new Map<HandleId, HTMLElement>()
   const inset = (HANDLE_HIT - HANDLE_SIZE) / 2
@@ -139,6 +142,12 @@ export function installSelectionFrame(context: EditorContext): void {
       if (!entry.element.isConnected) continue
       rects.push(entry.element.getBoundingClientRect())
     }
+    const relatedRects = highlighted
+      .filter(
+        (element) =>
+          element.isConnected && !selection.some((entry) => entry.element === element)
+      )
+      .map((element) => element.getBoundingClientRect())
 
     if (hoverRect) {
       hoverOutline.style.display = "block"
@@ -146,6 +155,11 @@ export function installSelectionFrame(context: EditorContext): void {
     } else {
       hide(hoverOutline)
     }
+
+    for (const rect of relatedRects) {
+      placeNode(related.take(), rect.left, rect.top, rect.width, rect.height)
+    }
+    related.flush()
 
     let left = Number.POSITIVE_INFINITY
     let top = Number.POSITIVE_INFINITY
@@ -182,7 +196,14 @@ export function installSelectionFrame(context: EditorContext): void {
       count > 1
         ? `${count} layers · ${Math.round(width)} × ${Math.round(height)}`
         : `${Math.round(width)} × ${Math.round(height)}`
-    placeNode(label, Math.max(4, left), top - 18 < 4 ? bottom + 4 : top - 18)
+    const rootStyle = document.documentElement.style
+    const canvasLeft = Number.parseFloat(rootStyle.getPropertyValue("--de-left")) || 0
+    const canvasRight = Number.parseFloat(rootStyle.getPropertyValue("--de-right")) || 0
+    const labelX = Math.min(
+      Math.max(canvasLeft + 4, left),
+      window.innerWidth - canvasRight - BADGE_MAX_WIDTH - 4
+    )
+    placeNode(label, labelX, top - 18 < 4 ? bottom + 4 : top - 18)
 
     const showHandles = count === 1 && (state.tool === "move" || state.tool === "select")
     for (const [id, fx, fy] of HANDLES) {
@@ -216,10 +237,11 @@ export function installSelectionFrame(context: EditorContext): void {
     const state = context.getState()
     // Selected or hovered app content may move under Motion, so track it. Once
     // both are empty, stop entirely until the store wakes the painter again.
-    if (state.selection.length > 0 || state.hovered) schedule()
+    if (state.selection.length > 0 || state.hovered || highlighted.length > 0) schedule()
   }
 
   const unsubscribe = context.subscribe((next, previous) => {
+    if (next.selection !== previous.selection) highlighted = []
     if (
       next.selection !== previous.selection ||
       next.hovered !== previous.hovered ||
@@ -228,10 +250,19 @@ export function installSelectionFrame(context: EditorContext): void {
       schedule()
     }
   })
+  const onHighlight = (event: Event) => {
+    const detail = (event as CustomEvent<{ elements?: Element[] }>).detail
+    highlighted = Array.isArray(detail?.elements)
+      ? detail.elements.filter((element): element is Element => element instanceof Element)
+      : []
+    schedule()
+  }
+  window.addEventListener("design-editor:highlight-elements", onHighlight)
   schedule()
   window.addEventListener("beforeunload", () => {
     destroyed = true
     unsubscribe()
+    window.removeEventListener("design-editor:highlight-elements", onHighlight)
     if (frame) cancelAnimationFrame(frame)
   })
 }

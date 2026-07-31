@@ -206,7 +206,7 @@ export function installCanvas(context: EditorContext): void {
   // vendor overlay's own document-level guards, so ours wins the gesture.
   const onClick = (event: MouseEvent) => {
     const { tool } = context.getState()
-    if (tool !== "move" && tool !== "select") return
+    if (tool !== "move" && tool !== "select" && tool !== "hand") return
     if (isChrome(event.target) || !isCanvasElement(event.target)) return
     event.preventDefault()
     event.stopPropagation()

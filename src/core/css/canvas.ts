@@ -17,6 +17,11 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
   pointer-events: none;
 }
 .de-outline--hover { border-style: solid; opacity: 0.48; }
+.de-outline--related {
+  border-color: ${t.color.measure};
+  border-style: dashed;
+  opacity: 0.82;
+}
 .de-outline--autolayout { border-color: ${t.color.autoLayout}; }
 .de-handle {
   position: absolute;
@@ -38,6 +43,9 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   line-height: 13px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
 }

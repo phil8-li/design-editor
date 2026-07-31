@@ -63,7 +63,7 @@ export function installLayerMenu(context: EditorContext): void {
     )
     node.addEventListener("click", () => {
       const target = toSelectable(element)
-      close()
+      close(true)
       if (!target) return
       // `selectMany` rather than `select`: the latter early-returns on an
       // unchanged selection, and re-picking the same row must still take.
@@ -94,9 +94,15 @@ export function installLayerMenu(context: EditorContext): void {
     menu.style.left = "0px"
     menu.style.top = "0px"
     const rect = menu.getBoundingClientRect()
-    const left = Math.min(event.clientX, window.innerWidth - rect.width - EDGE)
+    const rootStyle = document.documentElement.style
+    const canvasLeft = Number.parseFloat(rootStyle.getPropertyValue("--de-left")) || 0
+    const canvasRight = Number.parseFloat(rootStyle.getPropertyValue("--de-right")) || 0
+    const left = Math.min(
+      Math.max(event.clientX, canvasLeft + EDGE),
+      window.innerWidth - canvasRight - rect.width - EDGE
+    )
     const top = Math.min(event.clientY, window.innerHeight - rect.height - EDGE)
-    menu.style.left = `${Math.max(EDGE, left)}px`
+    menu.style.left = `${Math.max(canvasLeft + EDGE, left)}px`
     menu.style.top = `${Math.max(EDGE, top)}px`
     open = true
     const first = menu.querySelector<HTMLButtonElement>(".de-layer-menu-row")

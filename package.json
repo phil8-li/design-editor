@@ -7,7 +7,6 @@
     "design-editor": "./cli.mjs"
   },
   "exports": {
-    ".": "./cli.mjs",
     "./config": "./config.mjs"
   },
   "files": [
@@ -19,6 +18,7 @@
     "runtime/",
     "server/",
     "src/",
+    "tsconfig.json",
     "README.md"
   ],
   "engines": {

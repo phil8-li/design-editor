@@ -205,7 +205,7 @@ export const optionsSection: InspectorSection = (context) => {
   )
 
   return section(
-    `Options (${options.length})`,
+    `Controls & options (${options.length})`,
     el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [
       contextual,
       list,

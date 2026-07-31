@@ -11,9 +11,7 @@ import { createWriter, type Writer } from "../../core/writer"
 import type { EditorContext } from "../../core/context"
 import type { Selection } from "../../core/types"
 
-import { layoutSection } from "./section-layout"
-import { autoLayoutSection } from "./section-autolayout"
-import { alignSection } from "./section-align"
+import { unifiedLayoutSection } from "./section-unified-layout"
 import { appearanceSection } from "./section-appearance"
 import { fillSection } from "./section-fill"
 import { strokeSection } from "./section-stroke"
@@ -37,16 +35,14 @@ export type InspectorSection = (context: SectionContext) => HTMLElement | null
 
 /** Figma's own top-to-bottom order, minus the sections with no DOM analogue. */
 const SECTIONS: InspectorSection[] = [
-  alignSection,
-  layoutSection,
-  autoLayoutSection,
+  optionsSection,
+  unifiedLayoutSection,
   appearanceSection,
   fillSection,
   strokeSection,
   effectsSection,
   typographySection,
   classesSection,
-  optionsSection,
   aiSection,
 ]
 
@@ -138,7 +134,18 @@ export function installInspector(editor: EditorContext): void {
     if (!selection) {
       host.append(
         el("div", { class: "de-empty" }, [
-          "Select an element on the canvas, or pick a layer, to edit it here.",
+          el("div", {}, ["Select an element on the canvas, or pick a layer, to edit it here."]),
+          el(
+            "button",
+            {
+              class: "de-button",
+              type: "button",
+              style: "margin-top:10px",
+              onclick: () =>
+                window.dispatchEvent(new CustomEvent("design-editor:open-options")),
+            },
+            ["Browse controls and options"]
+          ),
         ])
       )
       return

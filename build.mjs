@@ -14,21 +14,28 @@ import { fileURLToPath } from "node:url"
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 const outfile = path.join(root, "dist", "design-editor.js")
+const tsconfig = path.join(root, "tsconfig.json")
 const watch = process.argv.includes("--watch")
 const check = process.argv.includes("--check")
 
+const buildOptions = {
+  absWorkingDir: root,
+  entryPoints: [path.join(root, "src", "index.ts")],
+  outfile,
+  bundle: true,
+  format: "iife",
+  platform: "browser",
+  target: ["chrome110", "safari16"],
+  sourcemap: false,
+  minify: false,
+  legalComments: "none",
+  logLevel: "info",
+  tsconfig,
+}
+
 async function run() {
   const result = await build({
-    entryPoints: [path.join(root, "src", "index.ts")],
-    outfile,
-    bundle: true,
-    format: "iife",
-    platform: "browser",
-    target: ["chrome110", "safari16"],
-    sourcemap: false,
-    minify: false,
-    legalComments: "none",
-    logLevel: "info",
+    ...buildOptions,
     write: !check,
   })
 
@@ -59,13 +66,7 @@ async function run() {
 if (watch) {
   const { context } = await import("esbuild")
   const ctx = await context({
-    entryPoints: [path.join(root, "src", "index.ts")],
-    outfile,
-    bundle: true,
-    format: "iife",
-    platform: "browser",
-    target: ["chrome110", "safari16"],
-    logLevel: "info",
+    ...buildOptions,
   })
   await ctx.watch()
   console.log("Watching design-editor sources…")

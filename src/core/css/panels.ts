@@ -62,6 +62,17 @@ export const panelsCss = `/* ---------- panels ---------- */
 
 /* Vertical rhythm inside a section body — one rule instead of an inline style. */
 .de-stack { display: flex; flex-direction: column; gap: 6px; }
+.de-layout-group { display: flex; flex-direction: column; gap: 6px; }
+.de-layout-group + .de-layout-group {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid ${t.color.border};
+}
+.de-layout-group-title {
+  color: ${t.color.textMuted};
+  font-size: 10px;
+  font-weight: 600;
+}
 .de-hint { color: ${t.color.textDim}; font-size: 10px; line-height: 1.4; }
 
 /* Selection identity: what you picked, and where it lives in the source. */

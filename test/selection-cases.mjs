@@ -570,6 +570,11 @@ async function canvasCases(window) {
   check("overlap menu follows Layers order and Escape closes only the menu", () => {
     reset()
     pointer($("title"))
+    const invoker = window.document.createElement("button")
+    window.document.body.append(invoker)
+    invoker.focus()
+    window.document.documentElement.style.setProperty("--de-left", "240px")
+    window.document.documentElement.style.setProperty("--de-right", "260px")
     at($("bar"))
     $("bar").dispatchEvent(
       new window.MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 })
@@ -577,6 +582,7 @@ async function canvasCases(window) {
     const menu = window.document.querySelector(".de-layer-menu")
     const rows = Array.from(menu.querySelectorAll(".de-layer-menu-row"))
     assert.equal(menu.style.display, "block")
+    assert.equal(menu.style.left, "248px")
     assert.equal(rows[0].textContent, "Page")
     assert.equal(rows.at(-1).textContent, "IconButton")
     assert.equal(window.document.activeElement, rows[0])
@@ -584,7 +590,28 @@ async function canvasCases(window) {
     assert.equal(window.document.activeElement, rows.at(-1))
     window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
     assert.equal(menu.style.display, "none")
+    assert.equal(window.document.activeElement, invoker)
     assert.deepEqual(selection(), ["root"])
+    window.document.documentElement.style.removeProperty("--de-left")
+    window.document.documentElement.style.removeProperty("--de-right")
+    invoker.remove()
+  })
+
+  check("keyboard layer-menu activation restores invocation focus", () => {
+    reset()
+    const invoker = window.document.createElement("button")
+    window.document.body.append(invoker)
+    invoker.focus()
+    at($("bar"))
+    $("bar").dispatchEvent(
+      new window.MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 })
+    )
+    const menu = window.document.querySelector(".de-layer-menu")
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }))
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+    assert.equal(menu.style.display, "none")
+    assert.equal(window.document.activeElement, invoker)
+    invoker.remove()
   })
 
   check("Layers highlights every selected row", () => {

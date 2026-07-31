@@ -30,8 +30,8 @@ const USAGE = `Usage: design-editor [appPort] [options]
   --help
 `
 
-function parseArgs(argv) {
-  const options = { open: false, verify: false, printConfig: false, verbose: false }
+export function parseArgs(argv) {
+  const options = { open: undefined, verify: false, printConfig: false, verbose: false }
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -91,7 +91,7 @@ export async function main(argv = process.argv.slice(2)) {
   const config = await loadConfig({
     configPath: options.configPath,
     overrides: {
-      app: { port: options.appPort, host: options.host, open: options.open || undefined },
+      app: { port: options.appPort, host: options.host, open: options.open },
       ports: { proxy: options.proxyPort, ws: options.wsPort },
     },
   })

@@ -35,6 +35,7 @@ const bundled = await build({
     contents: `
       export { createContext } from "./src/core/context"
       export { installToolbar } from "./src/shell/toolbar"
+      export { controlRow, installOptionsBrowser } from "./src/options/inventory-panel"
       export { shellCss } from "./src/core/css"
     `,
     resolveDir: path.join(ROOT, "design-editor"),
@@ -111,5 +112,47 @@ assert.match(editorModule.shellCss, /bottom:/)
 assert.doesNotMatch(editorModule.shellCss, /transition: padding/)
 assert.doesNotMatch(editorModule.shellCss, /de-outline--scope/)
 
-console.log("11 passed, 0 failed")
+const disabledControl = {
+  path: "Cards.Layout.gap",
+  key: "gap",
+  label: "Gap",
+  type: "SELECT",
+  value: 8,
+  valueText: "8",
+  variants: ["Compact", "Comfortable"],
+  variantValues: [8, 16],
+  bounds: null,
+  disabled: true,
+  visible: true,
+  selectors: [],
+  relationship: null,
+  defaultGroup: null,
+  defaultKey: null,
+  canPersistDefault: false,
+}
+const disabledRow = editorModule.controlRow(disabledControl, context)
+assert.ok(Array.from(disabledRow.querySelectorAll(".de-opt-chip")).every((button) => button.disabled))
+
+const disabledNumber = editorModule.controlRow(
+  { ...disabledControl, type: "NUMBER", variants: null, variantValues: null },
+  context
+)
+assert.equal(disabledNumber.querySelector(".de-opt-input").disabled, true)
+
+const originalFetch = globalThis.fetch
+globalThis.fetch = async () => ({ ok: true, json: async () => ({}) })
+editorModule.installOptionsBrowser(context)
+const returnTarget = window.document.createElement("button")
+window.document.body.append(returnTarget)
+returnTarget.focus()
+window.dispatchEvent(new window.CustomEvent("design-editor:open-options"))
+const optionsPanel = window.document.querySelector(".de-opt-window")
+assert.equal(optionsPanel.hidden, false)
+assert.equal(window.document.activeElement?.className, "de-opt-filter")
+window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+assert.equal(optionsPanel.hidden, true)
+assert.equal(window.document.activeElement, returnTarget)
+globalThis.fetch = originalFetch
+
+console.log("17 passed, 0 failed")
 process.exit(0)

@@ -10,8 +10,8 @@
  *
  * The defaults below are not a second source of truth: they are what this file
  * falls back to when the bundle is loaded without its prologue (a unit test, or
- * a stale `dist/` served directly). They mirror the server defaults so that
- * path degrades to the previous hardcoded behaviour instead of to nothing.
+ * a stale `dist/` served directly). They mirror the generic server defaults;
+ * host integrations belong in design-editor.config.mjs.
  */
 
 export interface DockedPanelConfig {
@@ -32,7 +32,7 @@ export interface TailwindConfig {
 export interface DesignEditorConfig {
   apiBase: string
   chrome: {
-    /** Comma-joined selector list; never empty, or `closest("")` would throw. */
+    /** Comma-joined selector list. Empty means the host has no extra dev chrome. */
     trustedSelector: string
     dockedPanel: DockedPanelConfig
   }
@@ -42,11 +42,10 @@ export interface DesignEditorConfig {
 const FALLBACK: DesignEditorConfig = {
   apiBase: "/__design-editor",
   chrome: {
-    trustedSelector:
-      '#leva__root,[data-leva-chrome],[data-design-editor],div[class*="leva-c-"],[data-agentation-root]',
+    trustedSelector: "",
     dockedPanel: {
-      offsetVar: "--react-rewrite-leva-offset",
-      widthVar: "--react-rewrite-inspector-width",
+      offsetVar: "--design-editor-docked-panel-offset",
+      widthVar: "--design-editor-docked-panel-width",
     },
   },
   tailwind: {
