@@ -19,7 +19,7 @@ import type { RewriteElementInfo } from "./bridge"
 
 /** Only the vendor member the resolver needs, so a stub can stand in for tests. */
 export interface LayerBridge {
-  elementInfo(el: HTMLElement): RewriteElementInfo | null
+  elementInfo(el: Element): RewriteElementInfo | null
 }
 
 export interface LayerMeta {
@@ -100,9 +100,7 @@ function createResolver(bridge: LayerBridge): Resolver {
   const meta = (element: Element): LayerMeta => {
     const cached = metaCache.get(element)
     if (cached) return cached
-    // The engine resolves any host node; its published signature is narrower
-    // than the runtime contract, and SVG roots are exactly the icons we name.
-    const info = bridge.elementInfo(element as HTMLElement)
+    const info = bridge.elementInfo(element)
     const parent = element.parentElement
     const outer = parent && isLayerCandidate(parent) ? meta(parent).info : null
     const isRoot = Boolean(info?.componentName && ownerPath(info) !== ownerPath(outer))

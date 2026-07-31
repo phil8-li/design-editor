@@ -88,10 +88,13 @@ export function onFrame(paint: () => void): () => void {
 
 export function installSelectionFrame(context: EditorContext): void {
   const layer = context.slots.overlay
+  // Appended first so it paints behind everything else: the scope is context,
+  // and it frequently encloses the very element it must not obscure.
+  const scopeOutline = el("div", { class: "de-outline de-outline--scope" })
   const hoverOutline = el("div", { class: "de-outline de-outline--hover" })
   const boundsOutline = el("div", { class: "de-outline" })
   const label = el("div", { class: "de-badge" })
-  layer.append(hoverOutline, boundsOutline, label)
+  layer.append(scopeOutline, hoverOutline, boundsOutline, label)
 
   // Per-element outlines for a multi-selection; `boundsOutline` wraps the set.
   const members = createNodePool(layer, "de-outline")
@@ -134,10 +137,24 @@ export function installSelectionFrame(context: EditorContext): void {
       state.hovered && !selection.some((entry) => entry.element === state.hovered)
         ? state.hovered.getBoundingClientRect()
         : null
+    // `body`/`html` is the resting scope, and outlining the whole page reads as
+    // a rendering bug rather than as state.
+    const scope = state.scope
+    const scopeRect =
+      scope && scope.isConnected && scope !== document.body && scope !== document.documentElement
+        ? scope.getBoundingClientRect()
+        : null
     const rects: DOMRect[] = []
     for (const entry of selection) {
       if (!entry.element.isConnected) continue
       rects.push(entry.element.getBoundingClientRect())
+    }
+
+    if (scopeRect) {
+      scopeOutline.style.display = "block"
+      placeNode(scopeOutline, scopeRect.left, scopeRect.top, scopeRect.width, scopeRect.height)
+    } else {
+      hide(scopeOutline)
     }
 
     if (hoverRect) {

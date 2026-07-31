@@ -87,7 +87,9 @@ export interface RewriteBridge {
   send(message: unknown): void
   subscribe(fn: (message: Record<string, unknown>) => void): () => void
   discoverFile(componentName: string): Promise<string | null>
-  elementInfo(el: HTMLElement): RewriteElementInfo | null
+  // `Element`, not `HTMLElement`: the runtime resolves any host node, and an
+  // SVG icon is a legitimate target now that hit-testing reaches one.
+  elementInfo(el: Element): RewriteElementInfo | null
   resolveSourceAt(x: number, y: number): Promise<RewriteElementInfo | null>
   hitTest(x: number, y: number): HTMLElement | null
   selectedElement(): HTMLElement | null

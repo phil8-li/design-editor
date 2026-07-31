@@ -7,6 +7,7 @@
  */
 
 import { el } from "../core/dom"
+import { isTextEntry } from "../core/keymap"
 import type { EditorContext } from "../core/context"
 import type { ToolId } from "../core/types"
 
@@ -212,8 +213,10 @@ export function installToolbar(context: EditorContext): void {
 
   window.addEventListener("keydown", (event) => {
     if (event.metaKey || event.ctrlKey || event.altKey) return
-    const target = event.target as HTMLElement | null
-    if (target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName ?? "")) return
+    // Text entry only. Deliberately not `ownsCanvasKeys`, which also excludes
+    // chrome: clicking a tool leaves focus on its button, and the next letter
+    // must still switch tools.
+    if (isTextEntry(event.target)) return
     const match = TOOLS.find((tool) => tool.shortcut.toLowerCase() === event.key.toLowerCase())
     if (!match) return
     event.preventDefault()

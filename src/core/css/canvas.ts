@@ -10,6 +10,12 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
   pointer-events: none;
 }
 .de-outline--hover { border-style: solid; opacity: 0.7; }
+/* The container you have drilled into. Dashed and neutral so it reads as
+   context rather than as a second selection competing with the accent. */
+.de-outline--scope {
+  border-style: dashed;
+  border-color: ${t.color.borderStrong};
+}
 .de-outline--autolayout { border-color: ${t.color.autoLayout}; }
 .de-handle {
   position: absolute;

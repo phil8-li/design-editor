@@ -80,7 +80,10 @@ export function createContext(bridge: RewriteBridge, slots: EditorSlots): Editor
         })
         return
       }
-      if (current.length === 1 && current[0].element === element) return
+      // No identity early-return. The same element can need a fresh Selection:
+      // a source edit moves the line it was described from, and drilling
+      // re-selects it at a different depth. Skipping the write leaves both
+      // stale, and the object is cheap to rebuild.
       setState({ selection: [selection] })
     },
 

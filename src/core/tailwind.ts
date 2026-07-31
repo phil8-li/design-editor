@@ -53,6 +53,33 @@ const KEYWORDS: Record<string, Record<string, string>> = {
     "space-around": "justify-around",
     "space-evenly": "justify-evenly",
   },
+  // Per-child override of the parent's `align-items`, so the inspector can
+  // align one selected element instead of restyling everything beside it.
+  "align-self": {
+    auto: "self-auto",
+    "flex-start": "self-start",
+    center: "self-center",
+    "flex-end": "self-end",
+    stretch: "self-stretch",
+    baseline: "self-baseline",
+  },
+  // `Fill` in a flex row means "take the remaining space", which is `flex-1`.
+  // Without this the only translatable fallback is `width: 100%`, which is
+  // wrong the moment the element has a sibling.
+  flex: {
+    "1 1 0%": "flex-1",
+    "1 1 auto": "flex-auto",
+    "0 1 auto": "flex-initial",
+    none: "flex-none",
+  },
+  "border-style": {
+    solid: "border-solid",
+    dashed: "border-dashed",
+    dotted: "border-dotted",
+    double: "border-double",
+    hidden: "border-hidden",
+    none: "border-none",
+  },
   "align-items": {
     "flex-start": "items-start",
     center: "items-center",

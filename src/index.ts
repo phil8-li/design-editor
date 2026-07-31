@@ -13,6 +13,7 @@ import { installToolbar } from "./shell/toolbar"
 import { installCanvas } from "./canvas"
 import { installLayersPanel } from "./panels/layers"
 import { installInspector } from "./panels/inspector"
+import { installOptionsBrowser } from "./options/inventory-panel"
 
 async function boot(): Promise<void> {
   let bridge
@@ -30,6 +31,10 @@ async function boot(): Promise<void> {
   installLayersPanel(context)
   installInspector(context)
   installCanvas(context)
+  // Eagerly, not from the inspector's options section: browsing what controls
+  // exist is the answer to "I cannot tell what options we have", and that
+  // question is asked before anything is selected.
+  installOptionsBrowser(context)
 
   context.refresh()
   console.info("[design-editor] Figma-style overlay ready")
