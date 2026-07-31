@@ -12,8 +12,12 @@ import { deleteOptionSet, normalizeOptionSet, readOptionSets, writeOptionSet } f
 const PREFIX = "/__design-editor"
 const MAX_BODY_BYTES = 1024 * 1024
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
-// Option keys are `Component:line:tag:index`; nothing else may reach the store.
-const KEY_PATTERN = /^[A-Za-z0-9_.:?@-]{1,200}$/
+// Option keys are `Component:line:step/step/…` — `elementKey()` joins up to six
+// DOM steps with `/`, so the separator has to be legal or every real element is
+// refused. The key is only ever an object key in one JSON file, never a path,
+// so `/` cannot traverse; `..` is rejected anyway to keep the guard meaningful.
+const KEY_PATTERN = /^[A-Za-z0-9_.:?@/-]{1,200}$/
+const TRAVERSAL_PATTERN = /(^|\/)\.\.(\/|$)/
 
 function badRequest(message, statusCode = 400) {
   const error = new Error(message)
@@ -77,7 +81,8 @@ function optionKey(segment) {
   } catch {
     return null
   }
-  return KEY_PATTERN.test(decoded) ? decoded : null
+  if (!KEY_PATTERN.test(decoded)) return null
+  return TRAVERSAL_PATTERN.test(decoded) ? null : decoded
 }
 
 async function route(req, res, pathname) {
