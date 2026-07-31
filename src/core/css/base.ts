@@ -1,0 +1,83 @@
+/** Root variables, vendor-UI suppression, the app inset, and stacking order. */
+
+import { tokens as t } from "../tokens"
+
+export const baseCss = `
+:root {
+  --de-left: 0px;
+  --de-right: 0px;
+  --de-top: 0px;
+}
+
+/*
+ * The vendored React Rewrite overlay stays loaded — we drive it headlessly for
+ * fiber -> source resolution and source writes — but its chrome is replaced by
+ * ours. Its toasts, drag preview, and drop indicator stay: we call into them.
+ */
+#react-rewrite-root .prop-sidebar,
+#react-rewrite-root .toolbar,
+#react-rewrite-root .tools-panel,
+#react-rewrite-root .selection-label,
+#react-rewrite-root .changelog-panel,
+#react-rewrite-root .changelog-badge,
+#react-rewrite-root .help-btn,
+#react-rewrite-root .shortcuts-overlay {
+  display: none !important;
+}
+
+/*
+ * Inset the app so the chrome never covers what you are editing.
+ *
+ * Padding on a border-box <html> rather than margins on <body>: the app sets
+ * \`html.h-full\` + \`body.min-h-full\`, so a body margin would be *added* to a
+ * height that already fills the viewport and put every page into overflow.
+ * Padding inside a border-box root shrinks the containing block instead.
+ *
+ * Not a transform — a transformed ancestor would break the app's own layoutId
+ * shared-element morphs (docs/agent-rules/card-reader-morph.md). The tradeoff
+ * is that the app's own \`position: fixed\` chrome is viewport-anchored and does
+ * not move with the inset; that is inherent to any non-transform inset.
+ */
+html.design-editor-active {
+  box-sizing: border-box;
+  padding: var(--de-top) var(--de-right) 0 var(--de-left);
+  transition: padding ${t.duration.base} ${t.ease};
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.design-editor-active { transition: none !important; }
+  [data-design-editor] *, [data-design-editor] *::before, [data-design-editor] *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+[data-design-editor] {
+  box-sizing: border-box;
+  font-family: ${t.font.ui};
+  font-size: 11px;
+  line-height: 16px;
+  color: ${t.color.text};
+  -webkit-font-smoothing: antialiased;
+}
+[data-design-editor] *, [data-design-editor] *::before, [data-design-editor] *::after {
+  box-sizing: border-box;
+}
+
+.de-root {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+}
+.de-root > * { pointer-events: auto; }
+
+/*
+ * Inside .de-root's stacking context, canvas chrome sits below the panels.
+ * Without an explicit order the positive-z overlay layer would paint over the
+ * toolbar, and its handles would swallow toolbar clicks.
+ */
+.de-overlay-layer { z-index: 1; }
+.de-toolbar, .de-panel { z-index: 2; }
+
+`

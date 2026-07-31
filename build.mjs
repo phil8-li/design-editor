@@ -33,13 +33,23 @@ async function run() {
   })
 
   if (check) {
-    const bytes = result.outputFiles?.[0]?.contents.length ?? 0
-    const onDisk = fs.existsSync(outfile) ? fs.statSync(outfile).size : -1
-    if (onDisk === -1) {
+    const fresh = Buffer.from(result.outputFiles?.[0]?.contents ?? new Uint8Array())
+    if (!fs.existsSync(outfile)) {
       console.error("FAIL design-editor bundle is missing — run `npm run design:build`")
       process.exit(1)
     }
-    console.log(`PASS design-editor bundle compiles (${bytes} bytes)`)
+    // Compiling proves the source is valid; it does not prove `dist/` matches it.
+    // The launcher serves whatever is on disk, so a stale bundle means the running
+    // editor is older than the reviewed source — and every other check passes.
+    const onDisk = fs.readFileSync(outfile)
+    if (!fresh.equals(onDisk)) {
+      console.error(
+        `FAIL design-editor bundle is stale — dist/ is ${onDisk.length} bytes, ` +
+          `src/ compiles to ${fresh.length}. Run \`npm run design:build\`.`
+      )
+      process.exit(1)
+    }
+    console.log(`PASS design-editor bundle compiles and matches dist/ (${fresh.length} bytes)`)
     return
   }
 
