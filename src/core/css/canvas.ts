@@ -16,13 +16,7 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
   border: ${t.size.hairline}px solid ${t.color.accent};
   pointer-events: none;
 }
-.de-outline--hover { border-style: solid; opacity: 0.7; }
-/* The container you have drilled into. Dashed and neutral so it reads as
-   context rather than as a second selection competing with the accent. */
-.de-outline--scope {
-  border-style: dashed;
-  border-color: ${t.color.borderStrong};
-}
+.de-outline--hover { border-style: solid; opacity: 0.48; }
 .de-outline--autolayout { border-color: ${t.color.autoLayout}; }
 .de-handle {
   position: absolute;
@@ -36,13 +30,14 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
 .de-guide { position: absolute; background: ${t.color.guide}; pointer-events: none; }
 .de-badge {
   position: absolute;
-  padding: 1px 5px;
+  padding: 0 4px;
   border-radius: ${t.radius.sm};
   background: ${t.color.accentSurface};
   color: ${t.color.text};
   font-family: ${t.font.ui};
-  font-size: 10px;
-  line-height: 14px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 13px;
   white-space: nowrap;
   pointer-events: none;
 }

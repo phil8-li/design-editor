@@ -1,5 +1,7 @@
 /**
- * Top toolbar: tools, zoom, panel toggles, and the commit action.
+ * Floating bottom toolbar: supported tools, zoom, panel toggles, actions, and
+ * the commit path. Unsupported Figma tools live in an explicit capability
+ * inventory rather than masquerading as active controls.
  *
  * Tool state is mirrored into the vendor engine so its text-editing mode stays
  * in sync with ours — two sources of truth for "what does a click do" is the
@@ -22,17 +24,12 @@ interface ToolSpec {
 }
 
 /**
- * Figma's tool order, minus the tools that have nothing to act on here.
- *
- * Hand and Comment used to sit at the end of this strip. Both were inert — the
- * canvas is a real scrolling page, so the browser already pans, and there is no
- * comment store — and an inert tool is worse than a missing one: it teaches the
- * user the whole strip is decoration. Pen, shapes and Frame are absent for the
- * same reason at a larger scale: the engine writes Tailwind classes into JSX and
- * has no verb for inserting geometry.
+ * Hand deliberately has no vendor mode: it suppresses selection while the
+ * browser's native trackpad/wheel scrolling continues to pan the live page.
  */
 const TOOLS: ToolSpec[] = [
   { id: "move", label: "Move", shortcut: "V", vendor: "select", path: "M4 2.5 12.5 8 8.6 9.1 11 13.4 9.3 14.3 6.9 10 4 12.8z" },
+  { id: "hand", label: "Hand (browser scroll)", shortcut: "H", path: "M5.1 7V3.8a1 1 0 0 1 2 0V6h.3V2.8a1 1 0 0 1 2 0V6h.3V3.6a1 1 0 0 1 2 0v5.1c0 3-1.7 5.3-4.6 5.3-1.8 0-3-.8-4-2.1L1.3 9.7a1.1 1.1 0 0 1 1.6-1.5z" },
   { id: "select", label: "Scale", shortcut: "K", vendor: "select", path: "M3 3h6v1.6H4.6V9H3zM13 13H7v-1.6h4.4V7H13z" },
   { id: "text", label: "Text", shortcut: "T", vendor: "text", path: "M3 3h10v1.7H8.8V13H7.2V4.7H3z" },
 ]
@@ -75,6 +72,7 @@ export function installToolbar(context: EditorContext): void {
 
   function selectTool(id: ToolId): void {
     context.setTool(id)
+    if (id === "hand" || id === "text") context.setState({ hovered: null })
     const spec = TOOLS.find((tool) => tool.id === id)
     if (spec?.vendor) {
       try {
@@ -178,13 +176,109 @@ export function installToolbar(context: EditorContext): void {
     el("button", { class: "de-tool", type: "button", title: "Toggle inspector", "aria-label": "Toggle inspector", onclick: () => context.setState({ inspectorOpen: !context.getState().inspectorOpen }) }, [icon("M2 3h12v10H2zm7 1.5v7h3.5v-7z")]),
   ])
 
-  // Figma's shape: tools on the left, everything about the *file* on the right,
-  // with the zoom readout at the far end of that cluster.
+  const openOptions = () =>
+    window.dispatchEvent(new window.CustomEvent("design-editor:open-options"))
+
+  const measureButton = el(
+    "button",
+    {
+      class: "de-button",
+      type: "button",
+      title: "Hold Option on Mac or Alt on Windows, then hover another layer",
+      "aria-label": "Measure spacing with Option or Alt",
+      onclick: () => context.toast("Hold Option/Alt and hover another layer to measure spacing"),
+    },
+    ["⌥/Alt Measure"]
+  )
+
+  const capability = (title: string, copy: string) =>
+    el("div", { class: "de-capability-group" }, [
+      el("div", { class: "de-capability-title" }, [title]),
+      el("div", { class: "de-capability-copy" }, [copy]),
+    ])
+
+  const actionsMenu = el(
+    "div",
+    {
+      class: "de-actions-menu",
+      role: "dialog",
+      "aria-label": "Design tools and capabilities",
+      hidden: true,
+    },
+    [
+      el(
+        "button",
+        { class: "de-action-row", type: "button", onclick: openOptions },
+        ["Variables and options", "Open"]
+      ),
+      capability(
+        "Available in this editor",
+        "Move · Hand via browser scroll · Scale · Text · Measurement · Actions"
+      ),
+      capability(
+        "Requires a code-insertion adapter",
+        "Frame · Section · Slice · Rectangle · Line · Arrow · Ellipse · Polygon · Star · Image/video · Pen · Pencil"
+      ),
+      capability("Requires a collaboration store", "Comment · Annotation"),
+      capability("Requires a host integration", "Dev Mode · Figma Draw"),
+    ]
+  )
+  const actionsButton = el(
+    "button",
+    {
+      class: "de-button",
+      type: "button",
+      "aria-haspopup": "dialog",
+      "aria-expanded": "false",
+    },
+    ["Actions"]
+  )
+  const actions = el("div", { class: "de-actions" }, [actionsButton, actionsMenu])
+  const setActionsOpen = (open: boolean) => {
+    actionsMenu.hidden = !open
+    actionsButton.setAttribute("aria-expanded", String(open))
+    if (open) actionsMenu.querySelector<HTMLElement>("button")?.focus()
+    else actionsButton.focus()
+  }
+  actionsMenu.querySelector("button")?.addEventListener("click", () => {
+    actionsMenu.hidden = true
+    actionsButton.setAttribute("aria-expanded", "false")
+  })
+  actionsButton.addEventListener("click", () => setActionsOpen(actionsMenu.hidden))
+  window.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!actionsMenu.hidden && !actions.contains(event.target as Node)) setActionsOpen(false)
+    },
+    true
+  )
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape" || actionsMenu.hidden) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      setActionsOpen(false)
+    },
+    true
+  )
+
+  const actionsGroup = el("div", { class: "de-toolbar-group" }, [
+    measureButton,
+    el(
+      "button",
+      { class: "de-button", type: "button", title: "Browse variables and options", onclick: openOptions },
+      ["Variables"]
+    ),
+    actions,
+  ])
+
+  // UI3 keeps one slim, stable strip at the bottom. Selection never moves it.
   slots.toolbar.append(
     toolGroup,
-    el("div", { class: "de-toolbar-spacer" }),
     panelToggles,
     zoomGroup,
+    actionsGroup,
     el("div", { class: "de-toolbar-group" }, [undoButton, applyButton])
   )
 

@@ -88,13 +88,10 @@ export function onFrame(paint: () => void): () => void {
 
 export function installSelectionFrame(context: EditorContext): void {
   const layer = context.slots.overlay
-  // Appended first so it paints behind everything else: the scope is context,
-  // and it frequently encloses the very element it must not obscure.
-  const scopeOutline = el("div", { class: "de-outline de-outline--scope" })
   const hoverOutline = el("div", { class: "de-outline de-outline--hover" })
   const boundsOutline = el("div", { class: "de-outline" })
   const label = el("div", { class: "de-badge" })
-  layer.append(scopeOutline, hoverOutline, boundsOutline, label)
+  layer.append(hoverOutline, boundsOutline, label)
 
   // Per-element outlines for a multi-selection; `boundsOutline` wraps the set.
   const members = createNodePool(layer, "de-outline")
@@ -137,24 +134,10 @@ export function installSelectionFrame(context: EditorContext): void {
       state.hovered && !selection.some((entry) => entry.element === state.hovered)
         ? state.hovered.getBoundingClientRect()
         : null
-    // `body`/`html` is the resting scope, and outlining the whole page reads as
-    // a rendering bug rather than as state.
-    const scope = state.scope
-    const scopeRect =
-      scope && scope.isConnected && scope !== document.body && scope !== document.documentElement
-        ? scope.getBoundingClientRect()
-        : null
     const rects: DOMRect[] = []
     for (const entry of selection) {
       if (!entry.element.isConnected) continue
       rects.push(entry.element.getBoundingClientRect())
-    }
-
-    if (scopeRect) {
-      scopeOutline.style.display = "block"
-      placeNode(scopeOutline, scopeRect.left, scopeRect.top, scopeRect.width, scopeRect.height)
-    } else {
-      hide(scopeOutline)
     }
 
     if (hoverRect) {
@@ -191,22 +174,23 @@ export function installSelectionFrame(context: EditorContext): void {
     const width = right - left
     const height = bottom - top
     boundsOutline.style.display = "block"
-    // Dashed reads as "this is the set", not a single box you can edit as one.
-    boundsOutline.style.borderStyle = count > 1 ? "dashed" : "solid"
+    boundsOutline.style.borderStyle = "solid"
     placeNode(boundsOutline, left, top, width, height)
 
     label.style.display = "block"
     label.textContent =
       count > 1
-        ? `${count} selected · ${Math.round(width)} × ${Math.round(height)}`
-        : `${selection[0].componentName} · ${Math.round(width)} × ${Math.round(height)}`
+        ? `${count} layers · ${Math.round(width)} × ${Math.round(height)}`
+        : `${Math.round(width)} × ${Math.round(height)}`
     placeNode(label, Math.max(4, left), top - 18 < 4 ? bottom + 4 : top - 18)
 
-    const showHandles = state.tool === "move" || state.tool === "select"
+    const showHandles = count === 1 && (state.tool === "move" || state.tool === "select")
     for (const [id, fx, fy] of HANDLES) {
       const handle = handles.get(id)
       if (!handle) continue
-      if (!showHandles) {
+      const horizontalMiddle = fx === 0.5 && width < 24
+      const verticalMiddle = fy === 0.5 && height < 24
+      if (!showHandles || horizontalMiddle || verticalMiddle) {
         hide(handle)
         continue
       }
@@ -216,12 +200,38 @@ export function installSelectionFrame(context: EditorContext): void {
   }
 
   let frame = 0
+  let destroyed = false
+  const schedule = () => {
+    if (!destroyed && frame === 0) frame = requestAnimationFrame(draw)
+  }
   const draw = () => {
-    frame = requestAnimationFrame(draw)
+    frame = 0
+    if (!layer.isConnected) {
+      destroyed = true
+      unsubscribe()
+      return
+    }
     paintSelection()
     for (let index = 0; index < painters.length; index += 1) painters[index]()
+    const state = context.getState()
+    // Selected or hovered app content may move under Motion, so track it. Once
+    // both are empty, stop entirely until the store wakes the painter again.
+    if (state.selection.length > 0 || state.hovered) schedule()
   }
 
-  frame = requestAnimationFrame(draw)
-  window.addEventListener("beforeunload", () => cancelAnimationFrame(frame))
+  const unsubscribe = context.subscribe((next, previous) => {
+    if (
+      next.selection !== previous.selection ||
+      next.hovered !== previous.hovered ||
+      next.tool !== previous.tool
+    ) {
+      schedule()
+    }
+  })
+  schedule()
+  window.addEventListener("beforeunload", () => {
+    destroyed = true
+    unsubscribe()
+    if (frame) cancelAnimationFrame(frame)
+  })
 }

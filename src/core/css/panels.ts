@@ -5,15 +5,18 @@ import { tokens as t } from "../tokens"
 export const panelsCss = `/* ---------- panels ---------- */
 .de-panel {
   position: fixed;
-  top: ${t.size.toolbarHeight}px;
-  bottom: 0;
+  top: ${t.size.panelInset}px;
+  bottom: ${t.size.panelInset}px;
   display: flex;
   flex-direction: column;
   background: ${t.color.bg};
+  border: 1px solid ${t.color.border};
+  border-radius: ${t.radius.xl};
+  box-shadow: ${t.shadow.panel};
   overflow: hidden;
 }
-.de-panel--left { left: 0; width: ${t.size.panelWidth}px; border-right: 1px solid ${t.color.border}; }
-.de-panel--right { right: 0; width: ${t.size.inspectorWidth}px; border-left: 1px solid ${t.color.border}; }
+.de-panel--left { left: ${t.size.panelInset}px; width: ${t.size.panelWidth}px; }
+.de-panel--right { right: ${t.size.panelInset}px; width: ${t.size.inspectorWidth}px; }
 /* An author \`display\` beats the UA [hidden] rule, so restate it. */
 .de-panel[hidden] { display: none; }
 
@@ -54,7 +57,6 @@ export const panelsCss = `/* ---------- panels ---------- */
   display: inline-block; width: 10px;
   color: ${t.color.textDim};
   transform: rotate(90deg);
-  transition: transform ${t.duration.fast} ${t.ease};
 }
 .de-section-toggle--collapsed .de-chevron { transform: rotate(0deg); }
 

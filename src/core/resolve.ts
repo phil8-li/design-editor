@@ -6,12 +6,10 @@
  * canvas and the tree each decide for themselves what a click means, the hover
  * outline starts lying about what a click will do.
  *
- * A Figma layer is authored hierarchy — a group exists because a designer said
- * those things move together. The DOM analogue is the component instance root:
- * the element whose enclosing-component path differs from its parent's.
- * Everything below it is markup nobody named, and a Tailwind app stacks 8-20 of
- * those at any pixel, which is why "deepest hit" is the wrong default here for
- * the same reason it is wrong in Figma.
+ * The DOM is the authored hierarchy for a live web page. React component
+ * boundaries enrich rows with source names and drag metadata, but they do not
+ * form a second tree: click, keyboard navigation, marquee, the overlap menu and
+ * Layers all walk the same filtered HTML graph.
  */
 
 import { isCanvasElement } from "./dom"
@@ -31,14 +29,12 @@ export interface LayerMeta {
 }
 
 const NAME_MAX = 28
-/** A branch this deep with no component boundary is machine-generated markup. */
-const DESCEND_LIMIT = 8
 const NON_VISUAL = /^(SCRIPT|STYLE|LINK|META|TEMPLATE)$/
 
-/** Dev-tool portals are custom elements; neither they nor `<script>` are design. */
+/** Chrome is excluded by `isCanvasElement`; only non-visual document nodes remain. */
 export function isLayerCandidate(node: Node | null): node is Element {
   if (!isCanvasElement(node)) return false
-  return !node.tagName.includes("-") && !NON_VISUAL.test(node.tagName)
+  return !NON_VISUAL.test(node.tagName)
 }
 
 /**
@@ -71,15 +67,16 @@ export interface Resolver {
   isLayerRoot(element: Element): boolean
   /** Outermost container. Clicking here, or Escape, returns the scope to it. */
   scopeRoot(): Element
-  /** Selectable DOM children, in document order. */
+  /** Candidate DOM children, in document order. */
   children(element: Element): Element[]
-  layerChildren(container: Element): Element[]
-  layerParent(element: Element): Element | null
-  layerSiblings(element: Element): Element[]
+  /** The direct selectable children in the one shared layer graph. */
+  layerChildren(container: Element): HTMLElement[]
+  layerParent(element: Element): HTMLElement | null
+  layerSiblings(element: Element): HTMLElement[]
   /** The Figma rule: highest layer under `hit` that lives inside `scope`. */
-  resolve(hit: Element, scope: Element | null, deep?: boolean): Element | null
-  /** Everything under the point, frontmost first — the stack menu's contents. */
-  hitStack(x: number, y: number): Element[]
+  resolve(hit: Element, scope: Element | null, deep?: boolean): HTMLElement | null
+  /** Selectable layers under the point, deduped in Layers-panel order. */
+  hitStack(x: number, y: number): HTMLElement[]
 }
 
 /**
@@ -119,66 +116,70 @@ function createResolver(bridge: LayerBridge): Resolver {
   const children = (element: Element): Element[] =>
     Array.from(element.children).filter((child): child is Element => isLayerCandidate(child))
 
-  const layerParent = (element: Element): Element | null => {
-    for (let node = element.parentElement; node && isLayerCandidate(node); node = node.parentElement) {
-      if (isLayerRoot(node)) return node
+  const layerParent = (element: Element): HTMLElement | null => {
+    let node = element.parentElement
+    while (node) {
+      const parent = node.parentElement
+      if (isLayerCandidate(node)) return node
+      node = parent
     }
     return null
   }
 
-  /**
-   * The first layer root along each branch. A branch that crosses no component
-   * boundary contributes its direct child instead — the literal Figma rule,
-   * kept as the fallback because that is where its predictability pays.
-   */
-  const layerChildren = (container: Element): Element[] => {
-    const found: Element[] = []
-    const descend = (element: Element, depth: number): boolean => {
-      if (isLayerRoot(element)) {
-        found.push(element)
-        return true
-      }
-      if (depth >= DESCEND_LIMIT) return false
-      let hit = false
-      for (const child of children(element)) if (descend(child, depth + 1)) hit = true
-      return hit
-    }
-    for (const child of children(container)) if (!descend(child, 0)) found.push(child)
-    return found
-  }
+  // SVG geometry stays part of its nearest HTML host. `EditorContext.select`
+  // cannot represent an SVGElement, so listing one would let hover/menu promise
+  // a target that click could not select. Every HTML result here is selectable.
+  const layerChildren = (container: Element): HTMLElement[] =>
+    children(container).filter((child): child is HTMLElement => child instanceof HTMLElement)
 
-  const layerSiblings = (element: Element): Element[] => {
+  const layerSiblings = (element: Element): HTMLElement[] => {
     const siblings = layerChildren(layerParent(element) ?? scopeRoot())
-    if (siblings.includes(element)) return siblings
-    // A deep-selected node is not a layer root, so the layer tree does not list
-    // it; its DOM siblings are the only honest answer to "next one along".
-    const parent = element.parentElement
-    return parent ? children(parent) : [element]
+    return element instanceof HTMLElement && siblings.includes(element) ? siblings : []
   }
 
-  const resolve = (hit: Element, scope: Element | null, deep = false): Element | null => {
+  const resolve = (hit: Element, scope: Element | null, deep = false): HTMLElement | null => {
     if (!isLayerCandidate(hit)) return null
-    if (deep) return hit
+    const target = toSelectable(hit)
+    if (!target) return null
+    if (deep) return target
 
     // A click outside the scope leaves it: the alternative is a click that
     // selects nothing, with no visible reason why.
-    const inScope = Boolean(scope && scope.isConnected && scope.contains(hit))
-    if (inScope && scope === hit) return hit
-    const container = inScope && scope ? scope : scopeRoot()
+    const inScope = Boolean(scope && scope.isConnected && scope.contains(target))
+    const container = inScope && scope instanceof HTMLElement ? scope : scopeRoot()
+    if (container === target) return target
 
-    const chain: Element[] = []
-    for (let node: Element | null = hit; node && node !== container; node = node.parentElement) {
-      chain.unshift(node)
+    // Climb the shared graph until `node` is a direct child of the active
+    // scope. This is the exact node Enter/Tab/Layers can reach later.
+    let node: HTMLElement | null = target
+    while (node) {
+      const parent = layerParent(node)
+      if (parent === container || (!parent && node.parentElement === container)) return node
+      node = parent
     }
-    if (!chain.length) return hit
-    for (const node of chain) if (isLayerCandidate(node) && isLayerRoot(node)) return node
-    return chain[0]
+    return null
   }
 
-  const hitStack = (x: number, y: number): Element[] =>
-    Array.from(document.elementsFromPoint(x, y)).filter(
-      (node) => isLayerCandidate(node) && !isHidden(node)
-    )
+  const hitStack = (x: number, y: number): HTMLElement[] => {
+    const seen = new Set<HTMLElement>()
+    const stack: HTMLElement[] = []
+    for (const raw of document.elementsFromPoint(x, y)) {
+      if (!isLayerCandidate(raw) || isHidden(raw)) continue
+      const node = toSelectable(raw)
+      if (!node || seen.has(node) || isHidden(node)) continue
+      seen.add(node)
+      stack.push(node)
+    }
+    // The Select layer menu follows Layers order. Within a nested stack that
+    // means parent before child; disjoint overlaps retain document order too.
+    stack.sort((a, b) => {
+      const relation = a.compareDocumentPosition(b)
+      if (relation & Node.DOCUMENT_POSITION_FOLLOWING) return -1
+      if (relation & Node.DOCUMENT_POSITION_PRECEDING) return 1
+      return 0
+    })
+    return stack
+  }
 
   return {
     bridge,

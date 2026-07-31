@@ -11,6 +11,7 @@ export const tokens = {
     bgRaised: "#2c2c2c",
     bgSunken: "#181818",
     bgHover: "#383838",
+    bgHoverQuiet: "#292929",
     bgActive: "#0d99ff",
     /** Dividers and rests — decorative, so the 3:1 rule does not apply. */
     border: "#383838",
@@ -31,6 +32,7 @@ export const tokens = {
     accentSurface: "#0b6fd1",
     accentSurfaceHover: "#1a82e2",
     accentSoft: "rgba(13,153,255,0.16)",
+    selectionSurface: "rgba(13,153,255,0.18)",
     /** Component (as opposed to plain element) names, Figma's purple. */
     component: "#a78bfa",
     danger: "#f24822",
@@ -48,7 +50,8 @@ export const tokens = {
     mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
   },
   size: {
-    toolbarHeight: 40,
+    toolbarHeight: 36,
+    panelInset: 12,
     panelWidth: 240,
     inspectorWidth: 260,
     /** Panel rows and fields. */

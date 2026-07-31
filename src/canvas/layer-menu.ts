@@ -4,9 +4,8 @@
  * This is what makes the scope rule tolerable: a plain click deliberately
  * refuses to go deep, so there has to be one gesture that lists everything
  * under the cursor and lets the user say which one they meant. Rows come from
- * `elementsFromPoint`, so they are innermost-first — the inverse of the layers
- * panel, which is outermost-first. That is deliberate: the menu answers "what
- * is under my cursor", and the thing under the cursor is the innermost one.
+ * `core/resolve`, which deduplicates SVG geometry and sorts the stack in the
+ * same document order as the Layers panel.
  */
 
 import { el, isChrome } from "../core/dom"
@@ -28,8 +27,9 @@ export function installLayerMenu(context: EditorContext): void {
   context.slots.overlay.append(menu)
 
   let open = false
+  let returnFocus: HTMLElement | null = null
 
-  const close = () => {
+  const close = (restoreFocus = false) => {
     if (!open) return
     open = false
     menu.style.display = "none"
@@ -38,13 +38,20 @@ export function installLayerMenu(context: EditorContext): void {
     // closing rather than via a `pointermove` over the canvas. Without this the
     // preview outline sticks to the last row until the pointer moves again.
     context.setState({ hovered: null })
+    if (restoreFocus && returnFocus?.isConnected) returnFocus.focus()
+    returnFocus = null
   }
 
   const row = (element: Element) => {
     const meta = resolver.meta(element)
     const node = el(
       "button",
-      { class: `de-layer-menu-row${meta.isRoot ? " de-layer-menu-row--component" : ""}`, type: "button", role: "menuitem" },
+      {
+        class: `de-layer-menu-row${meta.isRoot ? " de-layer-menu-row--component" : ""}`,
+        type: "button",
+        role: "menuitem",
+        tabindex: "-1",
+      },
       [meta.name]
     )
     // Preview what the click will actually select, not the raw stack entry.
@@ -78,6 +85,7 @@ export function installLayerMenu(context: EditorContext): void {
 
     event.preventDefault()
     event.stopPropagation()
+    returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     for (const element of stack) menu.append(row(element))
 
     // Measured after mount: the row count decides the height, and a menu that
@@ -91,6 +99,22 @@ export function installLayerMenu(context: EditorContext): void {
     menu.style.left = `${Math.max(EDGE, left)}px`
     menu.style.top = `${Math.max(EDGE, top)}px`
     open = true
+    const first = menu.querySelector<HTMLButtonElement>(".de-layer-menu-row")
+    if (first) {
+      first.tabIndex = 0
+      first.focus()
+    }
+  }
+
+  const menuRows = (): HTMLButtonElement[] =>
+    Array.from(menu.querySelectorAll<HTMLButtonElement>(".de-layer-menu-row"))
+
+  const focusRow = (index: number) => {
+    const rows = menuRows()
+    if (!rows.length) return
+    const target = rows[(index + rows.length) % rows.length]
+    for (const row of rows) row.tabIndex = row === target ? 0 : -1
+    target.focus()
   }
 
   window.addEventListener("contextmenu", onContextMenu, true)
@@ -101,19 +125,29 @@ export function installLayerMenu(context: EditorContext): void {
     },
     true
   )
-  // Escape is consumed while the menu is open. Both this listener and the
-  // canvas's `deselect` are on `window` in capture phase, so without stopping
-  // propagation one Escape dismisses the menu AND wipes the selection the menu
-  // was opened to refine — and Escape is the only keyboard way to dismiss it.
   window.addEventListener(
     "keydown",
     (event) => {
-      if (event.key !== "Escape" || !open) return
-      event.stopPropagation()
-      close()
+      if (!open) return
+      const rows = menuRows()
+      const index = rows.indexOf(document.activeElement as HTMLButtonElement)
+      if (event.key === "Escape") {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        close(true)
+        return
+      }
+      if (event.key === "ArrowDown") focusRow(index + 1)
+      else if (event.key === "ArrowUp") focusRow(index - 1)
+      else if (event.key === "Home") focusRow(0)
+      else if (event.key === "End") focusRow(rows.length - 1)
+      else if ((event.key === "Enter" || event.key === " ") && index >= 0) rows[index].click()
+      else return
+      event.preventDefault()
+      event.stopImmediatePropagation()
     },
     true
   )
-  window.addEventListener("scroll", close, true)
-  window.addEventListener("blur", close)
+  window.addEventListener("scroll", () => close(), true)
+  window.addEventListener("blur", () => close())
 }

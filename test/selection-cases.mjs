@@ -36,9 +36,8 @@ function check(name, fn) {
 // ── Fixture ────────────────────────────────────────────────────────────────
 
 /**
- * A component tree with the two shapes that break naive resolvers: a wrapper
- * div that crosses no component boundary (#wrap, #head), and two call sites of
- * one component that must not collapse into a single layer (#card, #card2).
+ * A component tree with wrapper DOM, repeated component call sites, and SVG
+ * geometry that must normalize to its selectable HTML host.
  */
 const MARKUP = `
 <div id="root">
@@ -111,6 +110,7 @@ function installDom() {
   window.Element.prototype.getBoundingClientRect = function box() {
     return { x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }
   }
+  window.Element.prototype.scrollIntoView = function scrollIntoView() {}
   globalThis.DOMMatrixReadOnly = class {
     constructor() {
       this.m41 = 0
@@ -182,17 +182,18 @@ async function resolverCases(window) {
     assert.notEqual($("card"), $("card2"))
   })
 
-  check("plain click takes the highest layer, not the deepest hit", () => {
+  check("plain click takes the scope root's direct layer, not the deepest hit", () => {
     assert.equal(nameOf(resolver.resolve($("title"), null)), "root")
   })
 
-  check("deep click takes the exact hit", () => {
+  check("deep click takes the deepest selectable HTML host", () => {
     assert.equal(nameOf(resolver.resolve($("title"), null, true)), "title")
-    assert.equal(nameOf(resolver.resolve($("bar"), null, true)), "bar")
+    assert.equal(nameOf(resolver.resolve($("bar"), null, true)), "more")
   })
 
   check("drilling the scope moves the click one level at a time", () => {
-    assert.equal(nameOf(resolver.resolve($("title"), $("root"))), "card")
+    assert.equal(nameOf(resolver.resolve($("title"), $("root"))), "wrap")
+    assert.equal(nameOf(resolver.resolve($("title"), $("wrap"))), "card")
     assert.equal(nameOf(resolver.resolve($("title"), $("card"))), "head")
     assert.equal(nameOf(resolver.resolve($("title"), $("head"))), "title")
   })
@@ -201,20 +202,20 @@ async function resolverCases(window) {
     assert.equal(nameOf(resolver.resolve($("title2"), $("card"))), "root")
   })
 
-  check("layer children stop at the first boundary on each branch", () => {
-    assert.deepEqual(resolver.layerChildren($("root")).map(nameOf), ["card", "card2"])
-    // #head is a bare wrapper, so its branch contributes the IconButton below
-    // it; #body's branch reaches no boundary at all and contributes itself.
-    assert.deepEqual(resolver.layerChildren($("card")).map(nameOf), ["more", "body"])
+  check("layer children are the direct selectable HTML graph", () => {
+    assert.deepEqual(resolver.layerChildren($("root")).map(nameOf), ["wrap"])
+    assert.deepEqual(resolver.layerChildren($("wrap")).map(nameOf), ["card", "card2"])
+    assert.deepEqual(resolver.layerChildren($("card")).map(nameOf), ["head", "body"])
+    assert.deepEqual(resolver.layerChildren($("more")).map(nameOf), [])
   })
 
   check("Enter descends to the first layer child", () => {
-    assert.equal(nameOf(resolver.layerChildren($("root"))[0]), "card")
+    assert.equal(nameOf(resolver.layerChildren($("root"))[0]), "wrap")
   })
 
   check("Shift+Enter climbs to the enclosing layer", () => {
-    assert.equal(nameOf(resolver.layerParent($("card"))), "root")
-    assert.equal(nameOf(resolver.layerParent($("more"))), "card")
+    assert.equal(nameOf(resolver.layerParent($("card"))), "wrap")
+    assert.equal(nameOf(resolver.layerParent($("more"))), "head")
     assert.equal(nameOf(resolver.layerParent($("root"))), "null")
   })
 
@@ -233,8 +234,31 @@ async function resolverCases(window) {
 
   check("SVG is hit-testable but selection falls back to its HTML host", () => {
     assert.equal(isLayerCandidate($("icon")), true)
-    assert.equal(resolver.resolve($("bar"), null, true), $("bar"))
+    assert.equal(resolver.resolve($("bar"), null, true), $("more"))
     assert.equal(nameOf(toSelectable($("bar"))), "more")
+  })
+
+  check("every plain and deep click result is reachable in the layer graph", () => {
+    const graph = new Set()
+    const visit = (container) => {
+      for (const child of resolver.layerChildren(container)) {
+        graph.add(child)
+        visit(child)
+      }
+    }
+    visit(window.document.body)
+    for (const name of Object.keys(SOURCE)) {
+      const hit = $(name)
+      const plain = resolver.resolve(hit, null)
+      const deep = resolver.resolve(hit, null, true)
+      if (plain) assert.equal(graph.has(plain), true, `plain ${name}`)
+      if (deep) assert.equal(graph.has(deep), true, `deep ${name}`)
+    }
+  })
+
+  check("overlap stack dedupes SVG hosts and follows Layers order", () => {
+    window.__stack = [$("bar"), $("icon"), $("more"), $("head"), $("card"), $("wrap"), $("root")]
+    assert.deepEqual(resolver.hitStack(10, 10).map(nameOf), ["root", "wrap", "card", "head", "more"])
   })
 
   console.log("\nLevel 1 — keymap")
@@ -301,9 +325,10 @@ async function resolverCases(window) {
 
 async function canvasCases(window) {
   console.log("\nLevel 2 — canvas lane")
-  const { createContext, installCanvas, getState, setState } = await load(`
+  const { createContext, installCanvas, installLayersPanel, getState, setState } = await load(`
     export { createContext } from "./src/core/context"
     export { installCanvas } from "./src/canvas/index"
+    export { installLayersPanel } from "./src/panels/layers"
     export { getState, setState } from "./src/core/store"
   `)
   const store = { getState, setState }
@@ -330,6 +355,7 @@ async function canvasCases(window) {
     right: slot(),
   })
   installCanvas(context)
+  installLayersPanel(context)
   context.setTool("move")
 
   const $ = (name) => id(window, name)
@@ -348,15 +374,15 @@ async function canvasCases(window) {
 
   const pointer = (element, init = {}) => {
     at(element)
-    element.dispatchEvent(
-      new window.PointerEvent("pointerdown", {
+    const options = {
         bubbles: true,
         button: 0,
         clientX: 10,
         clientY: 10,
         ...init,
-      })
-    )
+      }
+    element.dispatchEvent(new window.PointerEvent("pointerdown", options))
+    element.dispatchEvent(new window.PointerEvent("pointerup", options))
   }
   const press = (init) =>
     window.document.body.dispatchEvent(
@@ -373,7 +399,7 @@ async function canvasCases(window) {
     reset()
     pointer($("title"), { metaKey: true })
     assert.deepEqual(selection(), ["title"])
-    assert.equal(scope(), "card")
+    assert.equal(scope(), "head")
   })
 
   check("Ctrl+click is not deep select on a Mac", () => {
@@ -390,7 +416,20 @@ async function canvasCases(window) {
       new window.MouseEvent("dblclick", { bubbles: true, clientX: 10, clientY: 10 })
     )
     assert.equal(scope(), "root")
-    assert.deepEqual(selection(), ["card"])
+    assert.deepEqual(selection(), ["wrap"])
+  })
+
+  check("double-clicking SVG geometry cannot advance past its HTML host", () => {
+    reset()
+    pointer($("bar"), { metaKey: true })
+    assert.deepEqual(selection(), ["more"])
+    assert.equal(scope(), "head")
+    at($("bar"))
+    $("bar").dispatchEvent(
+      new window.MouseEvent("dblclick", { bubbles: true, clientX: 10, clientY: 10 })
+    )
+    assert.deepEqual(selection(), ["more"])
+    assert.equal(scope(), "head")
   })
 
   check("shift+click toggles rather than only appending", () => {
@@ -400,7 +439,7 @@ async function canvasCases(window) {
     // removes it. Append-only would have left it selected.
     pointer($("title2"), { shiftKey: true })
     assert.deepEqual(selection(), [])
-    store.setState({ selection: [], scope: id(window, "root") })
+    store.setState({ selection: [], scope: id(window, "wrap") })
     pointer($("title"), { shiftKey: true })
     pointer($("title2"), { shiftKey: true })
     assert.deepEqual(selection(), ["card", "card2"])
@@ -412,7 +451,7 @@ async function canvasCases(window) {
     reset()
     pointer($("title"))
     press({ key: "Enter" })
-    assert.deepEqual(selection(), ["card"])
+    assert.deepEqual(selection(), ["wrap"])
     assert.equal(scope(), "root")
   })
 
@@ -429,16 +468,55 @@ async function canvasCases(window) {
     reset()
     pointer($("title"))
     press({ key: "Enter" })
+    press({ key: "Enter" })
     press({ key: "Tab" })
     assert.deepEqual(selection(), ["card2"])
     press({ key: "Tab", shiftKey: true })
     assert.deepEqual(selection(), ["card"])
   })
 
+  check("a click outside a drilled scope exits to the top layer", () => {
+    reset()
+    pointer($("title"))
+    press({ key: "Enter" })
+    press({ key: "Enter" })
+    press({ key: "Enter" })
+    assert.equal(scope(), "card")
+    pointer($("title2"))
+    assert.deepEqual(selection(), ["root"])
+    assert.equal(scope(), "null")
+  })
+
+  check("Shift+drag is reachable over full-bleed content and toggles swept layers", () => {
+    reset()
+    pointer($("title"))
+    press({ key: "Enter" })
+    press({ key: "Enter" })
+    press({ key: "Enter" })
+    assert.deepEqual(selection(), ["head"])
+    at($("title"))
+    $("title").dispatchEvent(
+      new window.PointerEvent("pointerdown", {
+        bubbles: true, button: 0, clientX: 10, clientY: 10, shiftKey: true,
+      })
+    )
+    $("title").dispatchEvent(
+      new window.PointerEvent("pointermove", {
+        bubbles: true, button: 0, clientX: 30, clientY: 30, shiftKey: true,
+      })
+    )
+    $("title").dispatchEvent(
+      new window.PointerEvent("pointerup", {
+        bubbles: true, button: 0, clientX: 30, clientY: 30, shiftKey: true,
+      })
+    )
+    assert.deepEqual(selection(), ["body"])
+  })
+
   check("Escape deselects and exits the scope, it does not select the parent", () => {
     reset()
     pointer($("title"), { metaKey: true })
-    assert.equal(scope(), "card")
+    assert.equal(scope(), "head")
     press({ key: "Escape" })
     assert.deepEqual(selection(), [])
     assert.equal(scope(), "null")
@@ -471,6 +549,14 @@ async function canvasCases(window) {
         clientY: 999,
       })
     )
+    window.document.body.dispatchEvent(
+      new window.PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        clientX: 999,
+        clientY: 999,
+      })
+    )
     assert.deepEqual(selection(), [])
     assert.equal(scope(), "null")
   })
@@ -479,6 +565,38 @@ async function canvasCases(window) {
     reset()
     pointer($("title"), { button: 2 })
     assert.deepEqual(selection(), [])
+  })
+
+  check("overlap menu follows Layers order and Escape closes only the menu", () => {
+    reset()
+    pointer($("title"))
+    at($("bar"))
+    $("bar").dispatchEvent(
+      new window.MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 })
+    )
+    const menu = window.document.querySelector(".de-layer-menu")
+    const rows = Array.from(menu.querySelectorAll(".de-layer-menu-row"))
+    assert.equal(menu.style.display, "block")
+    assert.equal(rows[0].textContent, "Page")
+    assert.equal(rows.at(-1).textContent, "IconButton")
+    assert.equal(window.document.activeElement, rows[0])
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }))
+    assert.equal(window.document.activeElement, rows.at(-1))
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+    assert.equal(menu.style.display, "none")
+    assert.deepEqual(selection(), ["root"])
+  })
+
+  check("Layers highlights every selected row", () => {
+    context.selectMany([$("card"), $("title")])
+    const selectedRows = Array.from(
+      context.slots.left.querySelectorAll('.de-layer[aria-selected="true"]')
+    )
+    assert.equal(selectedRows.length, 2)
+    assert.deepEqual(
+      selectedRows.map((row) => row.querySelector(".de-layer-name").textContent),
+      ["Card", "Homecoming"]
+    )
   })
 }
 
@@ -491,6 +609,5 @@ await resolverCases(window)
 await canvasCases(window)
 
 console.log(`\n${passed} passed, ${failed} failed`)
-// The selection frame runs an animation loop for as long as the window lives,
-// so the process needs an explicit exit rather than an empty event loop.
+// Installed DOM listeners intentionally live for the editor session.
 process.exit(failed > 0 ? 1 : 0)

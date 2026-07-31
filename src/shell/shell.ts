@@ -1,5 +1,5 @@
 /**
- * Mounts the editor chrome: a toolbar strip, a layers rail on the left, an
+ * Mounts the editor chrome: a floating toolbar, a layers rail on the left, an
  * inspector on the right, and a transparent overlay layer for canvas chrome.
  *
  * The app is inset with padding on a border-box <html> rather than a transform,
@@ -51,14 +51,21 @@ export function mountShell(): Shell {
     const style = document.documentElement.style
     leftPanel.hidden = !layersOpen
     rightPanel.hidden = !inspectorOpen
-    style.setProperty("--de-left", layersOpen ? `${tokens.size.panelWidth}px` : "0px")
-    style.setProperty("--de-right", inspectorOpen ? `${tokens.size.inspectorWidth}px` : "0px")
-    style.setProperty("--de-top", `${tokens.size.toolbarHeight}px`)
+    const panelGutter = tokens.size.panelInset * 2
+    style.setProperty(
+      "--de-left",
+      layersOpen ? `${tokens.size.panelWidth + panelGutter}px` : "0px"
+    )
+    style.setProperty(
+      "--de-right",
+      inspectorOpen ? `${tokens.size.inspectorWidth + panelGutter}px` : "0px"
+    )
+    style.setProperty("--de-top", "0px")
     // The host's docked panel (Leva here) sits against the right edge; keep it
     // clear of the inspector. The property name is the host's to choose.
     style.setProperty(
       config.chrome.dockedPanel.offsetVar,
-      inspectorOpen ? `-${tokens.size.inspectorWidth + 12}px` : "0px"
+      inspectorOpen ? `-${tokens.size.inspectorWidth + panelGutter}px` : "0px"
     )
   }
 
@@ -86,6 +93,7 @@ export function mountShell(): Shell {
       document.documentElement.style.removeProperty("--de-left")
       document.documentElement.style.removeProperty("--de-right")
       document.documentElement.style.removeProperty("--de-top")
+      document.documentElement.style.removeProperty(config.chrome.dockedPanel.offsetVar)
       document.getElementById(STYLE_ID)?.remove()
     },
   }

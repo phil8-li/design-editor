@@ -28,7 +28,6 @@ export function installCanvas(context: EditorContext): void {
   installTransform(context)
   installSnapping(context)
   installMeasure(context)
-  installMarquee(context)
   installLayerMenu(context)
 
   // `select()` early-returns when the element is already the whole selection,
@@ -40,6 +39,7 @@ export function installCanvas(context: EditorContext): void {
   // with the pointer standing still.
   let pointerX = 0
   let pointerY = 0
+  let pointerHit: Element | null = null
 
   const hitFor = (event: { target: EventTarget | null; clientX: number; clientY: number }) => {
     if (isCanvasElement(event.target)) return event.target
@@ -49,8 +49,10 @@ export function installCanvas(context: EditorContext): void {
   /** The one answer both the outline and the click use. */
   const targetFor = (hit: Element | null, deep: boolean): HTMLElement | null => {
     if (!hit) return null
-    return toSelectable(resolver.resolve(hit, context.getState().scope, deep))
+    return resolver.resolve(hit, context.getState().scope, deep)
   }
+
+  const marquee = installMarquee(context)
 
   const setHovered = (hovered: Element | null) => {
     if (context.getState().hovered !== hovered) context.setState({ hovered })
@@ -59,10 +61,11 @@ export function installCanvas(context: EditorContext): void {
   const onPointerMove = (event: PointerEvent) => {
     pointerX = event.clientX
     pointerY = event.clientY
+    pointerHit = hitFor(event)
     const { tool } = context.getState()
     if (tool === "hand" || tool === "text") return
     if (isChrome(event.target)) return
-    setHovered(targetFor(hitFor(event), isDeepSelect(event)))
+    setHovered(targetFor(pointerHit, isDeepSelect(event)))
   }
 
   const onPointerDown = (event: PointerEvent) => {
@@ -73,10 +76,10 @@ export function installCanvas(context: EditorContext): void {
     if (event.button !== 0) return
 
     const deep = isDeepSelect(event)
-    const target = targetFor(hitFor(event), deep)
+    const hit = hitFor(event)
+    const target = targetFor(hit, deep)
+    if (marquee.begin(event, target)) return
     if (!target) {
-      // Shift means "add to what I have"; the marquee about to start needs it.
-      if (event.shiftKey) return
       context.select(null)
       context.setState({ scope: null })
       return
@@ -88,7 +91,14 @@ export function installCanvas(context: EditorContext): void {
     else selectOne(target)
     // Deep select is a one-shot bypass of the scope rule, so it re-points the
     // scope at the layer it landed in — otherwise the next plain click undoes it.
-    if (deep) context.setState({ scope: resolver.layerParent(target) })
+    if (deep) {
+      context.setState({ scope: resolver.layerParent(target) })
+    } else {
+      const held = context.getState().scope
+      if (held && (!held.isConnected || !hit || !held.contains(hit))) {
+        context.setState({ scope: resolver.layerParent(target) })
+      }
+    }
   }
 
   /** Double-click descends exactly one level and takes the scope with it. */
@@ -101,11 +111,14 @@ export function installCanvas(context: EditorContext): void {
 
     const state = context.getState()
     const primary = state.selection[0]?.element ?? null
-    const next = primary && primary.contains(hit) ? primary : resolver.resolve(hit, state.scope)
-    if (!next) return
-    context.setState({ scope: next })
-    const target = toSelectable(resolver.resolve(hit, next))
-    if (target) selectOne(target)
+    const base = primary && primary.contains(hit) ? primary : resolver.resolve(hit, state.scope)
+    if (!base) return
+    const target = resolver.resolve(hit, base)
+    // SVG geometry normalizes to its HTML host. If that host is already the
+    // selected layer, drilling must not silently advance the scope.
+    if (!target || target === base) return
+    context.setState({ scope: base })
+    selectOne(target)
     event.preventDefault()
     event.stopPropagation()
   }
@@ -134,7 +147,9 @@ export function installCanvas(context: EditorContext): void {
     // A held modifier changes what a click would select, so the outline has to
     // follow it even while the pointer is stationary.
     if (event.key === "Meta" || event.key === "Control") {
-      setHovered(targetFor(resolver.hitStack(pointerX, pointerY)[0] ?? null, isDeepSelect(event)))
+      setHovered(
+        targetFor(pointerHit ?? resolver.hitStack(pointerX, pointerY)[0] ?? null, isDeepSelect(event))
+      )
       return
     }
     if (!ownsCanvasKeys(event)) return
@@ -181,7 +196,9 @@ export function installCanvas(context: EditorContext): void {
 
   const onKeyUp = (event: KeyboardEvent) => {
     if (event.key !== "Meta" && event.key !== "Control") return
-    setHovered(targetFor(resolver.hitStack(pointerX, pointerY)[0] ?? null, isDeepSelect(event)))
+    setHovered(
+      targetFor(pointerHit ?? resolver.hitStack(pointerX, pointerY)[0] ?? null, isDeepSelect(event))
+    )
   }
 
   // Swallow app activation while a design tool is active: clicking a button to

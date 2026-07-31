@@ -41,11 +41,9 @@ export const baseCss = `
 html.design-editor-active {
   box-sizing: border-box;
   padding: var(--de-top) var(--de-right) 0 var(--de-left);
-  transition: padding ${t.duration.base} ${t.ease};
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html.design-editor-active { transition: none !important; }
   [data-design-editor] *, [data-design-editor] *::before, [data-design-editor] *::after {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;

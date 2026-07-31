@@ -102,6 +102,8 @@ const DRAG_THRESHOLD = 3
 
 export function installTransform(context: EditorContext): void {
   let gesture: Gesture | null = null
+  let capture: Element | null = null
+  let pointerId = -1
 
   const targetsFor = (elements: HTMLElement[]): DragTarget[] =>
     elements.map((element) => {
@@ -118,6 +120,17 @@ export function installTransform(context: EditorContext): void {
     const handleId = target?.dataset?.handle as HandleId | undefined
     const selected = state.selection[0]?.element ?? null
 
+    const capturePointer = () => {
+      capture = event.target instanceof Element ? event.target : null
+      pointerId = event.pointerId
+      if (!capture || !("setPointerCapture" in capture)) return
+      try {
+        ;(capture as Element & { setPointerCapture(id: number): void }).setPointerCapture(pointerId)
+      } catch {
+        capture = null
+      }
+    }
+
     if (handleId && selected) {
       gesture = {
         targets: targetsFor([selected]),
@@ -128,11 +141,15 @@ export function installTransform(context: EditorContext): void {
         startRect: selected.getBoundingClientRect(),
         moved: false,
       }
+      capturePointer()
       event.preventDefault()
       event.stopPropagation()
       return
     }
 
+    // Shift+drag is the full-bleed marquee escape hatch. Reserve it before a
+    // selected descendant can turn the same press into a move gesture.
+    if (event.shiftKey) return
     if (isChrome(target) || !selected) return
     if (!selected.contains(target)) return
 
@@ -146,6 +163,7 @@ export function installTransform(context: EditorContext): void {
       startRect: selected.getBoundingClientRect(),
       moved: false,
     }
+    capturePointer()
   }
 
   const onPointerMove = (event: PointerEvent) => {
@@ -213,6 +231,15 @@ export function installTransform(context: EditorContext): void {
   }
 
   const onPointerUp = () => {
+    if (capture && pointerId >= 0 && "releasePointerCapture" in capture) {
+      try {
+        ;(capture as Element & { releasePointerCapture(id: number): void }).releasePointerCapture(pointerId)
+      } catch {
+        // A removed target has already released capture.
+      }
+    }
+    capture = null
+    pointerId = -1
     if (!gesture) return
     const finished = gesture
     gesture = null

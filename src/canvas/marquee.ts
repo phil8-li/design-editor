@@ -8,12 +8,17 @@
 
 import { el, isCanvasElement, isChrome } from "../core/dom"
 import { isDeepSelect } from "../core/keymap"
-import { getResolver, isLayerCandidate, toSelectable } from "../core/resolve"
+import { getResolver } from "../core/resolve"
 import type { EditorContext } from "../core/context"
 
 const DRAG_THRESHOLD = 3
 
-export function installMarquee(context: EditorContext): void {
+export interface MarqueeController {
+  /** Claims empty-canvas presses and Shift presses reserved for marquee/toggle. */
+  begin(event: PointerEvent, target: HTMLElement | null): boolean
+}
+
+export function installMarquee(context: EditorContext): MarqueeController {
   const resolver = getResolver(context.bridge)
   const box = el("div", { class: "de-marquee", style: "display:none" })
   context.slots.overlay.append(box)
@@ -23,6 +28,10 @@ export function installMarquee(context: EditorContext): void {
   let pending = false
   let active = false
   let additive = false
+  let pointerId = -1
+  let capture: Element | null = null
+  let toggleTarget: HTMLElement | null = null
+  let baseline: HTMLElement[] = []
 
   /**
    * Touching an object selects it. Full enclosure is the intuitive rule and the
@@ -36,10 +45,8 @@ export function installMarquee(context: EditorContext): void {
   }
 
   /**
-   * Candidates come from the current scope at layer granularity, so a marquee
-   * collects the same things a click would — a selection set stays
-   * depth-homogeneous. The deep modifier ignores scope depth and collects the
-   * INNERMOST candidates instead, matching Cmd-click's deep select.
+   * Candidates come from the one shared layer graph. A normal marquee takes
+   * the active scope's direct children; deep marquee recursively takes leaves.
    */
   const swept = (l: number, t: number, r: number, b: number, deep: boolean): Element[] => {
     // `isConnected`, as in `resolve()`: React replaces DOM nodes constantly, and
@@ -51,29 +58,44 @@ export function installMarquee(context: EditorContext): void {
 
     if (!deep) return resolver.layerChildren(scope).filter((node) => touched(node, l, t, r, b))
 
-    // Document order is ancestors-first, so keeping the first match of any
-    // nested pair keeps the OUTERMOST — which made the deep modifier return the
-    // app shell and nothing else. Walk it in reverse and drop any candidate
-    // that contains one already taken, which leaves the leaves.
-    const found: Element[] = []
-    for (const node of Array.from(scope.querySelectorAll("*")).reverse()) {
-      if (!isLayerCandidate(node)) continue
-      if (found.some((chosen) => node.contains(chosen))) continue
-      if (!touched(node, l, t, r, b)) continue
-      found.push(node)
+    const found: HTMLElement[] = []
+    const visit = (container: Element) => {
+      for (const node of resolver.layerChildren(container)) {
+        const children = resolver.layerChildren(node)
+        if (children.length) visit(node)
+        else if (touched(node, l, t, r, b)) found.push(node)
+      }
     }
-    return found.reverse()
+    visit(scope)
+    return found
   }
 
-  const onPointerDown = (event: PointerEvent) => {
+  const begin = (event: PointerEvent, target: HTMLElement | null): boolean => {
     const { tool } = context.getState()
-    if (event.button !== 0 || (tool !== "move" && tool !== "select")) return
-    if (isChrome(event.target) || isCanvasElement(event.target)) return
+    if (event.button !== 0 || (tool !== "move" && tool !== "select")) return false
+    if (isChrome(event.target)) return false
+
+    // A live app often fills every canvas pixel, leaving no literal body area.
+    // Shift reserves a press for marquee/toggle even over full-bleed content;
+    // an unmodified press still starts only on real empty canvas.
+    if (isCanvasElement(event.target) && !event.shiftKey) return false
     originX = event.clientX
     originY = event.clientY
     additive = event.shiftKey
+    pointerId = event.pointerId
+    toggleTarget = target
+    baseline = context.getState().selection.map((entry) => entry.element)
     pending = true
     active = false
+    capture = event.target instanceof Element ? event.target : null
+    if (capture && "setPointerCapture" in capture) {
+      try {
+        ;(capture as Element & { setPointerCapture(id: number): void }).setPointerCapture(pointerId)
+      } catch {
+        capture = null
+      }
+    }
+    return true
   }
 
   const onPointerMove = (event: PointerEvent) => {
@@ -89,11 +111,31 @@ export function installMarquee(context: EditorContext): void {
     box.style.height = `${Math.abs(dy)}px`
   }
 
+  const releaseCapture = () => {
+    if (capture && pointerId >= 0 && "releasePointerCapture" in capture) {
+      try {
+        ;(capture as Element & { releasePointerCapture(id: number): void }).releasePointerCapture(pointerId)
+      } catch {
+        // The browser releases capture itself when the target is removed.
+      }
+    }
+    capture = null
+    pointerId = -1
+  }
+
   const onPointerUp = (event: PointerEvent) => {
     if (!pending) return
     pending = false
     box.style.display = "none"
-    if (!active) return
+    releaseCapture()
+    if (!active) {
+      if (additive && toggleTarget) context.select(toggleTarget, { additive: true })
+      else if (!toggleTarget) {
+        context.select(null)
+        context.setState({ scope: null })
+      }
+      return
+    }
     active = false
 
     const left = Math.min(originX, event.clientX)
@@ -101,21 +143,29 @@ export function installMarquee(context: EditorContext): void {
     const top = Math.min(originY, event.clientY)
     const bottom = Math.max(originY, event.clientY)
 
-    // One store write for the whole marquee: selecting element-by-element would
-    // rebuild every panel once per hit, and a wide drag hits dozens.
-    const kept = additive ? context.getState().selection.map((entry) => entry.element) : []
-    const hits = swept(left, top, right, bottom, isDeepSelect(event))
-      .map(toSelectable)
-      .filter((node): node is HTMLElement => node !== null)
-    context.selectMany([...kept, ...hits])
+    // Shift is a true toggle against the selection at pointerdown. Appending
+    // would make dragging the same marquee twice unable to remove anything.
+    const hits = swept(left, top, right, bottom, isDeepSelect(event)) as HTMLElement[]
+    if (!additive) {
+      context.selectMany(hits)
+      return
+    }
+    const toggled = new Set(baseline)
+    for (const hit of hits) {
+      if (toggled.has(hit)) toggled.delete(hit)
+      else toggled.add(hit)
+    }
+    context.selectMany([...toggled])
   }
 
-  window.addEventListener("pointerdown", onPointerDown, true)
   window.addEventListener("pointermove", onPointerMove, true)
   window.addEventListener("pointerup", onPointerUp, true)
   window.addEventListener("pointercancel", () => {
     pending = false
     active = false
     box.style.display = "none"
+    releaseCapture()
   }, true)
+
+  return { begin }
 }

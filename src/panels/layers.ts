@@ -1,13 +1,14 @@
 /**
- * Layers panel: the app's DOM projected as a Figma-style tree, with React
- * component boundaries promoted so the tree reads like the source, not the DOM.
+ * Layers panel: the shared layer graph projected as a Figma-style tree. React
+ * component boundaries still supply source-aware names and drag metadata, but
+ * never replace the hierarchy used by canvas selection.
  *
  * Two rules keep it cheap on an app that renders 28 areas / 137 projects: a
  * branch is walked only while expanded, and rows are diffed in place.
  */
 
 import { el } from "../core/dom"
-import { getResolver, isLayerCandidate } from "../core/resolve"
+import { getResolver } from "../core/resolve"
 import type { EditorContext } from "../core/context"
 
 const INDENT = 12, MAX_DEPTH = 40
@@ -20,17 +21,6 @@ interface Meta { name: string; promoted: boolean; drag: DragRef | null }
 interface Row { element: HTMLElement; parent: HTMLElement | null; depth: number; meta: Meta
   open: boolean; hasChildren: boolean; posinset: number; setsize: number }
 
-/**
- * Rows stay `HTMLElement`: they take focus, drag, and scroll themselves into
- * view. An SVG layer root is a layer on the canvas but has no row here until
- * the selection contract widens past `HTMLElement`.
- */
-function childrenOf(element: HTMLElement): HTMLElement[] {
-  return Array.from(element.children).filter(
-    (k): k is HTMLElement => k instanceof HTMLElement && isLayerCandidate(k)
-  )
-}
-
 function setAttr(node: Element, name: string, value: string | null): void {
   if (value === null) node.removeAttribute(name)
   else if (node.getAttribute(name) !== value) node.setAttribute(name, value)
@@ -38,6 +28,7 @@ function setAttr(node: Element, name: string, value: string | null): void {
 
 export function installLayersPanel(context: EditorContext): void {
   const resolver = getResolver(context.bridge)
+  const childrenOf = (element: Element): HTMLElement[] => resolver.layerChildren(element)
   const search = el("input", { class: "de-ai-input", type: "search", placeholder: "Filter layers",
     "aria-label": "Filter layers", style: "min-height:0;height:24px;resize:none" }) as HTMLInputElement
   const tree = el("div", { role: "tree", "aria-label": "Layers",
@@ -109,7 +100,7 @@ export function installLayersPanel(context: EditorContext): void {
     return rows
   }
 
-  function buildRow(row: Row, selected: HTMLElement | null, focusTarget: HTMLElement | null) {
+  function buildRow(row: Row, selected: Set<HTMLElement>, focusTarget: HTMLElement | null) {
     let node = rowByElement.get(row.element)
     if (!node) {
       node = el("div", { class: "de-layer", role: "treeitem" }, [
@@ -130,7 +121,7 @@ export function installLayersPanel(context: EditorContext): void {
     setAttr(node, "class", `de-layer${row.meta.promoted ? " de-layer--component" : ""}`)
     setAttr(node, "style", `padding-left:${8 + row.depth * INDENT}px`)
     setAttr(node, "aria-expanded", openState)
-    setAttr(node, "aria-selected", String(row.element === selected))
+    setAttr(node, "aria-selected", String(selected.has(row.element)))
     setAttr(node, "aria-level", String(row.depth + 1))
     setAttr(node, "aria-posinset", String(row.posinset))
     setAttr(node, "aria-setsize", String(row.setsize))
@@ -141,7 +132,7 @@ export function installLayersPanel(context: EditorContext): void {
 
   function render(): void {
     visible = flatten()
-    const selected = context.getState().selection[0]?.element ?? null
+    const selected = new Set(context.getState().selection.map((entry) => entry.element))
     const focusTarget = visible.some((r) => r.element === focused) ? focused : visible[0]?.element ?? null
     let cursor = indicator.nextSibling
     for (const row of visible) {
@@ -281,7 +272,9 @@ export function installLayersPanel(context: EditorContext): void {
   context.subscribe((state, previous) => {
     if (state.selection === previous.selection) return
     const element = state.selection[0]?.element ?? null
-    for (let n = element?.parentElement; n && n !== document.body; n = n.parentElement) overrides.set(n, true)
+    for (let n = element && resolver.layerParent(element); n; n = resolver.layerParent(n)) {
+      overrides.set(n, true)
+    }
     if (element) focused = element
     render()
     // Never smooth: selection can change faster than a smooth scroll settles.
