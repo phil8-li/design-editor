@@ -1,7 +1,7 @@
 /**
  * The `react-rewrite-cli@0.1.1` overlay patch.
  *
- * 22 exact-once splices, 40 pinned identifiers, and one injected interaction
+ * 23 exact-once splices, 40 pinned identifiers, and one injected interaction
  * block. All of it is coupling to the pinned VENDOR BUILD, not to any host app,
  * so it ships as-is; only the values that used to encode one particular host —
  * the chrome selectors, the docked-panel geometry, the CSS variable names — are
@@ -132,6 +132,19 @@ function assertBorrowedInternals(source) {
 
 export function patchOverlay(source, config) {
   assertBorrowedInternals(source)
+
+  // React Rewrite's native selection canvas interpolates hover/selection
+  // geometry in `bs()` on requestAnimationFrame. Our first-party canvas owns
+  // all visible selection chrome, so leaving that painter alive produces a
+  // second, animated highlight underneath it. Keep the vendor's geometry state
+  // current for its hit-testing internals, clear any old pixels, and never
+  // schedule its painter.
+  source = replaceOnce(
+    source,
+    "function qe(){Yt===null&&(Yt=requestAnimationFrame(bs))}",
+    "function qe(){for(let e of [se,j,...G])e&&(e.current={...e.target},e.opacity=e.targetOpacity);P&&oe&&P.clearRect(0,0,oe.width,oe.height)}",
+    "native selection painter suppression"
+  )
 
   source = replaceOnce(
     source,
@@ -353,6 +366,7 @@ export function patchOverlay(source, config) {
     "Trigger action",
     "window.__DESIGN_EDITOR_BRIDGE__",
     "designEditorInstallBridge()",
+    "function qe(){for(let e of [se,j,...G])",
   ]
   for (const fragment of requiredFragments) {
     if (!source.includes(fragment)) {

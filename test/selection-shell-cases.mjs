@@ -1,6 +1,7 @@
 /** DOM contract for the quiet UI3 shell and supported-tool inventory. */
 
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
@@ -156,6 +157,22 @@ context.select(null)
 context.setState({ hovered: null })
 selectedTarget.remove()
 
+const { resolveConfig } = await import(path.join(ROOT, "design-editor/config.mjs"))
+const { patchOverlay } = await import(path.join(ROOT, "design-editor/runtime/vendor-patch.mjs"))
+const vendorSource = await fs.readFile(
+  path.join(ROOT, "node_modules/react-rewrite-cli/dist/overlay.js"),
+  "utf8"
+)
+const patchedVendor = patchOverlay(vendorSource, resolveConfig({}, { cwd: ROOT }))
+assert.match(
+  patchedVendor,
+  /function qe\(\)\{for\(let e of \[se,j,\.\.\.G\]\)e&&\(e\.current=\{\.\.\.e\.target\},e\.opacity=e\.targetOpacity\);P&&oe&&P\.clearRect/
+)
+assert.doesNotMatch(
+  patchedVendor,
+  /function qe\(\)\{Yt===null&&\(Yt=requestAnimationFrame\(bs\)\)\}/
+)
+
 const disabledControl = {
   path: "Cards.Layout.gap",
   key: "gap",
@@ -198,5 +215,5 @@ assert.equal(optionsPanel.hidden, true)
 assert.equal(window.document.activeElement, returnTarget)
 globalThis.fetch = originalFetch
 
-console.log("33 passed, 0 failed")
+console.log("35 passed, 0 failed")
 process.exit(0)
