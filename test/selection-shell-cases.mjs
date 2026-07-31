@@ -129,6 +129,33 @@ assert.equal(context.slots.overlay.querySelectorAll(".de-outline").length, 2)
 assert.equal(context.slots.overlay.querySelector(".de-badge"), null)
 assert.equal(context.slots.overlay.querySelectorAll("[data-handle]").length, 8)
 
+const selectedTarget = window.document.createElement("main")
+selectedTarget.getBoundingClientRect = () => new window.DOMRect(20, 30, 100, 60)
+window.document.body.append(selectedTarget)
+const nextPaint = () =>
+  new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)))
+const hoverOutline = context.slots.overlay.querySelector(".de-outline--hover")
+const selectionOutline = context.slots.overlay.querySelector(".de-outline:not(.de-outline--hover)")
+const selectionHandles = Array.from(context.slots.overlay.querySelectorAll("[data-handle]"))
+
+context.setState({ hovered: selectedTarget, selection: [] })
+await nextPaint()
+assert.equal(hoverOutline.style.display, "block")
+assert.equal(hoverOutline.style.transform, "translate(20px, 30px)")
+assert.equal(selectionOutline.style.display, "none")
+assert.ok(selectionHandles.every((handle) => handle.style.display === "none"))
+
+context.select(selectedTarget)
+await nextPaint()
+assert.equal(hoverOutline.style.display, "none")
+assert.equal(selectionOutline.style.display, "block")
+assert.equal(selectionOutline.style.transform, "translate(20px, 30px)")
+assert.ok(selectionHandles.every((handle) => handle.style.display === "block"))
+
+context.select(null)
+context.setState({ hovered: null })
+selectedTarget.remove()
+
 const disabledControl = {
   path: "Cards.Layout.gap",
   key: "gap",
@@ -171,5 +198,5 @@ assert.equal(optionsPanel.hidden, true)
 assert.equal(window.document.activeElement, returnTarget)
 globalThis.fetch = originalFetch
 
-console.log("25 passed, 0 failed")
+console.log("33 passed, 0 failed")
 process.exit(0)
