@@ -26,7 +26,6 @@ export type HandleId = (typeof HANDLES)[number][0]
 /** Handles read as 7px but grab at 13px: Fitts' law without the visual bulk. */
 const HANDLE_SIZE = 7
 const HANDLE_HIT = 13
-const BADGE_MAX_WIDTH = 96
 
 export interface NodePool {
   /** Returns a visible node; call `flush()` once per pass to hide the rest. */
@@ -91,8 +90,7 @@ export function installSelectionFrame(context: EditorContext): void {
   const layer = context.slots.overlay
   const hoverOutline = el("div", { class: "de-outline de-outline--hover" })
   const boundsOutline = el("div", { class: "de-outline" })
-  const label = el("div", { class: "de-badge" })
-  layer.append(hoverOutline, boundsOutline, label)
+  layer.append(hoverOutline, boundsOutline)
 
   // Per-element outlines for a multi-selection; `boundsOutline` wraps the set.
   const members = createNodePool(layer, "de-outline")
@@ -180,7 +178,6 @@ export function installSelectionFrame(context: EditorContext): void {
 
     if (count === 0) {
       hide(boundsOutline)
-      hide(label)
       for (const handle of handles.values()) hide(handle)
       return
     }
@@ -190,20 +187,6 @@ export function installSelectionFrame(context: EditorContext): void {
     boundsOutline.style.display = "block"
     boundsOutline.style.borderStyle = "solid"
     placeNode(boundsOutline, left, top, width, height)
-
-    label.style.display = "block"
-    label.textContent =
-      count > 1
-        ? `${count} layers · ${Math.round(width)} × ${Math.round(height)}`
-        : `${Math.round(width)} × ${Math.round(height)}`
-    const rootStyle = document.documentElement.style
-    const canvasLeft = Number.parseFloat(rootStyle.getPropertyValue("--de-left")) || 0
-    const canvasRight = Number.parseFloat(rootStyle.getPropertyValue("--de-right")) || 0
-    const labelX = Math.min(
-      Math.max(canvasLeft + 4, left),
-      window.innerWidth - canvasRight - BADGE_MAX_WIDTH - 4
-    )
-    placeNode(label, labelX, top - 18 < 4 ? bottom + 4 : top - 18)
 
     const showHandles = count === 1 && (state.tool === "move" || state.tool === "select")
     for (const [id, fx, fy] of HANDLES) {

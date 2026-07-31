@@ -15,8 +15,10 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
   position: absolute;
   border: ${t.size.hairline}px solid ${t.color.accent};
   pointer-events: none;
+  transition: none;
+  animation: none;
 }
-.de-outline--hover { border-style: solid; opacity: 0.48; }
+.de-outline--hover { border-style: solid; opacity: 1; }
 .de-outline--related {
   border-color: ${t.color.measure};
   border-style: dashed;
@@ -28,9 +30,11 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
   width: 7px; height: 7px;
   margin: -4px 0 0 -4px;
   border: ${t.size.hairline}px solid ${t.color.accent};
-  border-radius: ${t.radius.sm};
+  border-radius: 0;
   background: ${t.color.text};
   pointer-events: auto;
+  transition: none;
+  animation: none;
 }
 .de-guide { position: absolute; background: ${t.color.guide}; pointer-events: none; }
 .de-badge {

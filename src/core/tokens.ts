@@ -65,7 +65,7 @@ export const tokens = {
     /** Handles, guides, and the marquee all share one hairline. */
     hairline: 1,
   },
-  /** One shared curve so panels, handles, and guides feel like one tool. */
+  /** Shared curve for occasional controls; high-frequency selection chrome stays instant. */
   ease: "cubic-bezier(0.32, 0.72, 0, 1)",
   duration: { fast: "120ms", base: "180ms" },
 } as const

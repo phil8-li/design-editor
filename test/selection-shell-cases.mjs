@@ -34,6 +34,7 @@ const bundled = await build({
   stdin: {
     contents: `
       export { createContext } from "./src/core/context"
+      export { installSelectionFrame } from "./src/canvas/selection"
       export { installToolbar } from "./src/shell/toolbar"
       export { controlRow, installOptionsBrowser } from "./src/options/inventory-panel"
       export { shellCss } from "./src/core/css"
@@ -111,6 +112,22 @@ assert.equal(menu.hidden, true)
 assert.match(editorModule.shellCss, /bottom:/)
 assert.doesNotMatch(editorModule.shellCss, /transition: padding/)
 assert.doesNotMatch(editorModule.shellCss, /de-outline--scope/)
+assert.match(
+  editorModule.shellCss,
+  /\.de-outline\s*\{[^}]*transition: none;[^}]*animation: none;/s
+)
+assert.match(editorModule.shellCss, /\.de-outline--hover\s*\{[^}]*opacity: 1;/s)
+assert.doesNotMatch(editorModule.shellCss, /\.de-outline--hover\s*\{[^}]*opacity: 0\.48;/s)
+assert.match(
+  editorModule.shellCss,
+  /\.de-handle\s*\{[^}]*border-radius: 0;[^}]*transition: none;[^}]*animation: none;/s
+)
+assert.match(editorModule.shellCss, /\.de-layer\s*\{[^}]*transition: none;[^}]*animation: none;/s)
+
+editorModule.installSelectionFrame(context)
+assert.equal(context.slots.overlay.querySelectorAll(".de-outline").length, 2)
+assert.equal(context.slots.overlay.querySelector(".de-badge"), null)
+assert.equal(context.slots.overlay.querySelectorAll("[data-handle]").length, 8)
 
 const disabledControl = {
   path: "Cards.Layout.gap",
@@ -154,5 +171,5 @@ assert.equal(optionsPanel.hidden, true)
 assert.equal(window.document.activeElement, returnTarget)
 globalThis.fetch = originalFetch
 
-console.log("17 passed, 0 failed")
+console.log("25 passed, 0 failed")
 process.exit(0)

@@ -10,6 +10,8 @@ export const layersCss = `/* ---------- layers ---------- */
   color: ${t.color.textMuted};
   cursor: default;
   white-space: nowrap;
+  transition: none;
+  animation: none;
 }
 .de-layer:hover { background: ${t.color.bgHoverQuiet}; }
 .de-layer[aria-selected="true"] { background: ${t.color.selectionSurface}; color: ${t.color.text}; }
