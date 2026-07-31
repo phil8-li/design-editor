@@ -159,9 +159,14 @@ function createStore(editor: EditorContext): OptionsStore {
     const sets = { ...getState().optionSets }
     delete sets[key]
     setState({ optionSets: sets })
-    void fetch(url(key), { method: "DELETE" }).catch(() => {
-      editor.toast("Could not remove these options", "error")
-    })
+    // Same `response.ok` check as `commit`. Without it a rejected DELETE — an
+    // invalid key, a read-only state dir — resolves normally, so the row leaves
+    // the UI, the file keeps the set, and it silently returns on next reload.
+    void fetch(url(key), { method: "DELETE" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      })
+      .catch(() => editor.toast("Could not remove these options", "error"))
   }
 
   const setFor = (selection: Selection): ElementOptionSet => {

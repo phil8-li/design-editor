@@ -38,20 +38,31 @@ export function installMarquee(context: EditorContext): void {
   /**
    * Candidates come from the current scope at layer granularity, so a marquee
    * collects the same things a click would — a selection set stays
-   * depth-homogeneous. The deep modifier drops to leaves instead, keeping only
-   * the shallowest of any nested pair.
+   * depth-homogeneous. The deep modifier ignores scope depth and collects the
+   * INNERMOST candidates instead, matching Cmd-click's deep select.
    */
   const swept = (l: number, t: number, r: number, b: number, deep: boolean): Element[] => {
-    const scope = context.getState().scope ?? resolver.scopeRoot()
+    // `isConnected`, as in `resolve()`: React replaces DOM nodes constantly, and
+    // a drilled scope that has since been unmounted makes `querySelectorAll`
+    // and `layerChildren` both return nothing — a marquee that selects zero
+    // elements for no reason the user can see. Fall back to the live root.
+    const held = context.getState().scope
+    const scope = held?.isConnected ? held : resolver.scopeRoot()
+
     if (!deep) return resolver.layerChildren(scope).filter((node) => touched(node, l, t, r, b))
+
+    // Document order is ancestors-first, so keeping the first match of any
+    // nested pair keeps the OUTERMOST — which made the deep modifier return the
+    // app shell and nothing else. Walk it in reverse and drop any candidate
+    // that contains one already taken, which leaves the leaves.
     const found: Element[] = []
-    for (const node of Array.from(scope.querySelectorAll("*"))) {
+    for (const node of Array.from(scope.querySelectorAll("*")).reverse()) {
       if (!isLayerCandidate(node)) continue
-      if (found.some((chosen) => chosen.contains(node))) continue
+      if (found.some((chosen) => node.contains(chosen))) continue
       if (!touched(node, l, t, r, b)) continue
       found.push(node)
     }
-    return found
+    return found.reverse()
   }
 
   const onPointerDown = (event: PointerEvent) => {

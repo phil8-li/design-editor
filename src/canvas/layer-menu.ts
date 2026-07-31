@@ -3,8 +3,10 @@
  *
  * This is what makes the scope rule tolerable: a plain click deliberately
  * refuses to go deep, so there has to be one gesture that lists everything
- * under the cursor and lets the user say which one they meant. Rows are ordered
- * frontmost-first, the same order the layers panel shows.
+ * under the cursor and lets the user say which one they meant. Rows come from
+ * `elementsFromPoint`, so they are innermost-first — the inverse of the layers
+ * panel, which is outermost-first. That is deliberate: the menu answers "what
+ * is under my cursor", and the thing under the cursor is the innermost one.
  */
 
 import { el, isChrome } from "../core/dom"
@@ -32,6 +34,10 @@ export function installLayerMenu(context: EditorContext): void {
     open = false
     menu.style.display = "none"
     while (menu.firstChild) menu.removeChild(menu.firstChild)
+    // Row hover writes `hovered`, and the pointer can leave via the menu
+    // closing rather than via a `pointermove` over the canvas. Without this the
+    // preview outline sticks to the last row until the pointer moves again.
+    context.setState({ hovered: null })
   }
 
   const row = (element: Element) => {
@@ -41,7 +47,13 @@ export function installLayerMenu(context: EditorContext): void {
       { class: `de-layer-menu-row${meta.isRoot ? " de-layer-menu-row--component" : ""}`, type: "button", role: "menuitem" },
       [meta.name]
     )
-    node.addEventListener("pointerenter", () => context.setState({ hovered: element }))
+    // Preview what the click will actually select, not the raw stack entry.
+    // This was the one call site bypassing `toSelectable`, so hovering a row
+    // for an SVG node outlined the `<rect>` and then selected the `<button>`
+    // three levels up — the preview promising something the click cannot give.
+    node.addEventListener("pointerenter", () =>
+      context.setState({ hovered: toSelectable(element) })
+    )
     node.addEventListener("click", () => {
       const target = toSelectable(element)
       close()
@@ -89,9 +101,19 @@ export function installLayerMenu(context: EditorContext): void {
     },
     true
   )
-  window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close()
-  }, true)
+  // Escape is consumed while the menu is open. Both this listener and the
+  // canvas's `deselect` are on `window` in capture phase, so without stopping
+  // propagation one Escape dismisses the menu AND wipes the selection the menu
+  // was opened to refine — and Escape is the only keyboard way to dismiss it.
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape" || !open) return
+      event.stopPropagation()
+      close()
+    },
+    true
+  )
   window.addEventListener("scroll", close, true)
   window.addEventListener("blur", close)
 }

@@ -44,8 +44,21 @@ function nthOfType(element: HTMLElement): number {
   return index
 }
 
+/**
+ * Module-scoped, not per-writer. The canvas, the inspector and the options
+ * panel each build their own writer, so a per-instance list could only ever
+ * report the drops made through one of them — and the drop the user most needs
+ * warned about (drag/nudge writing `transform`) happens in the canvas while the
+ * button that must warn about it lives in the toolbar.
+ */
+const skipped: string[] = []
+
+/** CSS properties this session previewed but could not express as utilities. */
+export function untranslatedProperties(): string[] {
+  return [...skipped]
+}
+
 export function createWriter(bridge: RewriteBridge): Writer {
-  const skipped: string[] = []
 
   const operationFor = (
     selection: Selection,
@@ -90,6 +103,7 @@ export function createWriter(bridge: RewriteBridge): Writer {
     applyStyles(selection, writes, summary) {
       const updates: ClassUpdate[] = []
       const keys: string[] = []
+      const dropped: string[] = []
 
       for (const write of writes) {
         selection.element.style.setProperty(write.property, write.value)
@@ -99,6 +113,7 @@ export function createWriter(bridge: RewriteBridge): Writer {
           // Preview-only. Surfaced rather than swallowed so the toolbar can say
           // which properties will not survive "Apply to code".
           if (!skipped.includes(write.property)) skipped.unshift(write.property)
+          dropped.push(write.property)
           continue
         }
         updates.push(update)
@@ -106,7 +121,18 @@ export function createWriter(bridge: RewriteBridge): Writer {
       }
 
       if (updates.length) queue(selection, updates, keys)
-      bridge.toast(summary, "info")
+
+      // An unqualified success toast on a partly-dropped write is worse than no
+      // toast: the change is on screen, so the only thing that could tell the
+      // user it will not reach source is this message. Drag and arrow-nudge
+      // both land here, and both write `transform`, which has no utility.
+      if (dropped.length === 0) {
+        bridge.toast(summary, "info")
+      } else if (updates.length === 0) {
+        bridge.toast(`${summary} — preview only (${dropped.join(", ")})`, "error")
+      } else {
+        bridge.toast(`${summary} — ${dropped.join(", ")} is preview only`, "error")
+      }
     },
 
     applyClasses(selection, write, summary) {

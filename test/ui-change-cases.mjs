@@ -503,6 +503,74 @@ async function serverGuardCases() {
     const response = await fetch(`${API}/nope`)
     assert.equal(response.status, 404)
   })
+
+  await checkAsync("a cross-origin request cannot reach the routes", async () => {
+    const response = await fetch(`${API}/options`, {
+      headers: { origin: "https://evil.example" },
+    })
+    assert.equal(response.status, 403)
+  })
+
+  // `Origin: null` is what a sandboxed iframe, a data:/blob: document, and a
+  // cross-origin redirect all send. It used to be treated as "no origin", which
+  // handed those exact contexts a preflight-free path to routes that write
+  // project files.
+  await checkAsync("an opaque `Origin: null` is refused, not treated as absent", async () => {
+    const response = await fetch(`${API}/options`, { headers: { origin: "null" } })
+    assert.equal(response.status, 403)
+  })
+
+  await checkAsync("a loopback origin is still allowed", async () => {
+    const response = await fetch(`${API}/options`, {
+      headers: { origin: `http://localhost:${new URL(API).port}` },
+    })
+    assert.equal(response.status, 200)
+  })
+}
+
+/**
+ * The WebSocket carries `updateProperty` / `updateText` / `commitBatch`, all of
+ * which write project source. Browsers do not apply the same-origin policy to
+ * WebSockets, so without an origin check at the handshake any page in any tab
+ * could open this socket and rewrite the project. Binding to loopback is not a
+ * defence: the victim's own browser is on loopback.
+ */
+async function socketOriginCases() {
+  console.log("\nLevel 5 — WebSocket handshake guard")
+
+  const handshake = (origin) =>
+    new Promise((resolve) => {
+      const socket = new WebSocket(WS_URL, origin === null ? {} : { origin })
+      const done = (result) => {
+        socket.removeAllListeners()
+        try {
+          socket.close()
+        } catch {
+          // Already closed by the rejection; nothing to unwind.
+        }
+        resolve(result)
+      }
+      socket.on("open", () => done("open"))
+      socket.on("error", () => done("rejected"))
+      setTimeout(() => done("timeout"), 3000)
+    })
+
+  if ((await handshake(null)) !== "open") {
+    console.log("  skip (engine socket not reachable — start `npm run design`)")
+    return
+  }
+
+  await checkAsync("a hostile origin cannot complete the handshake", async () => {
+    assert.equal(await handshake("https://evil.example"), "rejected")
+  })
+
+  await checkAsync("an opaque `null` origin cannot complete the handshake", async () => {
+    assert.equal(await handshake("null"), "rejected")
+  })
+
+  await checkAsync("the editor's own page origin still connects", async () => {
+    assert.equal(await handshake(`http://localhost:${new URL(API).port}`), "open")
+  })
 }
 
 // ── run ────────────────────────────────────────────────────────────────────
@@ -529,6 +597,10 @@ if (socket) {
 }
 
 await serverGuardCases()
+// After the engine socket is closed: the vendor serves one client at a time, so
+// probing the handshake while the editor's own socket is attached would displace
+// it and leave the open page silently disconnected.
+await socketOriginCases()
 
 console.log(`\n${passed} passed, ${failed} failed`)
 if (KEEP) console.log("--keep: fixtures and edits were NOT reverted")

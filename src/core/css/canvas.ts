@@ -3,7 +3,14 @@
 import { tokens as t } from "../tokens"
 
 export const canvasCss = `/* ---------- canvas chrome ---------- */
-.de-overlay-layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147482000; }
+/*
+ * No z-index here. This layer is a child of .de-root, which is the stacking
+ * context, so base.ts orders it against the toolbar and panels (1 vs 2). This
+ * module is concatenated last, so re-declaring z-index would win on cascade
+ * order and silently undo that — putting resize handles, which are
+ * pointer-events:auto, on top of every button in the chrome.
+ */
+.de-overlay-layer { position: fixed; inset: 0; pointer-events: none; }
 .de-outline {
   position: absolute;
   border: ${t.size.hairline}px solid ${t.color.accent};

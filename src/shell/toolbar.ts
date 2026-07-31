@@ -8,6 +8,7 @@
 
 import { el } from "../core/dom"
 import { isTextEntry } from "../core/keymap"
+import { untranslatedProperties } from "../core/writer"
 import type { EditorContext } from "../core/context"
 import type { ToolId } from "../core/types"
 
@@ -140,7 +141,18 @@ export function installToolbar(context: EditorContext): void {
           return
         }
         bridge.send({ type: "commitBatch", operations })
-        context.toast(`Applying ${operations.length} change${operations.length === 1 ? "" : "s"}…`)
+
+        // The count only covers what became a utility class. Anything the
+        // translator could not express is still on screen and is about to be
+        // lost on the next hot reload, so the commit message has to name it
+        // rather than report an unqualified success.
+        const lost = untranslatedProperties()
+        const applying = `Applying ${operations.length} change${operations.length === 1 ? "" : "s"}…`
+        if (lost.length === 0) {
+          context.toast(applying)
+        } else {
+          context.toast(`${applying} ${lost.join(", ")} cannot be written to code`, "error")
+        }
       },
     },
     ["Apply to code"]

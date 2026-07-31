@@ -43,11 +43,20 @@ function isLoopbackHost(value) {
   return host === "localhost" || host === "127.0.0.1" || host === "::1"
 }
 
+/**
+ * `"null"` is NOT an exemption. It is the Origin a sandboxed iframe, a
+ * `data:`/`blob:` document, or a redirected cross-origin form sends, and those
+ * are precisely the contexts an attacker controls. Treating it as "no origin"
+ * let any page reach these routes with a CORS-preflight-free request.
+ *
+ * A genuinely absent header still passes: curl and the test harness send none,
+ * and a non-browser client carries no ambient credentials to abuse.
+ */
 function isLocalRequest(req) {
   if (!LOOPBACK_ADDRESSES.has(req.socket?.remoteAddress ?? "")) return false
   if (!isLoopbackHost(req.headers.host)) return false
   const origin = req.headers.origin
-  if (origin && origin !== "null" && !isLoopbackHost(origin)) return false
+  if (origin !== undefined && !isLoopbackHost(origin)) return false
   return true
 }
 

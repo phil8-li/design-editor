@@ -35,6 +35,21 @@ const CHROME_BUNDLE = fileURLToPath(
 )
 
 /**
+ * Mirrors `isLoopbackHost` in server/routes.mjs. Not imported from there: that
+ * module pulls in the agent and the options store, and this file is loaded
+ * before the vendor boots, when neither exists yet.
+ */
+function isLoopbackOrigin(value) {
+  if (typeof value !== "string" || value.length === 0) return false
+  try {
+    const host = new URL(value).hostname.replace(/^\[|\]$/g, "")
+    return host === "localhost" || host === "127.0.0.1" || host === "::1"
+  } catch {
+    return false
+  }
+}
+
+/**
  * Prefers the HOST's copy of the vendor, so an app that already pins
  * `react-rewrite-cli` wins over the one installed beside this package. The 22
  * splices are only valid against 0.1.1 either way, which is why the dependency
@@ -144,12 +159,21 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
   const wsModule = await import(wsSpecifier)
   const WebSocket = wsModule.WebSocket ?? wsModule.default?.WebSocket ?? wsModule.default
   if (!WebSocket?.prototype) throw new Error(`Could not load 'ws' from ${wsSpecifier}`)
+  const WebSocketServer =
+    wsModule.WebSocketServer ??
+    wsModule.Server ??
+    wsModule.default?.WebSocketServer ??
+    wsModule.default?.Server
+  if (!WebSocketServer?.prototype?.handleUpgrade) {
+    throw new Error(`Could not load 'ws' WebSocketServer from ${wsSpecifier}`)
+  }
 
   const originalCreateReadStream = fs.createReadStream
   const originalCreateServer = http.createServer
   const originalListen = net.Server.prototype.listen
   const originalWriteHead = http.ServerResponse.prototype.writeHead
   const originalWebSocketOn = WebSocket.prototype.on
+  const originalHandleUpgrade = WebSocketServer.prototype.handleUpgrade
 
   const runtime = { appPort, proxyPort: null, wsPort: null }
   let patchedOverlay
@@ -169,6 +193,31 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
     return originalCreateReadStream.call(this, filePath, ...args)
   }
   syncBuiltinESMExports()
+
+  // The vendor constructs its WebSocketServer with no `verifyClient`, and the
+  // browser same-origin policy does not cover WebSockets: any page in any tab
+  // could open `ws://127.0.0.1:<wsPort>` and send `updateProperty` /
+  // `commitBatch`, which write project source. Binding to loopback does not
+  // help — the victim's own browser is on loopback.
+  //
+  // The handshake is the only chokepoint the vendor leaves reachable, so the
+  // origin is checked there. `undefined` passes (non-browser clients send no
+  // Origin and carry no ambient authority); `"null"` does not, for the same
+  // reason as in server/routes.mjs.
+  WebSocketServer.prototype.handleUpgrade = function handleLoopbackUpgrade(
+    request,
+    socket,
+    head,
+    callback
+  ) {
+    const origin = request?.headers?.origin
+    if (origin !== undefined && !isLoopbackOrigin(origin)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+      socket.destroy()
+      return
+    }
+    return originalHandleUpgrade.call(this, request, socket, head, callback)
+  }
 
   // React 19 owner stacks URL-encode spaces in absolute source paths. Normalize
   // only path-bearing editor messages before React Rewrite applies its existing
