@@ -1,0 +1,39 @@
+{
+  "name": "@workspace/design-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "design-editor": "./cli.mjs"
+  },
+  "exports": {
+    ".": "./cli.mjs",
+    "./config": "./config.mjs"
+  },
+  "files": [
+    "build.mjs",
+    "cli.mjs",
+    "config.mjs",
+    "design-editor.config.example.mjs",
+    "dist/",
+    "runtime/",
+    "server/",
+    "src/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prepare": "node build.mjs",
+    "verify": "node build.mjs --check && node cli.mjs --verify",
+    "test": "node test/options-cases.mjs && node test/selection-cases.mjs"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.29.7",
+    "esbuild": "^0.28.1",
+    "react-rewrite-cli": "0.1.1",
+    "ws": "^8.21.1"
+  }
+}

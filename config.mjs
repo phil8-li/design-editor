@@ -6,11 +6,10 @@
  * AND client), the project roots (options store AND agent), the API prefix
  * (server AND client AND test harness), and the ports (launcher AND harness).
  *
- * Defaults reproduce today's behaviour byte-for-byte so a host with no config
- * file keeps working. They target the mainstream Next.js stack — Tailwind,
- * shadcn/ui tokens, Leva as dev chrome — because omitting a token is safe
- * (an arbitrary value is written) while guessing one silently writes the
- * wrong class.
+ * Defaults target a stock Next.js + Tailwind app and know nothing about the
+ * repository they happen to be copied from. Optional host tools (Leva,
+ * Agentation, a docked dev panel) are integrations declared by the host config,
+ * never package assumptions.
  */
 
 import fs from "node:fs"
@@ -70,33 +69,20 @@ export const DEFAULT_CONFIG = {
     // Elements the editor must never treat as canvas: its own shell, and the
     // host's dev GUI. An empty list is legal — `closest("")` throws, so the
     // patch guards on the empty string rather than calling it.
-    trustedSelectors: [
-      "#leva__root",
-      "[data-leva-chrome]",
-      "[data-design-editor]",
-      'div[class*="leva-c-"]',
-      // The agentation dev bar. It owns itself on :3000 and must stay canvas-
-      // exempt here, or a click meant for it would select and re-style it.
-      "[data-agentation-root]",
-    ],
+    trustedSelectors: [],
     dockedPanel: {
-      selector: '#leva__root > div[class*="leva-c-"],body > div[class*="leva-c-"]',
-      // Any fixed-position match is treated as the panel when the precise
-      // selector misses, which happens while Leva is still mounting.
-      fallbackSelector: 'div[class*="leva-c-"]',
-      chromeSelectors: [
-        "#leva__root",
-        "[data-leva-chrome]",
-        'div[class*="leva-c-"]',
-      ],
-      offsetVar: "--react-rewrite-leva-offset",
-      widthVar: "--react-rewrite-inspector-width",
+      selector: "",
+      fallbackSelector: "",
+      chromeSelectors: [],
+      offsetVar: "--design-editor-docked-panel-offset",
+      widthVar: "--design-editor-docked-panel-width",
       minWidth: 260,
       maxWidth: 380,
       gap: 12,
       edgeGap: 8,
     },
   },
+  controls: { leva: null },
   tailwind: {
     version: 3,
     colorWords: [],
@@ -160,6 +146,52 @@ function resolveSpacingScale(tailwind) {
   return V3_SPACING_SCALE
 }
 
+function resolveLevaConfig(value, projectRoot) {
+  if (!isPlainObject(value) || typeof value.storeGlobal !== "string" || !value.storeGlobal) {
+    return null
+  }
+
+  const source = isPlainObject(value.sourceDefaults) ? value.sourceDefaults : null
+  const sourceDefaults =
+    source && typeof source.file === "string" && typeof source.exportName === "string"
+      ? Object.freeze({
+          file: path.resolve(projectRoot, source.file),
+          exportName: source.exportName,
+        })
+      : null
+
+  const bindings = Array.isArray(value.bindings)
+    ? value.bindings
+        .filter((binding) => isPlainObject(binding) && typeof binding.pathPattern === "string")
+        .map((binding) =>
+          Object.freeze({
+            pathPattern: binding.pathPattern,
+            selectors: Array.isArray(binding.selectors)
+              ? binding.selectors.filter((selector) => typeof selector === "string" && selector)
+              : [],
+            relationship:
+              typeof binding.relationship === "string" && binding.relationship
+                ? binding.relationship
+                : "affects",
+            defaultGroup:
+              typeof binding.defaultGroup === "string" && binding.defaultGroup
+                ? binding.defaultGroup
+                : null,
+            defaultKey:
+              typeof binding.defaultKey === "string" && binding.defaultKey
+                ? binding.defaultKey
+                : null,
+          })
+        )
+    : []
+
+  return Object.freeze({
+    storeGlobal: value.storeGlobal,
+    sourceDefaults,
+    bindings: Object.freeze(bindings),
+  })
+}
+
 /**
  * Merges host overrides onto the defaults and makes every path absolute.
  * `projectRoot` defaults to the directory the config file was found in, so it
@@ -170,6 +202,7 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
   const rootBase = configPath ? path.dirname(configPath) : cwd
   const projectRoot = path.resolve(merged.projectRoot ?? rootBase)
   const stateDir = path.resolve(projectRoot, merged.stateDir)
+  const leva = resolveLevaConfig(merged.controls?.leva, projectRoot)
 
   const apiPrefix = merged.apiPrefix.startsWith("/")
     ? merged.apiPrefix.replace(/\/+$/, "")
@@ -195,6 +228,7 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
       colorWords: [...PALETTE_WORDS, ...SHADCN_WORDS, ...merged.tailwind.colorWords],
       spacingScale: resolveSpacingScale(merged.tailwind),
     }),
+    controls: Object.freeze({ leva }),
     source: Object.freeze({
       ...merged.source,
       roots: merged.source.roots.map((entry) => path.resolve(projectRoot, entry)),
@@ -236,6 +270,15 @@ export function browserPrelude(config, runtime = {}) {
       dockedPanel: config.chrome.dockedPanel,
     },
     tailwind: config.tailwind,
+    controls: {
+      leva: config.controls.leva
+        ? {
+            storeGlobal: config.controls.leva.storeGlobal,
+            bindings: config.controls.leva.bindings,
+            sourceDefaults: Boolean(config.controls.leva.sourceDefaults),
+          }
+        : null,
+    },
     ports: { proxy: runtime.proxyPort ?? null, ws: runtime.wsPort ?? null },
   }
 

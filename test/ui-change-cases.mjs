@@ -13,7 +13,7 @@
  * the vendor abandons 3456/3457 the moment either is busy, and a hardcoded port
  * turns every level below 1 into a silent skip.
  *
- * Usage: node design-editor/test/ui-change-cases.mjs [--keep] [--config <path>]
+ * Usage: node design-editor/test/ui-change-cases.mjs [--offline] [--keep] [--config <path>]
  */
 
 import assert from "node:assert/strict"
@@ -27,6 +27,7 @@ import { loadConfig } from "../config.mjs"
 const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
 const FIXTURE_DIR = path.join(PACKAGE_DIR, "test/.fixtures")
 const KEEP = process.argv.includes("--keep")
+const OFFLINE = process.argv.includes("--offline")
 
 const configFlag = process.argv.indexOf("--config")
 const config = await loadConfig(
@@ -332,6 +333,39 @@ async function engineCases(socket) {
       assert.match(fs.readFileSync(fixture, "utf8"), /px-6/)
     })
 
+    await checkAsync("removes an exact utility with an empty standalone replacement", async () => {
+      const result = await request(
+        socket,
+        {
+          type: "commitBatch",
+          operations: [
+            {
+              op: "updateClass",
+              file: fixture,
+              line: 4,
+              col: 7,
+              tagName: "span",
+              className: "text-lg text-gray-500 opacity-[0.5]",
+              updates: [
+                {
+                  tailwindPrefix: "text-gray-500",
+                  tailwindToken: "",
+                  value: "",
+                  standalone: true,
+                  classPattern: "^text-gray-500$",
+                },
+              ],
+            },
+          ],
+        },
+        "commitBatchComplete"
+      )
+      assert.equal(result.success, true, JSON.stringify(result.results ?? result))
+      const after = fs.readFileSync(fixture, "utf8")
+      assert.doesNotMatch(after, /text-gray-500/)
+      assert.match(after, /text-lg/)
+    })
+
     await checkAsync("rejects a path outside the project root", async () => {
       const result = await request(
         socket,
@@ -581,10 +615,14 @@ console.log(`Engine: ${WS_URL} — API: ${API}`)
 await translationCases()
 
 let socket
-try {
-  socket = await connect()
-} catch (error) {
-  console.log(`\nLevel 2/3 skipped — ${error.message}`)
+if (!OFFLINE) {
+  try {
+    socket = await connect()
+  } catch (error) {
+    console.log(`\nLevel 2/3 skipped — ${error.message}`)
+  }
+} else {
+  console.log("\nLevel 2–5 skipped — --offline")
 }
 
 if (socket) {
@@ -596,11 +634,11 @@ if (socket) {
   }
 }
 
-await serverGuardCases()
+if (!OFFLINE) await serverGuardCases()
 // After the engine socket is closed: the vendor serves one client at a time, so
 // probing the handshake while the editor's own socket is attached would displace
 // it and leave the open page silently disconnected.
-await socketOriginCases()
+if (!OFFLINE) await socketOriginCases()
 
 console.log(`\n${passed} passed, ${failed} failed`)
 if (KEEP) console.log("--keep: fixtures and edits were NOT reverted")

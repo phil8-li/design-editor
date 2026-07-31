@@ -62,7 +62,8 @@ export function createWriter(bridge: RewriteBridge): Writer {
 
   const operationFor = (
     selection: Selection,
-    updates: ClassUpdate[]
+    updates: ClassUpdate[],
+    identity?: { className: string; parentClassName: string | undefined }
   ): UpdateClassOperation | null => {
     const source = selection.source
     if (!source?.filePath) return null
@@ -76,9 +77,12 @@ export function createWriter(bridge: RewriteBridge): Writer {
       col: source.columnNumber ?? 0,
       componentName: source.componentName,
       tagName: element.tagName.toLowerCase(),
-      className: element.className || undefined,
+      className: identity
+        ? identity.className || undefined
+        : element.getAttribute("class") || undefined,
       parentTagName: parent?.tagName.toLowerCase(),
-      parentClassName: parent?.className || undefined,
+      parentClassName:
+        identity?.parentClassName ?? parent?.getAttribute("class") ?? undefined,
       nthOfType: nthOfType(element),
       updates,
     }
@@ -87,9 +91,10 @@ export function createWriter(bridge: RewriteBridge): Writer {
   const queue = (
     selection: Selection,
     updates: ClassUpdate[],
-    keys: string[]
+    keys: string[],
+    identity?: { className: string; parentClassName: string | undefined }
   ) => {
-    const operation = operationFor(selection, updates)
+    const operation = operationFor(selection, updates, identity)
     if (!operation) return
     try {
       bridge.store.addPendingPropertyOperation(selection.key, operation, keys)
@@ -137,21 +142,48 @@ export function createWriter(bridge: RewriteBridge): Writer {
 
     applyClasses(selection, write, summary) {
       const element = selection.element
+      // Source resolution must see the element that exists in JSX, not the
+      // already-mutated preview. A large removal can otherwise erase enough of
+      // the identity for the vendor's overlap matcher to lose the node.
+      const identity = {
+        className: element.getAttribute("class") ?? "",
+        parentClassName: element.parentElement?.getAttribute("class") ?? undefined,
+      }
       for (const name of write.remove) element.classList.remove(name)
       for (const name of write.add) element.classList.add(name)
 
-      // A raw class edit has no CSS property to key on, so each added class is
-      // its own standalone update keyed by name — re-adding replaces, and the
-      // removals are already reflected in the `className` resolution context.
-      const updates = write.add.map<ClassUpdate>((name) => ({
-        tailwindPrefix: name,
-        tailwindToken: name,
-        value: name,
-        standalone: true,
-        classPattern: `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-      }))
+      const escape = (name: string) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      const additions = [...new Set(write.add.filter((name) => !write.remove.includes(name)))]
+      const removals = [...new Set(write.remove)]
+      const updates: ClassUpdate[] = []
+      const keys: string[] = []
+
+      // The pinned writer has no remove verb. Replacing an exact class with an
+      // empty standalone token removes it; pairing a removal with an addition
+      // also avoids the double-space the empty token necessarily leaves behind.
+      for (const removed of removals) {
+        const replacement = additions.shift() ?? ""
+        updates.push({
+          tailwindPrefix: removed,
+          tailwindToken: replacement,
+          value: replacement,
+          standalone: true,
+          classPattern: `^${escape(removed)}$`,
+        })
+        keys.push(`class:${removed}`)
+      }
+      for (const added of additions) {
+        updates.push({
+          tailwindPrefix: added,
+          tailwindToken: added,
+          value: added,
+          standalone: true,
+          classPattern: `^${escape(added)}$`,
+        })
+        keys.push(`class:${added}`)
+      }
       if (updates.length) {
-        queue(selection, updates, write.add.map((name) => `class:${name}`))
+        queue(selection, updates, keys, identity)
       }
       bridge.toast(summary, "info")
     },

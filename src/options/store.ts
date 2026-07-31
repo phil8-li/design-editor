@@ -24,6 +24,7 @@ export interface OptionsStore {
   get(key: string): ElementOptionSet | null
   apply(selection: Selection, writer: Writer, option: ElementOption): void
   saveCurrent(selection: Selection, writer: Writer): void
+  update(selection: Selection, id: string): void
   updateActive(selection: Selection): void
   rename(key: string, id: string, name: string): void
   remove(selection: Selection, writer: Writer, id: string): void
@@ -196,6 +197,18 @@ function createStore(editor: EditorContext): OptionsStore {
     return { ...set, options: [baselineEntry(snapshot), ...set.options] }
   }
 
+  const update = (selection: Selection, id: string) => {
+    const set = setFor(selection)
+    if (id === BASELINE_OPTION_ID || !set.options.some((option) => option.id === id)) return
+    const snapshot = captureSnapshot(selection.element)
+    commit({
+      ...set,
+      options: set.options.map((option) =>
+        option.id === id ? { ...option, ...snapshot } : option
+      ),
+    })
+  }
+
   return {
     ready() {
       loading ??= load()
@@ -242,17 +255,14 @@ function createStore(editor: EditorContext): OptionsStore {
       commit({ ...set, activeOptionId: option.id, options: [...set.options, option] })
     },
 
+    update(selection, id) {
+      update(selection, id)
+    },
+
     updateActive(selection) {
       const set = setFor(selection)
-      const active = set.options.find((option) => option.id === set.activeOptionId)
-      if (!active) return
-      const snapshot = captureSnapshot(selection.element)
-      commit({
-        ...set,
-        options: set.options.map((option) =>
-          option.id === active.id ? { ...option, ...snapshot } : option
-        ),
-      })
+      if (!set.activeOptionId) return
+      update(selection, set.activeOptionId)
     },
 
     rename(key, id, name) {

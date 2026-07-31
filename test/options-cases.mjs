@@ -12,6 +12,8 @@
  */
 
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
+import http from "node:http"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
@@ -24,6 +26,17 @@ let failed = 0
 function check(name, fn) {
   try {
     fn()
+    passed += 1
+    console.log(`  ok   ${name}`)
+  } catch (error) {
+    failed += 1
+    console.log(`  FAIL ${name}\n       ${error.message}`)
+  }
+}
+
+async function checkAsync(name, fn) {
+  try {
+    await fn()
     passed += 1
     console.log(`  ok   ${name}`)
   } catch (error) {
@@ -91,13 +104,34 @@ async function inventoryCases() {
 
   const dom = new JSDOM("<!doctype html><html><body></body></html>")
   globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.Element = dom.window.Element
+  globalThis.HTMLElement = dom.window.HTMLElement
+  globalThis.CustomEvent = dom.window.CustomEvent
+  globalThis.__DESIGN_EDITOR_CONFIG__ = {
+    controls: {
+      leva: {
+        storeGlobal: "__STORE",
+        sourceDefaults: true,
+        bindings: [
+          {
+            pathPattern: "Overview.Hover.*",
+            selectors: ["[data-card]"],
+            relationship: "spacing within",
+            defaultGroup: "Card hover",
+            defaultKey: null,
+          },
+        ],
+      },
+    },
+  }
   const inventory = await load("design-editor/src/options/inventory.ts")
 
   check("no __STORE reports an empty state instead of throwing", () => {
     delete dom.window.__STORE
     const result = inventory.readInventory()
     assert.equal(result.available, false)
-    assert.match(result.reason, /window\.__STORE/)
+    assert.match(result.reason, /configured Leva store/)
   })
 
   check("an object that is not a leva store is refused", () => {
@@ -149,6 +183,40 @@ async function inventoryCases() {
     assert.equal(preset.value, "Lift")
     assert.equal(result.selectCount, 1)
     assert.equal(result.variantCount, 3)
+  })
+
+  check("explicit bindings annotate relevance and the source-default address", () => {
+    dom.window.__STORE = stubStore(SAMPLE, SAMPLE_VISIBLE)
+    const control = inventory.readInventory().sections[0].folders[0].controls[0]
+    assert.equal(control.relationship, "spacing within")
+    assert.deepEqual(control.selectors, ["[data-card]"])
+    assert.equal(control.defaultGroup, "Card hover")
+    assert.equal(control.defaultKey, "hoverPreset")
+    assert.equal(control.canPersistDefault, true)
+  })
+
+  check("unbound paths stay unbound instead of guessing from their names", () => {
+    const tree = inventory.buildTree(SAMPLE, SAMPLE_VISIBLE, [])
+    const control = tree.sections[0].folders[0].controls[0]
+    assert.equal(control.relationship, null)
+    assert.deepEqual(control.selectors, [])
+    assert.equal(control.defaultGroup, null)
+  })
+
+  check("highlight dispatch carries only host-declared target elements", () => {
+    const card = dom.window.document.createElement("article")
+    card.setAttribute("data-card", "")
+    dom.window.document.body.append(card)
+    dom.window.__STORE = stubStore(SAMPLE, SAMPLE_VISIBLE)
+    const control = inventory.readInventory().sections[0].folders[0].controls[0]
+    let detail = null
+    dom.window.addEventListener("design-editor:highlight-elements", (event) => {
+      detail = event.detail
+    }, { once: true })
+    const resolved = inventory.highlightControlTargets(control)
+    assert.deepEqual(resolved.elements, [card])
+    assert.deepEqual(detail.elements, [card])
+    assert.equal(detail.relationship, "spacing within")
   })
 
   check("a control hidden by a render predicate is listed, flagged hidden", () => {
@@ -243,6 +311,190 @@ function prototypeCases(inventory) {
   })
 }
 
+async function sourceDefaultCases() {
+  console.log("\nSource-backed control defaults")
+  const { browserPrelude, resolveConfig } = await import(path.join(ROOT, "design-editor/config.mjs"))
+  const { createControlDefaults } = await import(
+    path.join(ROOT, "design-editor/server/control-defaults.mjs")
+  )
+  const { createDesignEditorRoutes } = await import(
+    path.join(ROOT, "design-editor/server/routes.mjs")
+  )
+  const fixtureDir = path.join(ROOT, "design-editor/test/.control-default-fixture")
+  const fixture = path.join(fixtureDir, "defaults.ts")
+  const source = `// unrelated header stays byte-for-byte\nexport const DEFAULTS: Record<string, Record<string, unknown>> = {\n  "Card": {\n    // keep this note\n    "gap": 8,\n    "color": "#fff",\n    "dynamic": makeDefault(),\n  },\n  "Other": { "flag": true },\n}\n\nexport const SENTINEL = "untouched"\n`
+
+  await fs.mkdir(fixtureDir, { recursive: true })
+  await fs.writeFile(fixture, source)
+  const config = resolveConfig(
+    {
+      projectRoot: ROOT,
+      source: { roots: [fixtureDir], extensions: [".ts"] },
+      controls: {
+        leva: {
+          storeGlobal: "__STORE",
+          sourceDefaults: { file: fixture, exportName: "DEFAULTS" },
+          bindings: [],
+        },
+      },
+    },
+    { cwd: ROOT }
+  )
+  const defaults = createControlDefaults(config)
+
+  check("generic defaults do not assume Leva, Agentation, or host chrome", () => {
+    const generic = resolveConfig({}, { cwd: ROOT })
+    assert.deepEqual(generic.chrome.trustedSelectors, [])
+    assert.equal(generic.chrome.trustedSelector, "")
+    assert.equal(generic.controls.leva, null)
+  })
+
+  check("the browser prelude excludes source-default file and export details", () => {
+    const prelude = browserPrelude(config)
+    assert.match(prelude, /"storeGlobal":"__STORE"/)
+    assert.match(prelude, /"sourceDefaults":true/)
+    assert.doesNotMatch(prelude, /defaults\.ts/)
+    assert.doesNotMatch(prelude, /DEFAULTS/)
+  })
+
+  await checkAsync("reads and replaces one literal without reformatting the file", async () => {
+    assert.deepEqual(await defaults.read("Card", "gap"), {
+      configured: true,
+      exists: true,
+      value: 8,
+    })
+    await defaults.write("Card", "gap", 12)
+    assert.equal(await fs.readFile(fixture, "utf8"), source.replace('"gap": 8', '"gap": 12'))
+  })
+
+  await checkAsync("adds and removes one key while preserving unrelated comments/content", async () => {
+    await defaults.write("Card", "radius", 20)
+    let next = await fs.readFile(fixture, "utf8")
+    assert.match(next, /"radius": 20/)
+    assert.match(next, /\/\/ keep this note/)
+    assert.match(next, /export const SENTINEL = "untouched"/)
+    assert.deepEqual(await defaults.remove("Card", "color"), { configured: true, existed: true })
+    next = await fs.readFile(fixture, "utf8")
+    assert.doesNotMatch(next, /"color"/)
+    assert.match(next, /"gap": 12/)
+    assert.match(next, /"radius": 20/)
+    assert.match(next, /"Other": \{ "flag": true \}/)
+  })
+
+  await checkAsync("refuses to read, update, or remove a dynamic expression", async () => {
+    await assert.rejects(defaults.read("Card", "dynamic"), /dynamic/)
+    await assert.rejects(defaults.write("Card", "dynamic", 1), /dynamic/)
+    await assert.rejects(defaults.remove("Card", "dynamic"), /dynamic/)
+  })
+
+  await checkAsync("loopback routes expose GET, PUT, and DELETE against the configured literal", async () => {
+    const routes = createDesignEditorRoutes(config)
+    const server = http.createServer((request, response) => {
+      if (routes.handle(request, response)) return
+      response.writeHead(404).end()
+    })
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    const base = `http://127.0.0.1:${address.port}${config.apiPrefix}/control-default`
+    const url = `${base}?${new URLSearchParams({ group: "Other", key: "flag" })}`
+    try {
+      const initial = await (await fetch(url)).json()
+      assert.deepEqual(initial, { configured: true, exists: true, value: true })
+      const put = await fetch(url, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: false }),
+      })
+      assert.equal(put.status, 200)
+      assert.equal((await put.json()).value, false)
+      assert.match(await fs.readFile(fixture, "utf8"), /"Other": \{ "flag": false \}/)
+      const drop = await fetch(url, { method: "DELETE" })
+      assert.deepEqual(await drop.json(), { configured: true, existed: true })
+      assert.doesNotMatch(await fs.readFile(fixture, "utf8"), /"flag"/)
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
+
+  check("refuses a configured defaults file outside editable source roots", () => {
+    const unsafe = resolveConfig(
+      {
+        projectRoot: ROOT,
+        source: { roots: [fixtureDir], extensions: [".ts"] },
+        controls: {
+          leva: {
+            storeGlobal: "__STORE",
+            sourceDefaults: { file: path.join(ROOT, "elsewhere.ts"), exportName: "DEFAULTS" },
+            bindings: [],
+          },
+        },
+      },
+      { cwd: ROOT }
+    )
+    assert.throws(() => createControlDefaults(unsafe), /outside editable source roots/)
+  })
+
+  await fs.rm(fixtureDir, { recursive: true, force: true })
+}
+
+async function writerCases() {
+  console.log("\nClass snapshot writer")
+  const { createWriter } = await load("design-editor/src/core/writer.ts")
+  const parent = document.createElement("div")
+  parent.className = "parent-shell"
+  const element = document.createElement("button")
+  element.className = "rounded px-2 text-sm"
+  parent.append(element)
+  document.body.append(parent)
+
+  const pending = []
+  const bridge = {
+    toast() {},
+    store: {
+      addPendingPropertyOperation(key, operation, propertyKeys) {
+        pending.push({ key, operation, propertyKeys })
+      },
+    },
+  }
+  const selection = {
+    element,
+    tagName: "button",
+    componentName: "Button",
+    key: "Button:1:button0",
+    source: {
+      filePath: "src/Button.tsx",
+      lineNumber: 1,
+      columnNumber: 1,
+      componentName: "Button",
+    },
+  }
+  const writer = createWriter(bridge)
+
+  check("class swaps queue the removal and preserve pre-mutation identity", () => {
+    writer.applyClasses(selection, { remove: ["px-2"], add: ["px-4"] }, "Swap padding")
+    assert.equal(element.className, "rounded text-sm px-4")
+    assert.equal(pending[0].operation.className, "rounded px-2 text-sm")
+    assert.equal(pending[0].operation.parentClassName, "parent-shell")
+    assert.deepEqual(pending[0].operation.updates[0], {
+      tailwindPrefix: "px-2",
+      tailwindToken: "px-4",
+      value: "px-4",
+      standalone: true,
+      classPattern: "^px-2$",
+    })
+  })
+
+  check("a pure removal queues an empty exact replacement instead of preview-only", () => {
+    writer.applyClasses(selection, { remove: ["text-sm"], add: [] }, "Remove text size")
+    assert.equal(element.classList.contains("text-sm"), false)
+    assert.equal(pending[1].operation.className, "rounded text-sm px-4")
+    assert.equal(pending[1].operation.updates[0].tailwindToken, "")
+    assert.equal(pending[1].operation.updates[0].classPattern, "^text-sm$")
+  })
+
+  parent.remove()
+}
+
 async function baselineCases() {
   console.log("\nBaseline persistence")
 
@@ -316,6 +568,8 @@ async function baselineCases() {
 
 const inventory = await inventoryCases()
 prototypeCases(inventory)
+await sourceDefaultCases()
+await writerCases()
 await baselineCases()
 
 console.log(`\n${passed} passed, ${failed} failed`)

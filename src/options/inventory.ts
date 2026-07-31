@@ -1,13 +1,9 @@
 /**
- * Read-only bridge onto Leva's dev-time store.
+ * Optional bridge onto a host-configured Leva dev-time store.
  *
- * Leva publishes `window.__STORE` itself in development, so the editor can list
- * every control the team has built without the app knowing the editor exists —
- * the alternative, importing the app's own `src/`, is forbidden by invariant 3.
- *
- * Nothing here imports leva. The global is shape-checked at every entry point
- * so a vendor bump degrades to an empty state instead of throwing, which is the
- * same discipline the launcher applies to the vendored overlay's internals.
+ * Nothing here imports Leva or guesses relationships from path names. The host
+ * opts in with a store-global name and explicit path-pattern bindings; without
+ * that contract this module is inert.
  */
 
 import { round } from "../core/dom"
@@ -26,6 +22,20 @@ interface LevaStoreLike {
   getVisiblePaths(): string[]
   setValueAtPath(path: string, value: unknown, fromPanel: boolean): void
   useStore?: { subscribe(listener: () => void): () => void }
+}
+
+export interface LevaControlBinding {
+  pathPattern: string
+  selectors: string[]
+  relationship: string
+  defaultGroup: string | null
+  defaultKey: string | null
+}
+
+interface ClientLevaConfig {
+  storeGlobal: string
+  sourceDefaults: boolean
+  bindings: LevaControlBinding[]
 }
 
 /** One tunable leaf: concept (a) in the options taxonomy. */
@@ -47,6 +57,13 @@ export interface LevaControl {
   disabled: boolean
   /** Leva `render` predicates hide about a third of the panel at any moment. */
   visible: boolean
+  /** Explicit host relationship; absent means the editor makes no relevance claim. */
+  selectors: string[]
+  relationship: string | null
+  /** Source-default address, supplied by the matching host binding. */
+  defaultGroup: string | null
+  defaultKey: string | null
+  canPersistDefault: boolean
 }
 
 /** A leva folder — concept (b). Sections are the depth-0 folders. */
@@ -69,6 +86,53 @@ export interface LevaTree {
 }
 
 export type LevaInventory = ({ available: true } & LevaTree) | { available: false; reason: string }
+
+function levaConfig(): ClientLevaConfig | null {
+  const raw = (globalThis as { __DESIGN_EDITOR_CONFIG__?: unknown }).__DESIGN_EDITOR_CONFIG__
+  if (!raw || typeof raw !== "object") return null
+  const controls = (raw as { controls?: unknown }).controls
+  if (!controls || typeof controls !== "object") return null
+  const leva = (controls as { leva?: unknown }).leva
+  if (!leva || typeof leva !== "object") return null
+  const shape = leva as Partial<ClientLevaConfig>
+  if (typeof shape.storeGlobal !== "string" || !shape.storeGlobal) return null
+  return {
+    storeGlobal: shape.storeGlobal,
+    sourceDefaults: shape.sourceDefaults === true,
+    bindings: Array.isArray(shape.bindings) ? shape.bindings : [],
+  }
+}
+
+function globPattern(pattern: string): RegExp {
+  let source = "^"
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index]
+    if (char === "*" && pattern[index + 1] === "*") {
+      source += ".*"
+      index += 1
+    } else if (char === "*") {
+      source += "[^.]*"
+    } else {
+      source += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    }
+  }
+  return new RegExp(`${source}$`)
+}
+
+/** First explicit binding wins; path names never imply an element relationship. */
+export function bindingForPath(
+  path: string,
+  bindings: readonly LevaControlBinding[] = levaConfig()?.bindings ?? []
+): LevaControlBinding | null {
+  for (const binding of bindings) {
+    try {
+      if (globPattern(binding.pathPattern).test(path)) return binding
+    } catch {
+      // A malformed host pattern disables that one binding, not the inventory.
+    }
+  }
+  return null
+}
 
 /**
  * Paths come from the page. A `__proto__` segment written onto a plain object
@@ -154,7 +218,8 @@ function rollUp(folder: LevaFolder): void {
  */
 export function buildTree(
   data: Record<string, LevaInputData>,
-  visiblePaths: readonly string[] = []
+  visiblePaths: readonly string[] = [],
+  bindings: readonly LevaControlBinding[] = levaConfig()?.bindings ?? []
 ): LevaTree {
   const sections: LevaFolder[] = []
   const byPath = nullIndex<LevaFolder>()
@@ -209,6 +274,11 @@ export function buildTree(
 
     const variants = readVariants(input.settings)
     if (variants) selectCount += 1
+    const binding = bindingForPath(path, bindings)
+    const defaultGroup = binding?.defaultGroup ?? null
+    const defaultKey = defaultGroup
+      ? (binding?.defaultKey?.replaceAll("$key", key) ?? key)
+      : null
 
     parent.controls.push({
       path,
@@ -222,6 +292,11 @@ export function buildTree(
       bounds: readBounds(input.settings),
       disabled: input.disabled === true,
       visible: visible.has(path),
+      selectors: binding?.selectors ?? [],
+      relationship: binding?.relationship ?? null,
+      defaultGroup,
+      defaultKey,
+      canPersistDefault: Boolean(levaConfig()?.sourceDefaults && defaultGroup && defaultKey),
     })
   }
 
@@ -238,7 +313,9 @@ export function buildTree(
 
 /** Returns the leva store only when it behaves like one, never on name alone. */
 export function levaStore(): LevaStoreLike | null {
-  const candidate = (window as Window & { __STORE?: unknown }).__STORE
+  const configured = levaConfig()
+  if (!configured) return null
+  const candidate = (window as unknown as Record<string, unknown>)[configured.storeGlobal]
   if (!candidate || typeof candidate !== "object") return null
   const store = candidate as Partial<LevaStoreLike>
   if (typeof store.getData !== "function") return null
@@ -252,10 +329,9 @@ export function readInventory(): LevaInventory {
   if (!store) {
     return {
       available: false,
-      reason:
-        "Leva's dev store (window.__STORE) is not on this page. It exists only in a " +
-        "development build — a production build aliases leva to a stub — so there is " +
-        "nothing to list here.",
+      reason: levaConfig()
+        ? "The configured Leva store is not available on this page."
+        : "This host has not configured a Leva control integration.",
     }
   }
   try {
@@ -266,8 +342,8 @@ export function readInventory(): LevaInventory {
       return {
         available: false,
         reason:
-          "Leva is loaded but has not registered any controls yet. Open a workspace " +
-          "project — the panel is built by the project shell — then reopen this list.",
+          "Leva is loaded but has not registered any controls yet. Open the app surface " +
+          "that owns the controls, then reopen this list.",
       }
     }
     return { available: true, ...tree }
@@ -289,6 +365,14 @@ export function setControlValue(path: string, value: unknown): boolean {
   }
 }
 
+export function controlValueAtPath(path: string): unknown {
+  try {
+    return levaStore()?.getData()?.[path]?.value
+  } catch {
+    return undefined
+  }
+}
+
 /** Notifies on any leva store write. No-op when the store is absent. */
 export function subscribeToLeva(listener: () => void): () => void {
   const store = levaStore()
@@ -299,6 +383,59 @@ export function subscribeToLeva(listener: () => void): () => void {
   } catch {
     return () => {}
   }
+}
+
+export interface ContextualControlTargets {
+  path: string
+  relationship: string
+  selectors: string[]
+  elements: Element[]
+}
+
+/** Resolves only selectors the host explicitly attached to this control. */
+export function targetsForControl(control: LevaControl): ContextualControlTargets | null {
+  if (!control.relationship || control.selectors.length === 0) return null
+  const elements: Element[] = []
+  const seen = new Set<Element>()
+  for (const selector of control.selectors) {
+    let matches: Element[] = []
+    try {
+      matches = Array.from(document.querySelectorAll(selector))
+    } catch {
+      continue
+    }
+    for (const element of matches) {
+      if (seen.has(element)) continue
+      seen.add(element)
+      elements.push(element)
+    }
+  }
+  return { path: control.path, relationship: control.relationship, selectors: control.selectors, elements }
+}
+
+/** Captain hook: the canvas may render these targets without coupling options to canvas state. */
+export function highlightControlTargets(control: LevaControl): ContextualControlTargets | null {
+  const targets = targetsForControl(control)
+  if (!targets) return null
+  window.dispatchEvent(
+    new CustomEvent("design-editor:highlight-elements", {
+      detail: targets,
+    })
+  )
+  return targets
+}
+
+export function isControlRelevantToElement(control: LevaControl, element: Element): boolean {
+  for (const selector of control.selectors) {
+    try {
+      if (element.matches(selector) || element.closest(selector) || element.querySelector(selector)) {
+        return true
+      }
+    } catch {
+      // Invalid host selector: it binds nothing.
+    }
+  }
+  return false
 }
 
 function matches(control: LevaControl, query: string): boolean {

@@ -12,40 +12,40 @@ leaves no trace in your source tree.
 
 - Node >= 20.9
 - A Next.js app with a dev server you can start yourself
-- `react-rewrite-cli@0.1.1` exactly. The runtime patches that build's minified
-  bundle at serve time against 22 pinned anchors; a different version will not
-  patch, and the launcher tells you so instead of starting.
+- The package installs `react-rewrite-cli@0.1.1` exactly. The runtime patches
+  that build's minified bundle at serve time against 22 pinned anchors; a
+  different version will not patch, and the launcher tells you so instead.
 
 ## Install
 
-The package is not published yet, so adopting it means copying the directory.
+The package is not published. Install the directory as a local development
+dependency; its prepare script builds the browser bundle.
 
-1. Copy `design-editor/` into your project root.
-2. Add the dependencies:
+1. Copy `design-editor/` into your project root, then install it:
 
    ```sh
-   npm i -D react-rewrite-cli@0.1.1 ws esbuild
+   npm i -D ./design-editor
    ```
 
-3. Add the scripts:
+2. Add the scripts:
 
    ```json
    {
      "scripts": {
-       "design": "node design-editor/cli.mjs --no-open 3000",
+       "design": "design-editor --no-open 3000",
        "design:build": "node design-editor/build.mjs",
-       "verify:design-editor": "node design-editor/cli.mjs --verify"
+       "verify:design-editor": "design-editor --verify"
      }
    }
    ```
 
-4. Build the editor's own UI bundle once (and after any change under `src/`):
+3. When developing the package itself, rebuild after a change under its `src/`:
 
    ```sh
    npm run design:build
    ```
 
-5. Ignore the state directory:
+4. Ignore the state directory:
 
    ```
    .local/design-editor/
@@ -80,8 +80,9 @@ dependency bump moves the vendored bundle out from under the patch.
 
 ## Configure
 
-Optional. With no config file the tool runs against the defaults, which assume
-a stock Next.js + Tailwind + shadcn/ui app.
+Optional. With no config file the tool runs against generic defaults for a
+stock Next.js + Tailwind + shadcn/ui app. It does not look for Leva,
+Agentation, or any host dev panel unless the host opts in.
 
 Copy `design-editor/design-editor.config.example.mjs` to
 `design-editor.config.mjs` in your project root and delete everything you do
@@ -109,12 +110,48 @@ your stylesheet reads them to make room.
 ```css
 /* only if you set chrome.dockedPanel */
 .my-dev-panel {
-  right: calc(var(--react-rewrite-leva-offset, 0px) + 1rem);
+  right: calc(var(--design-editor-dev-panel-offset, 0px) + 1rem);
 }
 ```
 
 Both variable names are configurable. Leave the whole `chrome` block out if you
 have no dev GUI — an empty selector list is legal and correct.
+
+### Contextual controls and source defaults
+
+Leva integration is optional and explicit. Configure `controls.leva.storeGlobal`
+to inventory the live controls. A binding connects a path pattern to the DOM
+elements it affects; first match wins, `*` matches one path segment, and `**`
+matches any suffix. The editor never infers relationships from names.
+
+```js
+controls: {
+  leva: {
+    storeGlobal: "__STORE",
+    sourceDefaults: {
+      file: "src/design-defaults.ts",
+      exportName: "DESIGN_DEFAULTS",
+    },
+    bindings: [{
+      pathPattern: "Cards.Spacing.*",
+      selectors: ["[data-card]"],
+      relationship: "spacing within",
+      defaultGroup: "Card spacing",
+    }],
+  },
+}
+```
+
+`sourceDefaults` must name an exported object literal. Its groups must also be
+object literals, and editable values must be string, finite-number, boolean, or
+null literals. Dynamic expressions and files outside `source.roots` are refused.
+Writes replace only the target literal; unrelated comments and formatting stay
+untouched.
+
+Activating “Show affected” dispatches
+`design-editor:highlight-elements` on `window`. The event detail is
+`{ path, relationship, selectors, elements }`; a canvas integration may draw
+those elements without coupling the options inventory to canvas state.
 
 ## What it writes, and where
 
@@ -161,6 +198,7 @@ runtime/launcher.mjs        vendor resolution, monkey-patches, route mount
 runtime/vendor-patch.mjs    the 22 splices against react-rewrite-cli 0.1.1
 server/routes.mjs           loopback-guarded HTTP routes
 server/options-store.mjs    saved option sets
+server/control-defaults.mjs configured literal default reader/writer
 server/agent.mjs            AI edit transport
 src/                        the editor UI, bundled to an IIFE
 test/ui-change-cases.mjs    the harness

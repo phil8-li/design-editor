@@ -34,21 +34,49 @@ const config = {
     // Elements the editor must treat as its own furniture rather than as
     // canvas: your dev GUI, debug bars, anything that is not the product.
     // Leave the array empty if you have none.
-    trustedSelectors: ["#leva__root", "[data-design-editor]"],
+    trustedSelectors: ["[data-my-dev-toolbar]"],
 
     // A dev panel the editor should sit beside instead of overlapping. The
     // two CSS variables are the contract: your stylesheet reads them to make
     // room. Drop this block entirely if you have no such panel.
     dockedPanel: {
-      selector: "#leva__root > div",
+      selector: "[data-my-dev-panel]",
       fallbackSelector: "",
-      chromeSelectors: ["#leva__root"],
-      offsetVar: "--react-rewrite-leva-offset",
-      widthVar: "--react-rewrite-inspector-width",
+      chromeSelectors: ["[data-my-dev-panel]"],
+      offsetVar: "--design-editor-dev-panel-offset",
+      widthVar: "--design-editor-dev-panel-width",
       minWidth: 260,
       maxWidth: 380,
       gap: 12,
       edgeGap: 8,
+    },
+  },
+
+  // Optional. Without this block the package does not look for Leva at all.
+  controls: {
+    leva: {
+      // Window property containing Leva's dev store.
+      storeGlobal: "__STORE",
+
+      // Optional source-backed defaults. The export must be an object literal
+      // whose groups are object literals and whose editable values are literals.
+      sourceDefaults: {
+        file: "src/design-defaults.ts",
+        exportName: "DESIGN_DEFAULTS",
+      },
+
+      // First match wins. Selectors and relationships are explicit: the editor
+      // never guesses affected elements from a control's path.
+      bindings: [
+        {
+          pathPattern: "Cards.Spacing.*",
+          selectors: ["[data-card]"],
+          relationship: "spacing within",
+          defaultGroup: "Card spacing",
+          // Omit to use the control's leaf key; "$key" is also supported.
+          defaultKey: "$key",
+        },
+      ],
     },
   },
 

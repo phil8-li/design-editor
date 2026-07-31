@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /**
  * `design-editor [appPort] [--config <path>] [--proxy-port N] [--ws-port N]`
  *

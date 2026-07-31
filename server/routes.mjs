@@ -11,6 +11,7 @@
 
 import { resolveConfig } from "../config.mjs"
 import { createAgent } from "./agent.mjs"
+import { createControlDefaults } from "./control-defaults.mjs"
 import { createOptionsStore, normalizeOptionSet } from "./options-store.mjs"
 
 const MAX_BODY_BYTES = 1024 * 1024
@@ -97,12 +98,42 @@ function optionKey(segment) {
   return TRAVERSAL_PATTERN.test(decoded) ? null : decoded
 }
 
-async function route(store, agent, prefix, req, res, pathname) {
+function controlTarget(searchParams) {
+  const group = searchParams.get("group")?.trim() ?? ""
+  const key = searchParams.get("key")?.trim() ?? ""
+  if (!group || !key || group.length > 200 || key.length > 200) {
+    throw badRequest("Control default needs a group and key")
+  }
+  return { group, key }
+}
+
+async function route(store, defaults, agent, prefix, req, res, url) {
+  const { pathname, searchParams } = url
   const rest = pathname.slice(prefix.length)
 
   if (rest === "/options" && req.method === "GET") {
     sendJson(res, 200, await store.readOptionSets())
     return
+  }
+
+  if (rest === "/control-default") {
+    const { group, key } = controlTarget(searchParams)
+    if (req.method === "GET") {
+      sendJson(res, 200, await defaults.read(group, key))
+      return
+    }
+    if (req.method === "PUT") {
+      const body = await readJsonBody(req)
+      if (!body || typeof body !== "object" || !("value" in body)) {
+        throw badRequest("Control default PUT needs a value")
+      }
+      sendJson(res, 200, await defaults.write(group, key, body.value))
+      return
+    }
+    if (req.method === "DELETE") {
+      sendJson(res, 200, await defaults.remove(group, key))
+      return
+    }
   }
 
   const keyed = /^\/options\/([^/]+)$/.exec(rest)
@@ -134,6 +165,7 @@ async function route(store, agent, prefix, req, res, pathname) {
 export function createDesignEditorRoutes(config = resolveConfig()) {
   const prefix = config.apiPrefix
   const store = createOptionsStore({ stateDir: config.stateDir })
+  const defaults = createControlDefaults(config)
   const agent = createAgent(config)
 
   return {
@@ -141,7 +173,14 @@ export function createDesignEditorRoutes(config = resolveConfig()) {
 
     /** Returns true when this handler owns the request. */
     handle(req, res) {
-      const pathname = (req.url ?? "/").split("?")[0]
+      let url
+      try {
+        url = new URL(req.url ?? "/", "http://localhost")
+      } catch {
+        sendJson(res, 400, { ok: false, message: "Invalid request URL" })
+        return true
+      }
+      const { pathname } = url
       if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) return false
 
       if (!isLocalRequest(req)) {
@@ -149,7 +188,7 @@ export function createDesignEditorRoutes(config = resolveConfig()) {
         return true
       }
 
-      route(store, agent, prefix, req, res, pathname).catch((error) => {
+      route(store, defaults, agent, prefix, req, res, url).catch((error) => {
         if (res.headersSent) {
           res.end()
           return

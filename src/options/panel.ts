@@ -2,10 +2,22 @@
 
 import { el } from "../core/dom"
 import { section } from "../panels/inspector/field"
-import { installOptionsBrowser, openOptionsBrowser } from "./inventory-panel"
+import { controlRow, installOptionsBrowser, openOptionsBrowser } from "./inventory-panel"
+import { isControlRelevantToElement, readInventory } from "./inventory"
+import type { LevaControl, LevaFolder } from "./inventory"
 import { optionsStore, visibleOptions } from "./store"
 import type { InspectorSection, SectionContext } from "../panels/inspector/index"
 import type { ElementOption } from "../core/types"
+
+function controlsIn(folders: readonly LevaFolder[]): LevaControl[] {
+  const controls: LevaControl[] = []
+  const visit = (folder: LevaFolder) => {
+    controls.push(...folder.controls)
+    folder.folders.forEach(visit)
+  }
+  folders.forEach(visit)
+  return controls
+}
 
 /** Swaps the name for an input in place; Enter commits, Escape reverts. */
 function startRename(
@@ -110,6 +122,26 @@ export const optionsSection: InspectorSection = (context) => {
 
   const set = store.get(context.selection.key)
   const options = visibleOptions(set)
+  const inventory = readInventory()
+  const relevant = inventory.available
+    ? controlsIn(inventory.sections).filter((control) =>
+        isControlRelevantToElement(control, context.selection.element)
+      )
+    : []
+
+  const contextual = relevant.length
+    ? el("details", { class: "de-opt-folder", open: true }, [
+        el("summary", { class: "de-opt-summary" }, [
+          el("span", { class: "de-opt-folder-name" }, ["Relevant controls"]),
+          el("span", { class: "de-opt-count" }, [`${relevant.length} bound`]),
+        ]),
+        el(
+          "div",
+          { class: "de-opt-folder-body" },
+          relevant.map((control) => controlRow(control, context.editor))
+        ),
+      ])
+    : null
 
   const list = el(
     "div",
@@ -174,7 +206,11 @@ export const optionsSection: InspectorSection = (context) => {
 
   return section(
     `Options (${options.length})`,
-    el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [list, actions]),
+    el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [
+      contextual,
+      list,
+      actions,
+    ]),
     browse
   )
 }

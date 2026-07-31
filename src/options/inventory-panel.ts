@@ -20,37 +20,31 @@ import { elementKey, getState } from "../core/store"
 import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
 import type { ElementOption, ElementOptionSet, Selection } from "../core/types"
-import { filterTree, readInventory, setControlValue, subscribeToLeva } from "./inventory"
+import {
+  controlValueAtPath,
+  filterTree,
+  highlightControlTargets,
+  readInventory,
+  setControlValue,
+  subscribeToLeva,
+  targetsForControl,
+} from "./inventory"
 import type { LevaControl, LevaFolder } from "./inventory"
 import { optionsStore, visibleOptions } from "./store"
 
 /** Why each concept can or cannot be written back to source. Shown verbatim. */
 const WHY_NOT: Record<string, string> = {
   control:
-    "Deleting a leva control means removing its schema entry in " +
-    "src/components/workspace/project-shell.tsx, its save-as-default button, every " +
-    "consumer of the value, and its BUNDLED_LEVA_DEFAULTS entry. That is a structural " +
-    "TypeScript edit; this editor's writer only rewrites Tailwind class strings inside " +
-    "JSX, so it would leave the app in a half-edited state. Use the AI panel or open the " +
-    "file instead.",
+    "Removing the control itself is a structural source edit: its schema, consumers, and " +
+    "fallback behavior must change together. This surface can remove a configured saved " +
+    "default, but it does not guess how to delete application code.",
   variant:
-    "Removing a named variant (a member of hoverPresetOrder, workspaceThemePresets, " +
-    "headerLayoutOptions, …) means editing the options array, its matching defaults map, " +
-    "and every switch that consumes it. A partial edit compiles and then throws at " +
-    "runtime, so this editor will not attempt it.",
-  value:
-    "Changing a control here is live and real, but it has no source target: leva values " +
-    "feed React props and CSS custom properties, not classNames, and the writer only " +
-    "emits Tailwind utilities. The durable target is BUNDLED_LEVA_DEFAULTS — see below.",
-  bundled:
-    "src/lib/leva-saved-defaults.ts is a plain object literal and could be rewritten, but " +
-    "there is no server route for it yet, and the file is digest-locked in " +
-    "docs/design-system/source-lock.json — writing it breaks `npm run build` until the " +
-    "lock is regenerated. Until that route exists, leva's own `save as default` button is " +
-    "the only path, and see the origin warning above.",
+    "Named choices are application behavior, not saved values. Removing one safely can " +
+    "require changing its options array, defaults, and every branch that consumes it.",
 }
 
 let mounted: { root: HTMLElement; open(): void; toggle(): void; refresh(): void } | null = null
+const defaultStateCache = new Map<string, boolean>()
 
 function note(text: string): HTMLElement {
   return el("p", { class: "de-opt-note" }, [text])
@@ -149,15 +143,122 @@ function valueEditor(control: LevaControl, editor: EditorContext): HTMLElement {
   return el("span", { class: "de-opt-value" }, [control.valueText])
 }
 
-function controlRow(control: LevaControl, editor: EditorContext): HTMLElement {
+function defaultUrl(editor: EditorContext, control: LevaControl): string | null {
+  if (!control.defaultGroup || !control.defaultKey) return null
+  const query = new URLSearchParams({ group: control.defaultGroup, key: control.defaultKey })
+  return `${editor.apiBase}/control-default?${query}`
+}
+
+function sourceDefaultActions(control: LevaControl, editor: EditorContext): HTMLElement | null {
+  const url = defaultUrl(editor, control)
+  if (!url || !control.canPersistDefault) return null
+
+  const status = el("span", { class: "de-opt-tag", "aria-live": "polite" }, ["source-linked"])
+  const apply = el("button", { class: "de-button", type: "button" }, ["Apply / update default"])
+  const remove = el(
+    "button",
+    { class: "de-button de-button--danger", type: "button" },
+    ["Remove default"]
+  )
+
+  const setState = (exists: boolean) => {
+    defaultStateCache.set(url, exists)
+    status.textContent = exists ? "saved default" : "live only"
+    apply.textContent = exists ? "Update default" : "Apply to code"
+    ;(apply as HTMLButtonElement).disabled = false
+    ;(remove as HTMLButtonElement).disabled = !exists
+  }
+
+  const refresh = async () => {
+    try {
+      const response = await fetch(url, { headers: { accept: "application/json" } })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const result = (await response.json()) as { exists?: boolean }
+      setState(result.exists === true)
+    } catch {
+      status.textContent = "source unavailable"
+      editor.toast(`Could not read the default for ${control.label}`, "error")
+    }
+  }
+
+  apply.addEventListener("click", async () => {
+    const current = controlValueAtPath(control.path)
+    const value = current === undefined ? control.value : current
+    try {
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      setState(true)
+      editor.toast(`Updated source default for ${control.label}`)
+    } catch {
+      editor.toast(`Could not update the default for ${control.label}`, "error")
+    }
+  })
+
+  remove.addEventListener("click", async () => {
+    try {
+      const response = await fetch(url, { method: "DELETE" })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      setState(false)
+      editor.toast(`Removed source default for ${control.label}`)
+    } catch {
+      editor.toast(`Could not remove the default for ${control.label}`, "error")
+    }
+  })
+
+  const actions = el("div", { class: "de-opt-actions" }, [status, apply, remove])
+  const cached = defaultStateCache.get(url)
+  if (cached !== undefined) setState(cached)
+  else {
+    // A large host may expose hundreds of controls. Read this one literal only
+    // when the row is approached rather than parsing the same source file once
+    // per collapsed row on panel open.
+    let requested = false
+    const request = () => {
+      if (requested) return
+      requested = true
+      void refresh()
+    }
+    actions.addEventListener("pointerenter", request, { once: true })
+    actions.addEventListener("focusin", request, { once: true })
+  }
+  return actions
+}
+
+export function controlRow(control: LevaControl, editor: EditorContext): HTMLElement {
+  const targets = targetsForControl(control)
+  const highlight = control.relationship
+    ? el(
+        "button",
+        {
+          class: "de-button",
+          type: "button",
+          title: `Highlight elements this control ${control.relationship}`,
+          onclick: () => {
+            const resolved = highlightControlTargets(control)
+            if (!resolved?.elements.length) {
+              editor.toast(`No affected elements for ${control.label} are on this page`, "error")
+            }
+          },
+        },
+        [targets?.elements.length ? `Show ${targets.elements.length} affected` : "Show affected"]
+      )
+    : null
+
   return el("div", { class: "de-opt-row", "data-hidden": control.visible ? undefined : "" }, [
     el("div", { class: "de-opt-head" }, [
       el("span", { class: "de-opt-label", title: control.label }, [control.label]),
       el("span", { class: "de-opt-type" }, [control.type.toLowerCase()]),
+      control.relationship ? el("span", { class: "de-opt-tag" }, [control.relationship]) : null,
       control.visible ? null : el("span", { class: "de-opt-tag" }, ["hidden now"]),
     ]),
     el("code", { class: "de-opt-path", title: "Leva path" }, [control.path]),
     control.variants ? chips(control, editor) : valueEditor(control, editor),
+    highlight ? el("div", { class: "de-opt-actions" }, [highlight]) : null,
+    sourceDefaultActions(control, editor),
     explainer("Delete this control?", WHY_NOT.control),
   ])
 }
@@ -175,7 +276,7 @@ function folderNode(
         (folder.variantCount ? ` · ${folder.variantCount} variants` : ""),
     ]),
     folder.hasSaveDefault
-      ? el("span", { class: "de-opt-tag de-opt-tag--saved", title: WHY_NOT.bundled }, ["default"])
+      ? el("span", { class: "de-opt-tag de-opt-tag--saved", title: "Leva provides a save-default action" }, ["default"])
       : null,
   ])
 
@@ -198,18 +299,16 @@ function levaTab(editor: EditorContext, query: string): HTMLElement {
     note(
       `${inventory.controlCount} controls in ${inventory.sections.length} sections, ` +
         `${inventory.selectCount} of them variant pickers offering ${inventory.variantCount} ` +
-        `named variants. Changing anything here is live, exactly as if you moved the ` +
-        `control in Leva's own panel.`
+        `named variants. Edits are live immediately. Controls with an explicit source ` +
+        `binding can also update their durable default.`
     ),
     note(
-      `Leva's own "save as default" writes localStorage for ${location.origin}. The design ` +
-        `editor is a proxy origin, so anything saved that way is invisible to the app's own ` +
-        `origin and to the deploy snapshot. This panel never uses localStorage.`
+      `Affected-element highlighting comes only from host-declared bindings. An unbound ` +
+        `control stays editable, but this editor will not guess what it changes.`
     ),
     ...(sections.length
       ? sections.map((section) => folderNode(section, editor, 0, query.trim().length > 0))
       : [el("div", { class: "de-empty" }, [`Nothing matches "${query}".`])]),
-    explainer("Why can't I save a control's value to code?", WHY_NOT.value),
     explainer("Why can't I delete a named variant?", WHY_NOT.variant),
   ])
 }
@@ -223,7 +322,8 @@ function findElement(editor: EditorContext, key: string): HTMLElement | null {
   const current = editor.primarySelection()
   if (current?.key === key) return current.element
 
-  const lastStep = key.split("/").pop() ?? ""
+  const pathPart = key.split(":").slice(2).join(":")
+  const lastStep = pathPart.split("/").pop() ?? ""
   const tag = /^([a-z][a-z0-9-]*)\d+$/.exec(lastStep)?.[1]
   if (!tag) return null
 
@@ -251,6 +351,40 @@ function applyToCode(editor: EditorContext): void {
   editor.toast(`Writing ${operations.length} change${operations.length === 1 ? "" : "s"} to source…`)
 }
 
+function renameVariant(
+  label: HTMLElement,
+  option: ElementOption,
+  commit: (name: string) => void
+): void {
+  const input = el("input", {
+    class: "de-opt-input",
+    type: "text",
+    value: option.name,
+    "aria-label": `Rename ${option.name}`,
+  }) as HTMLInputElement
+  label.replaceWith(input)
+  input.focus()
+  input.select()
+  let settled = false
+  const finish = (keep: boolean) => {
+    if (settled) return
+    settled = true
+    const name = input.value.trim()
+    input.replaceWith(label)
+    if (keep && name && name !== option.name) commit(name)
+  }
+  input.addEventListener("blur", () => finish(true))
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault()
+      finish(true)
+    } else if (event.key === "Escape") {
+      event.preventDefault()
+      finish(false)
+    }
+  })
+}
+
 function variantRow(
   editor: EditorContext,
   set: ElementOptionSet,
@@ -267,10 +401,11 @@ function variantRow(
     }
     fn(selection)
   }
+  const label = el("span", { class: "de-opt-label" }, [option.name])
 
   return el("div", { class: "de-opt-row de-opt-row--variant" }, [
     el("div", { class: "de-opt-head" }, [
-      el("span", { class: "de-opt-label" }, [option.name]),
+      label,
       option.id === set.activeOptionId ? el("span", { class: "de-opt-tag" }, ["active"]) : null,
     ]),
     el("div", { class: "de-opt-actions" }, [
@@ -278,6 +413,25 @@ function variantRow(
         "button",
         { class: "de-button", type: "button", onclick: () => act((s) => store.apply(s, writer, option)) },
         ["Apply"]
+      ),
+      el(
+        "button",
+        {
+          class: "de-button",
+          type: "button",
+          title: "Overwrite this variant with the element's current state",
+          onclick: () => act((selection) => store.update(selection, option.id)),
+        },
+        ["Update"]
+      ),
+      el(
+        "button",
+        {
+          class: "de-button",
+          type: "button",
+          onclick: () => renameVariant(label, option, (name) => store.rename(set.key, option.id, name)),
+        },
+        ["Rename"]
       ),
       el(
         "button",
