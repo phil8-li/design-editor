@@ -7,6 +7,8 @@
  * drive the live preview — this is only what lands in the file.
  */
 
+import { config } from "./config"
+
 export interface ClassUpdate {
   tailwindPrefix: string
   tailwindToken: string | null
@@ -147,26 +149,28 @@ const SCALARS: Record<
    * pattern and only replace a class of their own kind.
    */
   color: { prefix: "text", pattern: `^text-(\\[(#|rgb|hsl|oklch|var).*\\]|${colorWords()})$` },
-  "font-size": { prefix: "text", pattern: "^text-(\\[[^\\]]*(px|rem|em|ch|%)\\]|xs|sm|base|lg|[2-9]?xl)$" },
+  "font-size": { prefix: "text", pattern: `^text-(\\[[^\\]]*(px|rem|em|ch|%)\\]|${config.tailwind.fontSizes.join("|")})$` },
   "border-width": { prefix: "border", pattern: "^border(-\\[[^\\]]*px\\]|-\\d+)?$" },
   "border-color": { prefix: "border", pattern: `^border-(\\[(#|rgb|hsl|oklch|var).*\\]|${colorWords()})$` },
-  "font-family": { prefix: "font", pattern: "^font-(sans|serif|mono|\\[[^\\]]*\\])$" },
+  "font-family": { prefix: "font", pattern: `^font-(${config.tailwind.fontFamilies.join("|")}|\\[[^\\]]*\\])$` },
 }
 
-/** Tailwind's default 0.25rem spacing scale, in px, for the stems that use it. */
-const SPACING_SCALE: Record<number, string> = {
-  0: "0", 2: "0.5", 4: "1", 6: "1.5", 8: "2", 10: "2.5", 12: "3", 14: "3.5",
-  16: "4", 20: "5", 24: "6", 28: "7", 32: "8", 36: "9", 40: "10", 44: "11",
-  48: "12", 56: "14", 64: "16", 80: "20", 96: "24", 112: "28", 128: "32",
-}
+/**
+ * px -> Tailwind step, from the host config. A miss is not an error: the value
+ * falls through to an arbitrary `[13px]`, which is correct but unnamed, so a
+ * host on a custom scale only loses class names it never had.
+ */
+const SPACING_SCALE: Record<string, string> = config.tailwind.spacingScale
 
-const SPACED_STEMS =
-  /^(p|pt|pr|pb|pl|px|py|m|mt|mr|mb|ml|mx|my|gap|gap-x|gap-y|w|h|min-w|min-h|max-w|max-h)$/
+const SPACED_STEMS = new RegExp(
+  config.tailwind.spacedStems ??
+    "^(p|pt|pr|pb|pl|px|py|m|mt|mr|mb|ml|mx|my|gap|gap-x|gap-y|w|h|min-w|min-h|max-w|max-h)$"
+)
 
 function colorWords(): string {
-  // Tailwind palette stems plus this project's semantic tokens, so a themed
-  // class like `text-muted-foreground` is replaced rather than duplicated.
-  return "(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|black|white|transparent|current|inherit|foreground|background|muted|primary|secondary|accent|destructive|border|input|ring|card|popover|sidebar)([-/].*)?"
+  // Tailwind palette stems plus the host's semantic tokens, so a themed class
+  // like `text-muted-foreground` is replaced rather than duplicated.
+  return `(${config.tailwind.colorWords.join("|")})([-/].*)?`
 }
 
 /** Tailwind arbitrary values may not contain spaces; underscores stand in. */

@@ -6,7 +6,16 @@
  * reconciler and Motion layout animations.
  */
 
+import { config } from "./config"
+
 export const CHROME_ATTR = "data-design-editor"
+
+/**
+ * Our own shell and the vendor root are structural — they exist in every host —
+ * so they stay literal. Everything else the host wants excluded (its dev GUI,
+ * its debug bars) arrives from `chrome.trustedSelectors` in the config.
+ */
+const CHROME_SELECTOR = `[${CHROME_ATTR}],#react-rewrite-root,${config.chrome.trustedSelector}`
 
 type Props = Record<string, string | number | boolean | EventListener | undefined>
 
@@ -44,14 +53,10 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node
 }
 
-/** True when the node belongs to our chrome, Leva, or the vendor overlay. */
+/** True when the node belongs to our chrome, the host's dev GUI, or the vendor. */
 export function isChrome(node: EventTarget | null): boolean {
   if (!(node instanceof Element)) return false
-  return Boolean(
-    node.closest(
-      `[${CHROME_ATTR}],#react-rewrite-root,#leva__root,[data-leva-chrome],[data-agentation-root]`
-    )
-  )
+  return Boolean(node.closest(CHROME_SELECTOR))
 }
 
 /**

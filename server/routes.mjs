@@ -1,15 +1,18 @@
 /**
  * Design-editor HTTP routes, mounted in front of the Next app by the dev proxy.
  *
- * Everything sits under one prefix so the proxy can hand off with a single
- * check, and every route is loopback-only: this process writes project files,
- * so a page on another origin must never be able to reach it.
+ * Everything sits under one configured prefix so the proxy can hand off with a
+ * single check, and every route is loopback-only: this process writes project
+ * files, so a page on another origin must never be able to reach it.
+ *
+ * The prefix is the same value the browser reads as `apiBase` from the injected
+ * config, so the two halves of the contract cannot drift apart.
  */
 
-import { runAgent } from "./agent.mjs"
-import { deleteOptionSet, normalizeOptionSet, readOptionSets, writeOptionSet } from "./options-store.mjs"
+import { resolveConfig } from "../config.mjs"
+import { createAgent } from "./agent.mjs"
+import { createOptionsStore, normalizeOptionSet } from "./options-store.mjs"
 
-const PREFIX = "/__design-editor"
 const MAX_BODY_BYTES = 1024 * 1024
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
 // Option keys are `Component:line:step/step/…` — `elementKey()` joins up to six
@@ -85,11 +88,11 @@ function optionKey(segment) {
   return TRAVERSAL_PATTERN.test(decoded) ? null : decoded
 }
 
-async function route(req, res, pathname) {
-  const rest = pathname.slice(PREFIX.length)
+async function route(store, agent, prefix, req, res, pathname) {
+  const rest = pathname.slice(prefix.length)
 
   if (rest === "/options" && req.method === "GET") {
-    sendJson(res, 200, await readOptionSets())
+    sendJson(res, 200, await store.readOptionSets())
     return
   }
 
@@ -101,36 +104,43 @@ async function route(req, res, pathname) {
     if (req.method === "PUT") {
       const set = normalizeOptionSet(await readJsonBody(req), key)
       if (!set) throw badRequest("Invalid option set")
-      sendJson(res, 200, await writeOptionSet(set))
+      sendJson(res, 200, await store.writeOptionSet(set))
       return
     }
     if (req.method === "DELETE") {
-      sendJson(res, 200, { ok: await deleteOptionSet(key) })
+      sendJson(res, 200, { ok: await store.deleteOptionSet(key) })
       return
     }
   }
 
   if (rest === "/agent" && req.method === "POST") {
-    sendJson(res, 200, await runAgent((await readJsonBody(req)) ?? {}))
+    sendJson(res, 200, await agent.runAgent((await readJsonBody(req)) ?? {}))
     return
   }
 
   throw badRequest(`No design-editor route for ${req.method} ${pathname}`, 404)
 }
 
-export function createDesignEditorRoutes() {
+/** `config` is the resolved object from `config.mjs`; defaults apply without it. */
+export function createDesignEditorRoutes(config = resolveConfig()) {
+  const prefix = config.apiPrefix
+  const store = createOptionsStore({ stateDir: config.stateDir })
+  const agent = createAgent(config)
+
   return {
+    prefix,
+
     /** Returns true when this handler owns the request. */
     handle(req, res) {
       const pathname = (req.url ?? "/").split("?")[0]
-      if (pathname !== PREFIX && !pathname.startsWith(`${PREFIX}/`)) return false
+      if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) return false
 
       if (!isLocalRequest(req)) {
         sendJson(res, 403, { ok: false, message: "Design editor routes are loopback-only" })
         return true
       }
 
-      route(req, res, pathname).catch((error) => {
+      route(store, agent, prefix, req, res, pathname).catch((error) => {
         if (res.headersSent) {
           res.end()
           return

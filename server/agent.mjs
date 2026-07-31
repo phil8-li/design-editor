@@ -10,19 +10,10 @@
 
 import fs from "node:fs/promises"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 
-import { STORE_DIR } from "./options-store.mjs"
+import { isEditableSourcePath } from "../config.mjs"
 
-const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url))
-const REQUESTS_DIR = path.join(STORE_DIR, "requests")
-
-// Mirrors dist/claude-apply.js, which reserves Sonnet for changes that have to
-// reason about structure — which every free-form prompt does.
-const MODEL = "claude-sonnet-4-6-20250514"
-const MAX_TOKENS = 4096
-
-const SYSTEM_PROMPT = `You are a precision frontend code modifier for a React application using Tailwind CSS.
+const DEFAULT_SYSTEM_PROMPT = `You are a precision frontend code modifier for a React application using Tailwind CSS.
 
 A designer selected one element in a visual editor and described the change they want. Reproduce their intent in the source file.
 
@@ -114,6 +105,22 @@ function buildUserMessage(prompt, request, source, filePath) {
   ].join("\n")
 }
 
+/**
+ * These two paths are unpublished internals of the pinned vendor and resolve
+ * only because its package.json declares no `exports` map. Degrade to the
+ * handoff transport rather than crashing the route if that ever changes.
+ */
+async function loadVendorApplier(config) {
+  const pkg = config.vendor.package
+  try {
+    const shared = await import(`${pkg}/dist/claude-shared.js`)
+    const resolver = await import(`${pkg}/dist/path-resolver.js`)
+    return { ...shared, ...resolver }
+  } catch {
+    return null
+  }
+}
+
 async function loadAnthropic() {
   try {
     const sdk = await import("@anthropic-ai/sdk")
@@ -126,33 +133,35 @@ async function loadAnthropic() {
 
 /**
  * The page names the file to send. Confining it to the project root is not
- * enough — `.env.local` lives there too — so only component sources are ever
- * read, let alone uploaded or echoed back in a response.
+ * enough — `.env.local` lives there too — so `isEditableSourcePath` applies the
+ * host's extension allowlist AND a denylist the host cannot widen, before
+ * anything is read, uploaded, or echoed back in a response.
+ *
+ * Returns null when this transport cannot run, so the caller can hand off.
  */
-const EDITABLE_EXTENSIONS = new Set([".tsx", ".jsx", ".ts", ".js", ".mts", ".mjs"])
-
-/** Returns null when this transport cannot run, so the caller can hand off. */
-async function applyWithClaude(prompt, request) {
+async function applyWithClaude(config, prompt, request) {
+  const projectRoot = config.projectRoot
   const filePath = request?.selection?.source?.filePath
   if (!filePath) return null
-  if (!EDITABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+
+  const Anthropic = await loadAnthropic()
+  if (!Anthropic) return null
+
+  const vendor = await loadVendorApplier(config)
+  if (!vendor) return null
+  const { readSourceFiles, parseDiffResponse, validateDiffChange, applyReplacements } = vendor
+  const { resolveProjectFilePath } = vendor
+
+  const target = resolveProjectFilePath(filePath, projectRoot)
+  if (!target) return null
+  if (!isEditableSourcePath(config, target, path.relative(projectRoot, target))) {
     return {
       ok: false,
       message: `Only component source files can be edited (got ${path.basename(filePath)}).`,
     }
   }
 
-  const Anthropic = await loadAnthropic()
-  if (!Anthropic) return null
-
-  const { readSourceFiles, parseDiffResponse, validateDiffChange, applyReplacements } =
-    await import("react-rewrite-cli/dist/claude-shared.js")
-  const { resolveProjectFilePath } = await import("react-rewrite-cli/dist/path-resolver.js")
-
-  const target = resolveProjectFilePath(filePath, PROJECT_ROOT)
-  if (!target) return null
-
-  const { sources } = readSourceFiles([filePath], PROJECT_ROOT)
+  const { sources } = readSourceFiles([filePath], projectRoot)
   const original = sources.get(filePath)
   if (!original) return null
 
@@ -160,9 +169,9 @@ async function applyWithClaude(prompt, request) {
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
     const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: SYSTEM_PROMPT,
+      model: config.agent.model,
+      max_tokens: config.agent.maxTokens,
+      system: config.agent.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
       messages: [
         { role: "user", content: buildUserMessage(prompt, request, original, filePath) },
       ],
@@ -183,7 +192,7 @@ async function applyWithClaude(prompt, request) {
 
   for (const diff of parsed) {
     // Only the file we sent, and only inside the project root.
-    if (resolveProjectFilePath(diff.filePath, PROJECT_ROOT) !== target) continue
+    if (resolveProjectFilePath(diff.filePath, projectRoot) !== target) continue
 
     const invalid = validateDiffChange(diff, original, target)
     if (invalid) return { ok: false, message: invalid }
@@ -192,7 +201,7 @@ async function applyWithClaude(prompt, request) {
     if (next === original) break
 
     await fs.writeFile(target, next, "utf8")
-    const relative = path.relative(PROJECT_ROOT, target)
+    const relative = path.relative(projectRoot, target)
     return {
       ok: true,
       message: diff.description || `Applied the change to ${relative}.`,
@@ -212,10 +221,11 @@ function slugify(value) {
   return slug || "request"
 }
 
-async function writeHandoff(prompt, request) {
-  await fs.mkdir(REQUESTS_DIR, { recursive: true })
+async function writeHandoff(config, prompt, request) {
+  const requestsDir = path.join(config.stateDir, "requests")
+  await fs.mkdir(requestsDir, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-  const file = path.join(REQUESTS_DIR, `${stamp}-${slugify(prompt)}.md`)
+  const file = path.join(requestsDir, `${stamp}-${slugify(prompt)}.md`)
 
   const body = [
     `# Design editor request`,
@@ -236,18 +246,22 @@ async function writeHandoff(prompt, request) {
   return {
     ok: true,
     message: "Queued for your coding agent — no ANTHROPIC_API_KEY is set, so nothing was edited.",
-    handoffPath: path.relative(PROJECT_ROOT, file),
+    handoffPath: path.relative(config.projectRoot, file),
   }
 }
 
-export async function runAgent(request) {
-  const prompt = typeof request?.prompt === "string" ? request.prompt.trim() : ""
-  if (!prompt) return { ok: false, message: "Describe the change you want first." }
+export function createAgent(config) {
+  return {
+    async runAgent(request) {
+      const prompt = typeof request?.prompt === "string" ? request.prompt.trim() : ""
+      if (!prompt) return { ok: false, message: "Describe the change you want first." }
 
-  if (process.env.ANTHROPIC_API_KEY) {
-    const applied = await applyWithClaude(prompt, request)
-    if (applied) return applied
+      if (config.agent.transport !== "handoff" && process.env.ANTHROPIC_API_KEY) {
+        const applied = await applyWithClaude(config, prompt, request)
+        if (applied) return applied
+      }
+
+      return writeHandoff(config, prompt, request)
+    },
   }
-
-  return writeHandoff(prompt, request)
 }

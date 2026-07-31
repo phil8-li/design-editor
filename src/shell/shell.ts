@@ -7,6 +7,7 @@
  * shared-element morphs (see docs/agent-rules/card-reader-morph.md).
  */
 
+import { config } from "../core/config"
 import { shellCss } from "../core/css"
 import { el } from "../core/dom"
 import { tokens } from "../core/tokens"
@@ -53,9 +54,10 @@ export function mountShell(): Shell {
     style.setProperty("--de-left", layersOpen ? `${tokens.size.panelWidth}px` : "0px")
     style.setProperty("--de-right", inspectorOpen ? `${tokens.size.inspectorWidth}px` : "0px")
     style.setProperty("--de-top", `${tokens.size.toolbarHeight}px`)
-    // Leva docks to the right edge; keep it clear of the inspector.
+    // The host's docked panel (Leva here) sits against the right edge; keep it
+    // clear of the inspector. The property name is the host's to choose.
     style.setProperty(
-      "--react-rewrite-leva-offset",
+      config.chrome.dockedPanel.offsetVar,
       inspectorOpen ? `-${tokens.size.inspectorWidth + 12}px` : "0px"
     )
   }

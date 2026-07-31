@@ -4,6 +4,7 @@
  * own DOM into the slot they are handed.
  */
 
+import { config } from "./config"
 import { elementKey, getState, primarySelection, setState, subscribe } from "./store"
 import { toSourceRef, type RewriteBridge } from "./bridge"
 import type { Selection, ToolId } from "./types"
@@ -61,7 +62,7 @@ export function createContext(bridge: RewriteBridge, slots: EditorSlots): Editor
     setState,
     subscribe,
     primarySelection,
-    apiBase: "/__design-editor",
+    apiBase: config.apiBase,
 
     select(element, options = {}) {
       if (!element) {

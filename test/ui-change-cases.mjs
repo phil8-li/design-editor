@@ -9,7 +9,11 @@
  * so a failure mid-run still leaves the tree exactly as it was found. Run with
  * `npm run design:test` while `npm run design` is up.
  *
- * Usage: node design-editor/test/ui-change-cases.mjs [--keep]
+ * Ports are read from the running launcher's `endpoint.json`, never assumed:
+ * the vendor abandons 3456/3457 the moment either is busy, and a hardcoded port
+ * turns every level below 1 into a silent skip.
+ *
+ * Usage: node design-editor/test/ui-change-cases.mjs [--keep] [--config <path>]
  */
 
 import assert from "node:assert/strict"
@@ -18,10 +22,43 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { WebSocket } from "ws"
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url))
-const FIXTURE_DIR = path.join(ROOT, "design-editor/test/.fixtures")
-const WS_URL = "ws://127.0.0.1:3457"
+import { loadConfig } from "../config.mjs"
+
+const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
+const FIXTURE_DIR = path.join(PACKAGE_DIR, "test/.fixtures")
 const KEEP = process.argv.includes("--keep")
+
+const configFlag = process.argv.indexOf("--config")
+const config = await loadConfig(
+  configFlag === -1 ? {} : { configPath: process.argv[configFlag + 1] }
+)
+
+/** Ports the launcher actually bound, falling back to the vendor's defaults. */
+function endpoint() {
+  try {
+    return JSON.parse(fs.readFileSync(config.endpointFile, "utf8"))
+  } catch {
+    return {
+      wsUrl: "ws://127.0.0.1:3457",
+      apiBase: `http://127.0.0.1:3456${config.apiPrefix}`,
+    }
+  }
+}
+
+const ENDPOINT = endpoint()
+const WS_URL = ENDPOINT.wsUrl
+const API = ENDPOINT.apiBase
+
+/**
+ * Where Level 3 looks for a real component. A host declares its own roots; the
+ * conventional `src/` keeps the case useful for a host that declares none.
+ */
+function sourceRoots() {
+  const declared = config.source.roots.filter((dir) => fs.existsSync(dir))
+  if (declared.length > 0) return declared
+  const conventional = path.join(config.projectRoot, "src")
+  return fs.existsSync(conventional) ? [conventional] : []
+}
 
 let passed = 0
 let failed = 0
@@ -58,7 +95,7 @@ async function translationCases() {
   // copy that could drift.
   const { build } = await import("esbuild")
   const bundled = await build({
-    entryPoints: [path.join(ROOT, "design-editor/src/core/tailwind.ts")],
+    entryPoints: [path.join(PACKAGE_DIR, "src/core/tailwind.ts")],
     bundle: true,
     format: "esm",
     write: false,
@@ -349,9 +386,15 @@ async function realComponentCase(socket) {
   console.log("\nLevel 3 — real app component, restored byte-for-byte")
   // Any real component with a plain-string className will do; searching for one
   // keeps the case working as the app is refactored.
-  const found = findEditableJsx(path.join(ROOT, "src/components"))
+  const roots = sourceRoots()
+  let found = null
+  for (const root of roots) {
+    found = findEditableJsx(root)
+    if (found) break
+  }
   if (!found) {
-    console.log("  skip (no plain-string utility className found in src/components)")
+    const where = roots.length > 0 ? roots.join(", ") : "no configured source roots"
+    console.log(`  skip (no plain-string utility className found in ${where})`)
     return
   }
 
@@ -396,8 +439,6 @@ async function realComponentCase(socket) {
 
 // ── Level 4: server route guards ───────────────────────────────────────────
 
-const API = "http://127.0.0.1:3456/__design-editor"
-
 /**
  * These routes write project files on behalf of whatever the page sends, so
  * their refusals are the security boundary — worth asserting, not assuming.
@@ -409,7 +450,7 @@ async function serverGuardCases() {
     .then((response) => response.ok)
     .catch(() => false)
   if (!reachable) {
-    console.log("  skip (proxy not serving /__design-editor — start `npm run design`)")
+    console.log(`  skip (proxy not serving ${API} — start \`npm run design\`)`)
     return
   }
 
@@ -453,7 +494,8 @@ async function serverGuardCases() {
       assert.equal(result.ok, false)
       assert.match(result.message, /component source files/)
     } else {
-      assert.equal(result.handoffPath?.startsWith(".local/design-editor/"), true)
+      const stateRelative = path.relative(config.projectRoot, config.stateDir)
+      assert.equal(result.handoffPath?.startsWith(stateRelative), true)
     }
   })
 
@@ -464,6 +506,9 @@ async function serverGuardCases() {
 }
 
 // ── run ────────────────────────────────────────────────────────────────────
+
+console.log(`Config: ${config.configPath ?? "defaults"}`)
+console.log(`Engine: ${WS_URL} — API: ${API}`)
 
 await translationCases()
 

@@ -1,34 +1,21 @@
 /**
  * Durable storage for saved option sets.
  *
- * One JSON file under `.local/`, written atomically and read back through the
- * same normaliser the routes use. Everything the editor persists lives in this
- * directory so nothing it writes can be mistaken for product source.
+ * One JSON file under the host's state directory, written atomically and read
+ * back through the same normaliser the routes use. Everything the editor
+ * persists lives there so nothing it writes can be mistaken for product source.
+ *
+ * The directory comes from the resolved config, never from `import.meta.url`:
+ * once this package is installed, `../../` is `node_modules/`, and every saved
+ * option would land inside a dependency instead of the host project.
  */
 
 import fs from "node:fs/promises"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 
-export const STORE_DIR = fileURLToPath(new URL("../../.local/design-editor/", import.meta.url))
-
-const OPTIONS_FILE = path.join(STORE_DIR, "options.json")
 const MAX_OPTIONS_PER_SET = 40
 const MAX_NAME = 120
 const MAX_VALUE = 2000
-
-// Reads and writes are serialised: two panels saving at once must not both
-// read the same file and clobber each other's set.
-let queue = Promise.resolve()
-
-function serial(task) {
-  const run = queue.then(task, task)
-  queue = run.then(
-    () => undefined,
-    () => undefined
-  )
-  return run
-}
 
 function normalizeOption(value) {
   if (!value || typeof value !== "object") return null
@@ -74,52 +61,80 @@ export function normalizeOptionSet(value, key) {
   }
 }
 
-async function readFileSets() {
-  let parsed
-  try {
-    parsed = JSON.parse(await fs.readFile(OPTIONS_FILE, "utf8"))
-  } catch {
-    // Missing or corrupt: the editor keeps working and the next write heals it.
-    return {}
+/**
+ * One store per state directory. Reads and writes are serialised inside it:
+ * two panels saving at once must not both read the same file and clobber each
+ * other's set.
+ */
+export function createOptionsStore({ stateDir }) {
+  const storeDir = path.resolve(stateDir)
+  const optionsFile = path.join(storeDir, "options.json")
+  let queue = Promise.resolve()
+
+  function serial(task) {
+    const run = queue.then(task, task)
+    queue = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
 
-  // Null-prototype: element keys come from the page, and a key of `__proto__`
-  // on a plain object would reassign the prototype instead of storing a set.
-  const sets = Object.create(null)
-  for (const [key, value] of Object.entries(parsed)) {
-    const set = normalizeOptionSet(value, key)
-    if (set) sets[key] = set
+  // Null-prototype on EVERY path, including the empty ones: element keys come
+  // from the page, and `sets["__proto__"] = value` on a plain object reassigns
+  // the prototype instead of storing a set — so a cold start with no file yet
+  // silently dropped the first save of any element keyed `__proto__`.
+  async function readFileSets() {
+    let parsed
+    try {
+      parsed = JSON.parse(await fs.readFile(optionsFile, "utf8"))
+    } catch {
+      // Missing or corrupt: the editor keeps working and the next write heals it.
+      return Object.create(null)
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return Object.create(null)
+    }
+
+    const sets = Object.create(null)
+    for (const [key, value] of Object.entries(parsed)) {
+      const set = normalizeOptionSet(value, key)
+      if (set) sets[key] = set
+    }
+    return sets
   }
-  return sets
-}
 
-async function writeFileSets(sets) {
-  await fs.mkdir(STORE_DIR, { recursive: true })
-  const temp = `${OPTIONS_FILE}.${process.pid}.tmp`
-  await fs.writeFile(temp, `${JSON.stringify(sets, null, 2)}\n`, "utf8")
-  await fs.rename(temp, OPTIONS_FILE)
-}
+  async function writeFileSets(sets) {
+    await fs.mkdir(storeDir, { recursive: true })
+    const temp = `${optionsFile}.${process.pid}.tmp`
+    await fs.writeFile(temp, `${JSON.stringify(sets, null, 2)}\n`, "utf8")
+    await fs.rename(temp, optionsFile)
+  }
 
-export function readOptionSets() {
-  return serial(readFileSets)
-}
+  return {
+    storeDir,
 
-export function writeOptionSet(set) {
-  return serial(async () => {
-    const sets = await readFileSets()
-    sets[set.key] = set
-    await writeFileSets(sets)
-    return set
-  })
-}
+    readOptionSets() {
+      return serial(readFileSets)
+    },
 
-export function deleteOptionSet(key) {
-  return serial(async () => {
-    const sets = await readFileSets()
-    if (!Object.hasOwn(sets, key)) return false
-    delete sets[key]
-    await writeFileSets(sets)
-    return true
-  })
+    writeOptionSet(set) {
+      return serial(async () => {
+        const sets = await readFileSets()
+        sets[set.key] = set
+        await writeFileSets(sets)
+        return set
+      })
+    },
+
+    deleteOptionSet(key) {
+      return serial(async () => {
+        const sets = await readFileSets()
+        if (!Object.hasOwn(sets, key)) return false
+        delete sets[key]
+        await writeFileSets(sets)
+        return true
+      })
+    },
+  }
 }
