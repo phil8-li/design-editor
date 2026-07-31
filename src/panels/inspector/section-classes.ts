@@ -81,9 +81,9 @@ export const classesSection: InspectorSection = ({ editor, selection, writer, in
       .catch(() => editor.toast("Could not copy path", "error"))
   }
 
-  const body = el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [
+  const body = el("div", { class: "de-stack" }, [
     chips.length > 0 ? el("div", { style: "display:flex;flex-wrap:wrap;gap:4px" }, chips) : null,
-    textField({ label: "Add", value: "", placeholder: "class names", onCommit: add }),
+    textField({ id: "classes.add", label: "Add", value: "", placeholder: "class names", onCommit: add }),
     source
       ? el(
           "button",

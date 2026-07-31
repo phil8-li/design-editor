@@ -54,9 +54,17 @@ export function isChrome(node: EventTarget | null): boolean {
   )
 }
 
-/** True when the element is part of the app under edit (not chrome). */
-export function isCanvasElement(node: EventTarget | null): node is HTMLElement {
-  if (!(node instanceof HTMLElement)) return false
+/**
+ * True when the element is part of the app under edit (not chrome).
+ *
+ * `Element`, not `HTMLElement`: every lucide icon is an `SVGElement`, and under
+ * a component-boundary model each one is an instance root. Narrowing here used
+ * to make a click on an icon *clear* the selection and let the app navigate.
+ * Read classes off these with `getAttribute("class")` — `SVGElement.className`
+ * is an `SVGAnimatedString`, not a string.
+ */
+export function isCanvasElement(node: EventTarget | null): node is Element {
+  if (!(node instanceof Element)) return false
   if (isChrome(node)) return false
   return node !== document.documentElement && node !== document.body
 }

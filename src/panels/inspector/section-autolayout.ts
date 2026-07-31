@@ -6,7 +6,7 @@
  */
 
 import { el, round } from "../../core/dom"
-import { iconButton, numberField, section } from "./field"
+import { iconButton, isExpanded, numberField, section, segmented, setExpanded } from "./field"
 import type { InspectorSection, SectionContext } from "./index"
 
 type Direction = "none" | "horizontal" | "vertical" | "wrap"
@@ -14,11 +14,7 @@ type Place = "flex-start" | "center" | "flex-end"
 
 const PLACES: Place[] = ["flex-start", "center", "flex-end"]
 
-/**
- * Sticky across re-renders: every write re-renders the inspector, and a local
- * flag would collapse the expanded editor the moment you typed into it.
- */
-let paddingExpanded = false
+const PADDING_EXPANDER = "autolayout.padding"
 
 function directionOf(computed: CSSStyleDeclaration): Direction {
   const display = computed.display
@@ -59,27 +55,35 @@ function alignmentPad(options: {
   return el("div", { style: "display:grid;grid-template-columns:repeat(3,20px);gap:2px" }, cells)
 }
 
-function paddingControls(context: SectionContext, apply: (property: string, value: string) => void): HTMLElement {
+function paddingControls(
+  context: SectionContext,
+  apply: (property: string, value: string) => void,
+  preview: (property: string, value: string) => void
+): HTMLElement {
   const { computed, invalidate } = context
   const sides = ["top", "right", "bottom", "left"] as const
   const values = sides.map((side) => Number.parseFloat(computed.getPropertyValue(`padding-${side}`)) || 0)
+  const perSide = isExpanded(PADDING_EXPANDER)
   const toggle = iconButton({
-    label: paddingExpanded ? "Link all sides" : "Set each side",
-    glyph: paddingExpanded ? "⊟" : "⊞",
-    pressed: paddingExpanded,
+    label: perSide ? "Link all sides" : "Set each side",
+    glyph: perSide ? "⊟" : "⊞",
+    pressed: perSide,
     onClick: () => {
-      paddingExpanded = !paddingExpanded
+      setExpanded(PADDING_EXPANDER, !perSide)
       invalidate()
     },
   })
 
-  if (!paddingExpanded) {
+  if (!perSide) {
     const uniform = values.every((value) => value === values[0]) ? values[0] : null
     const field = numberField({
+      id: "autolayout.padding",
       label: "P",
       title: "Padding",
       value: uniform,
+      placeholder: uniform === null ? "Mixed" : undefined,
       min: 0,
+      onPreview: (value) => preview("padding", `${round(value)}px`),
       onCommit: (value) => apply("padding", `${round(value)}px`),
     })
     field.style.flex = "1"
@@ -91,10 +95,12 @@ function paddingControls(context: SectionContext, apply: (property: string, valu
     { class: "de-row--quad", style: "flex:1" },
     sides.map((side, index) =>
       numberField({
+        id: `autolayout.padding.${side}`,
         label: side[0].toUpperCase(),
         title: `Padding ${side}`,
         value: values[index],
         min: 0,
+        onPreview: (value) => preview(`padding-${side}`, `${round(value)}px`),
         onCommit: (value) => apply(`padding-${side}`, `${round(value)}px`),
       })
     )
@@ -116,6 +122,9 @@ export const autoLayoutSection: InspectorSection = (context) => {
   // the next frame, which would tear the field out from under a drag-scrub.
   const apply = (property: string, value: string) => {
     writer.applyStyles(selection, [{ property, value }], `Set ${property}`)
+  }
+  const preview = (property: string, value: string) => {
+    selection.element.style.setProperty(property, value)
   }
 
   const setDirection = (next: Direction) => {
@@ -139,17 +148,33 @@ export const autoLayoutSection: InspectorSection = (context) => {
   ])
 
   if (direction === "none") {
-    return section("Auto layout", el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [directionRow]))
+    return section("Auto layout", el("div", { class: "de-stack" }, [directionRow]))
   }
 
   const gapField = numberField({
+    id: "autolayout.gap",
     label: "Gap",
     title: "Gap between children",
     value: Number.parseFloat(computed.columnGap) || 0,
     min: 0,
+    disabled: spaceBetween,
+    onPreview: (value) => preview("gap", `${round(value)}px`),
     onCommit: (value) => apply("gap", `${round(value)}px`),
   })
   gapField.style.flex = "1"
+
+  // Wrapping splits the gap in two: the cross-axis gap is its own declaration,
+  // and without it a wrapped stack has rows touching.
+  const rowGapField = numberField({
+    id: "autolayout.rowgap",
+    label: "Row",
+    title: "Gap between wrapped rows",
+    value: Number.parseFloat(computed.rowGap) || 0,
+    min: 0,
+    onPreview: (value) => preview("row-gap", `${round(value)}px`),
+    onCommit: (value) => apply("row-gap", `${round(value)}px`),
+  })
+  rowGapField.style.flex = "1"
 
   const pad = alignmentPad({
     vertical,
@@ -159,7 +184,9 @@ export const autoLayoutSection: InspectorSection = (context) => {
       writer.applyStyles(
         selection,
         [
-          { property: "justify-content", value: nextJustify },
+          // Space-between owns the main axis; the pad only moves the cross axis
+          // while it is on, so picking a cell cannot silently repack the stack.
+          { property: "justify-content", value: spaceBetween ? "space-between" : nextJustify },
           { property: "align-items", value: nextAlign },
         ],
         "Set alignment"
@@ -168,25 +195,28 @@ export const autoLayoutSection: InspectorSection = (context) => {
     },
   })
 
-  const betweenToggle = iconButton({
-    label: "Distribute: space between",
-    glyph: "⇔",
-    pressed: spaceBetween,
-    onClick: () => {
+  const spacingMode = segmented({
+    label: "Spacing mode",
+    value: spaceBetween ? "between" : "packed",
+    options: [
+      { value: "packed", label: "Packed", title: "Children sit together at the gap" },
+      { value: "between", label: "Space between", title: "Gap absorbs the free space" },
+    ],
+    onCommit: (next) => {
       writer.applyStyles(
         selection,
-        [{ property: "justify-content", value: spaceBetween ? justify : "space-between" }],
+        [{ property: "justify-content", value: next === "between" ? "space-between" : justify }],
         "Set distribution"
       )
       invalidate()
     },
   })
 
-  const body = el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [
+  const body = el("div", { class: "de-stack" }, [
     directionRow,
-    el("div", { class: "de-row" }, [pad, el("div", { style: "flex:1" }), betweenToggle]),
-    el("div", { class: "de-row" }, [gapField]),
-    paddingControls(context, apply),
+    el("div", { class: "de-row" }, [pad, el("div", { class: "de-stack", style: "flex:1" }, [spacingMode])]),
+    el("div", { class: "de-row" }, [gapField, ...(direction === "wrap" ? [rowGapField] : [])]),
+    paddingControls(context, apply, preview),
   ])
 
   return section("Auto layout", body)

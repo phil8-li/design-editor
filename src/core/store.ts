@@ -10,7 +10,14 @@ export interface EditorState {
   tool: ToolId
   /** Primary selection is `selection[0]`. */
   selection: Selection[]
-  hovered: HTMLElement | null
+  /**
+   * The container the user has drilled into. Plain clicks resolve against it,
+   * so "select the parent" has one answer instead of "which parent?". `null`
+   * means the scope root, which is where a click on the background returns it.
+   */
+  scope: Element | null
+  /** Already resolved: the painter must never re-run the resolver per frame. */
+  hovered: Element | null
   layersOpen: boolean
   inspectorOpen: boolean
   /** Option sets keyed by `Selection.key`. */
@@ -23,6 +30,7 @@ type Listener = (state: EditorState, previous: EditorState) => void
 const state: EditorState = {
   tool: "move",
   selection: [],
+  scope: null,
   hovered: null,
   layersOpen: true,
   inspectorOpen: true,

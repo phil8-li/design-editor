@@ -6,7 +6,7 @@
  */
 
 import { el, round } from "../../core/dom"
-import { colorField } from "./section-appearance"
+import { colorField } from "./color"
 import { iconButton, numberField, section, selectField, textField } from "./field"
 import type { InspectorSection } from "./index"
 
@@ -40,6 +40,9 @@ export const typographySection: InspectorSection = ({ selection, computed, write
   const apply = (property: string, value: string) => {
     writer.applyStyles(selection, [{ property, value }], `Set ${property}`)
   }
+  const preview = (property: string, value: string) => {
+    selection.element.style.setProperty(property, value)
+  }
 
   const fontSize = Number.parseFloat(computed.fontSize) || 0
   const lineHeight = Number.parseFloat(computed.lineHeight)
@@ -47,8 +50,9 @@ export const typographySection: InspectorSection = ({ selection, computed, write
   const weight = String(Number.parseInt(computed.fontWeight, 10) || 400)
   const textAlign = computed.textAlign === "start" ? "left" : computed.textAlign
 
-  const body = el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [
+  const body = el("div", { class: "de-stack" }, [
     textField({
+      id: "type.family",
       label: "Font",
       value: primaryFamily(computed.fontFamily),
       placeholder: "Inter",
@@ -56,13 +60,16 @@ export const typographySection: InspectorSection = ({ selection, computed, write
     }),
     el("div", { class: "de-row--split" }, [
       numberField({
+        id: "type.size",
         label: "Size",
         title: "Font size",
         value: fontSize,
         min: 1,
+        onPreview: (value) => preview("font-size", `${round(value)}px`),
         onCommit: (value) => apply("font-size", `${round(value)}px`),
       }),
       selectField({
+        id: "type.weight",
         label: "Font weight",
         value: weight,
         options: WEIGHTS,
@@ -74,22 +81,28 @@ export const typographySection: InspectorSection = ({ selection, computed, write
     ]),
     el("div", { class: "de-row--split" }, [
       numberField({
+        id: "type.lineheight",
         label: "LH",
         title: "Line height",
         // `normal` has no number to show; leave the field empty rather than lie.
         value: Number.isNaN(lineHeight) ? null : lineHeight,
+        placeholder: Number.isNaN(lineHeight) ? "normal" : undefined,
         min: 0,
+        onPreview: (value) => preview("line-height", `${round(value)}px`),
         onCommit: (value) => apply("line-height", `${round(value)}px`),
       }),
       numberField({
+        id: "type.letterspacing",
         label: "LS",
         title: "Letter spacing",
         value: Number.isNaN(letterSpacing) ? 0 : letterSpacing,
         step: 0.1,
+        onPreview: (value) => preview("letter-spacing", `${round(value)}px`),
         onCommit: (value) => apply("letter-spacing", `${round(value)}px`),
       }),
     ]),
     colorField({
+      id: "type.color",
       label: "Color",
       value: computed.color,
       onCommit: (value) => apply("color", value),

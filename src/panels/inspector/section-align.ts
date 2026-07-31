@@ -1,139 +1,117 @@
 /**
- * Align & distribute.
+ * Align — flex alignment on the parent, not geometry on the child.
  *
- * Alignment is written as a translate offset rather than as position or margin:
- * the app under edit is a flow layout, so moving a box with layout properties
- * would shove every sibling as a side effect.
+ * The obvious implementation nudges the selected box with `transform:
+ * translate()`. That is wrong twice over here: `core/tailwind.ts` has no entry
+ * for `transform`, so every one of those edits is silently dropped at "Apply to
+ * code"; and a `translate-*` utility on an element that also uses Motion
+ * `layout`/`layoutId` fights Motion's own transform and breaks the app's
+ * shared-element morphs. Writing `justify-content`/`align-items` on the parent
+ * says the same thing in a way that survives the trip to source.
  */
 
-import { el, round } from "../../core/dom"
-import type { Writer } from "../../core/writer"
+import { el } from "../../core/dom"
+import { toSourceRef } from "../../core/bridge"
+import { elementKey } from "../../core/store"
+import type { EditorContext } from "../../core/context"
 import type { Selection } from "../../core/types"
 import { iconButton, section } from "./field"
 import type { InspectorSection } from "./index"
 
-interface Box {
-  left: number
-  top: number
-  right: number
-  bottom: number
+type Place = "flex-start" | "center" | "flex-end"
+
+/** Computed `justify-content`/`align-items` collapsed onto the three we write. */
+function placeOf(value: string): Place | null {
+  if (value === "center") return "center"
+  if (value === "flex-end" || value === "end" || value === "right") return "flex-end"
+  if (value === "flex-start" || value === "start" || value === "left" || value === "normal") return "flex-start"
+  return null
 }
 
-type AlignKind = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom"
-
-function offsetOf(element: HTMLElement): { x: number; y: number } {
-  const transform = getComputedStyle(element).transform
-  if (transform === "none") return { x: 0, y: 0 }
-  const matrix = new DOMMatrixReadOnly(transform)
-  return { x: matrix.m41, y: matrix.m42 }
-}
-
-function boxOf(element: HTMLElement): Box {
-  const rect = element.getBoundingClientRect()
-  return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
-}
-
-/** Padding box of the offset parent — the frame a single element aligns inside. */
-function frameOf(element: HTMLElement): Box {
-  const parent = (element.offsetParent as HTMLElement | null) ?? document.documentElement
-  const rect = parent.getBoundingClientRect()
-  const left = rect.left + parent.clientLeft
-  const top = rect.top + parent.clientTop
-  return { left, top, right: left + parent.clientWidth, bottom: top + parent.clientHeight }
-}
-
-function unionOf(boxes: Box[]): Box {
+/**
+ * The parent as a writable target. `context.describe` is private to the context
+ * module, so this rebuilds the same shape from the two core helpers it uses.
+ */
+function describeParent(editor: EditorContext, parent: HTMLElement): Selection {
+  const info = editor.bridge.elementInfo(parent)
+  const componentName = info?.componentName || parent.tagName.toLowerCase()
   return {
-    left: Math.min(...boxes.map((box) => box.left)),
-    top: Math.min(...boxes.map((box) => box.top)),
-    right: Math.max(...boxes.map((box) => box.right)),
-    bottom: Math.max(...boxes.map((box) => box.bottom)),
+    element: parent,
+    tagName: parent.tagName.toLowerCase(),
+    componentName,
+    source: toSourceRef(info),
+    key: elementKey(parent, componentName, info?.lineNumber ?? 0),
   }
 }
 
-function deltaFor(kind: AlignKind, item: Box, frame: Box): { dx: number; dy: number } {
-  switch (kind) {
-    case "left":
-      return { dx: frame.left - item.left, dy: 0 }
-    case "right":
-      return { dx: frame.right - item.right, dy: 0 }
-    case "hcenter":
-      return { dx: (frame.left + frame.right - item.left - item.right) / 2, dy: 0 }
-    case "top":
-      return { dx: 0, dy: frame.top - item.top }
-    case "bottom":
-      return { dx: 0, dy: frame.bottom - item.bottom }
-    case "vcenter":
-      return { dx: 0, dy: (frame.top + frame.bottom - item.top - item.bottom) / 2 }
-  }
-}
+export const alignSection: InspectorSection = ({ editor, selection, writer, invalidate }) => {
+  const parent = selection.element.parentElement
+  if (!parent || parent === document.body || parent === document.documentElement) return null
 
-function nudge(writer: Writer, target: Selection, dx: number, dy: number, summary: string): void {
-  if (dx === 0 && dy === 0) return
-  const offset = offsetOf(target.element)
-  const value = `translate(${round(offset.x + dx)}px, ${round(offset.y + dy)}px)`
-  writer.applyStyles(target, [{ property: "transform", value }], summary)
-}
+  const target = describeParent(editor, parent)
+  const parentStyle = getComputedStyle(parent)
+  const isFlex = parentStyle.display === "flex" || parentStyle.display === "inline-flex"
 
-export const alignSection: InspectorSection = ({ editor, writer, invalidate }) => {
-  const targets = editor.getState().selection
-  if (targets.length === 0) return null
-
-  const align = (kind: AlignKind, label: string) => {
-    const boxes = targets.map((target) => boxOf(target.element))
-    const frame = targets.length > 1 ? unionOf(boxes) : frameOf(targets[0].element)
-    targets.forEach((target, index) => {
-      const delta = deltaFor(kind, boxes[index], frame)
-      nudge(writer, target, delta.dx, delta.dy, label)
-    })
-    invalidate()
-  }
-
-  /** Equalises the gaps between boxes, leaving the outermost two anchored. */
-  const distribute = (axis: "x" | "y", label: string) => {
-    const size = (box: Box) => (axis === "x" ? box.right - box.left : box.bottom - box.top)
-    const start = (box: Box) => (axis === "x" ? box.left : box.top)
-    const entries = targets
-      .map((target) => ({ target, box: boxOf(target.element) }))
-      .sort((a, b) => start(a.box) - start(b.box))
-    const last = entries[entries.length - 1]
-    const span = start(last.box) + size(last.box) - start(entries[0].box)
-    const gap = (span - entries.reduce((total, entry) => total + size(entry.box), 0)) / (entries.length - 1)
-    let cursor = start(entries[0].box)
-    for (const entry of entries) {
-      const delta = cursor - start(entry.box)
-      nudge(writer, entry.target, axis === "x" ? delta : 0, axis === "x" ? 0 : delta, label)
-      cursor += size(entry.box) + gap
-    }
-    invalidate()
-  }
-
-  const buttons: HTMLElement[] = [
-    iconButton({ label: "Align left", glyph: "⇤", onClick: () => align("left", "Align left") }),
-    iconButton({ label: "Align horizontal centers", glyph: "↔", onClick: () => align("hcenter", "Align centers") }),
-    iconButton({ label: "Align right", glyph: "⇥", onClick: () => align("right", "Align right") }),
-    iconButton({ label: "Align top", glyph: "⤒", onClick: () => align("top", "Align top") }),
-    iconButton({ label: "Align vertical centers", glyph: "↕", onClick: () => align("vcenter", "Align middles") }),
-    iconButton({ label: "Align bottom", glyph: "⤓", onClick: () => align("bottom", "Align bottom") }),
-  ]
-
-  // Distributing needs an inner box to move, so it only appears from three up.
-  if (targets.length > 2) {
-    buttons.push(
-      el("div", { style: "flex:1" }),
-      iconButton({
-        label: "Distribute horizontal spacing",
-        glyph: "⋯",
-        onClick: () => distribute("x", "Distribute horizontally"),
-      }),
-      iconButton({
-        label: "Distribute vertical spacing",
-        glyph: "⋮",
-        onClick: () => distribute("y", "Distribute vertically"),
-      })
+  if (!isFlex) {
+    const enable = el(
+      "button",
+      {
+        class: "de-button",
+        type: "button",
+        onclick: () => {
+          writer.applyStyles(target, [{ property: "display", value: "flex" }], "Auto layout on parent")
+          invalidate()
+        },
+      },
+      ["Make parent auto layout"]
+    )
+    return section(
+      "Align",
+      el("div", { class: "de-stack" }, [
+        el("div", { class: "de-hint" }, [
+          `<${target.tagName}> is not a flex container, so alignment has nothing to act on.`,
+        ]),
+        enable,
+      ])
     )
   }
 
-  const title = targets.length > 1 ? `Align · ${targets.length} selected` : "Align"
-  return section(title, el("div", { class: "de-row", style: "gap:2px;flex-wrap:wrap" }, buttons))
+  const column = parentStyle.flexDirection.startsWith("column")
+  const justify = placeOf(parentStyle.justifyContent)
+  const align = placeOf(parentStyle.alignItems)
+
+  /** Horizontal on a row is `justify-content`; on a column it is `align-items`. */
+  const propertyFor = (axis: "horizontal" | "vertical") =>
+    (axis === "horizontal") === column ? "align-items" : "justify-content"
+
+  const currentFor = (axis: "horizontal" | "vertical") =>
+    propertyFor(axis) === "justify-content" ? justify : align
+
+  const button = (axis: "horizontal" | "vertical", place: Place, label: string, glyph: string) =>
+    iconButton({
+      label,
+      glyph,
+      pressed: currentFor(axis) === place,
+      onClick: () => {
+        writer.applyStyles(target, [{ property: propertyFor(axis), value: place }], label)
+        invalidate()
+      },
+    })
+
+  const body = el("div", { class: "de-stack" }, [
+    el("div", { class: "de-row", style: "gap:2px" }, [
+      button("horizontal", "flex-start", "Align left", "⇤"),
+      button("horizontal", "center", "Align horizontal centers", "↔"),
+      button("horizontal", "flex-end", "Align right", "⇥"),
+      el("div", { style: "flex:1" }),
+      button("vertical", "flex-start", "Align top", "⤒"),
+      button("vertical", "center", "Align vertical centers", "↕"),
+      button("vertical", "flex-end", "Align bottom", "⤓"),
+    ]),
+    el("div", { class: "de-hint" }, [
+      `Aligns every child of <${target.tagName}> — that is what flex alignment means.`,
+    ]),
+  ])
+
+  return section("Align", body)
 }

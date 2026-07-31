@@ -1,9 +1,9 @@
 /**
  * Right-hand inspector.
  *
- * A flat list of sections, each owning one file. A section returns `null` when
- * it has nothing to say about the current selection, which keeps the panel as
- * short as the element is simple.
+ * A stack of collapsible sections, each owning one file. A section returns
+ * `null` when it has nothing to say about the current selection, which keeps
+ * the panel as short as the element is simple.
  */
 
 import { clear, el } from "../../core/dom"
@@ -15,6 +15,9 @@ import { layoutSection } from "./section-layout"
 import { autoLayoutSection } from "./section-autolayout"
 import { alignSection } from "./section-align"
 import { appearanceSection } from "./section-appearance"
+import { fillSection } from "./section-fill"
+import { strokeSection } from "./section-stroke"
+import { effectsSection } from "./section-effects"
 import { typographySection } from "./section-typography"
 import { classesSection } from "./section-classes"
 import { optionsSection } from "../../options/panel"
@@ -32,16 +35,86 @@ export interface SectionContext {
 
 export type InspectorSection = (context: SectionContext) => HTMLElement | null
 
+/** Figma's own top-to-bottom order, minus the sections with no DOM analogue. */
 const SECTIONS: InspectorSection[] = [
   alignSection,
   layoutSection,
   autoLayoutSection,
   appearanceSection,
+  fillSection,
+  strokeSection,
+  effectsSection,
   typographySection,
   classesSection,
   optionsSection,
   aiSection,
 ]
+
+interface FocusMemory {
+  /** `data-de-field` identity, when the control declared one. */
+  field: string | null
+  /** Child-index path from the panel host — the fallback for controls without one. */
+  path: number[]
+  start: number | null
+  end: number | null
+}
+
+function indexPath(host: HTMLElement, node: Element): number[] {
+  const path: number[] = []
+  for (let step: Element | null = node; step && step !== host; step = step.parentElement) {
+    const parent = step.parentElement
+    if (!parent) return []
+    path.unshift(Array.prototype.indexOf.call(parent.children, step))
+  }
+  return path
+}
+
+function nodeAtPath(host: HTMLElement, path: number[]): HTMLElement | null {
+  let node: Element | undefined = host
+  for (const index of path) {
+    node = node?.children[index]
+    if (!node) return null
+  }
+  return node instanceof HTMLElement ? node : null
+}
+
+function captureFocus(host: HTMLElement): FocusMemory | null {
+  const active = document.activeElement
+  if (!(active instanceof HTMLElement) || !host.contains(active)) return null
+  const text = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+  return {
+    field: active.getAttribute("data-de-field"),
+    path: indexPath(host, active),
+    start: text ? active.selectionStart : null,
+    end: text ? active.selectionEnd : null,
+  }
+}
+
+/**
+ * Puts the caret back after a rebuild.
+ *
+ * Every commit re-renders the whole panel, so without this the field you just
+ * typed into is a detached node and focus has fallen to `<body>` — which makes
+ * Tab-between-fields, Enter-to-commit, and repeated arrow nudges all impossible.
+ */
+function restoreFocus(host: HTMLElement, memory: FocusMemory | null): void {
+  if (!memory) return
+  // Matched by string compare rather than an attribute selector: field ids are
+  // dotted (`appearance.radius.tl`), and building a selector from them means
+  // escaping, which is one more thing to get wrong for no gain at this size.
+  const byField = memory.field
+    ? [...host.querySelectorAll<HTMLElement>("[data-de-field]")].find(
+        (node) => node.getAttribute("data-de-field") === memory.field
+      ) ?? null
+    : null
+  const target = byField ?? nodeAtPath(host, memory.path)
+  if (!target || !target.isConnected) return
+  target.focus({ preventScroll: true })
+  if (memory.start === null) return
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return
+  const limit = target.value.length
+  target.setSelectionRange(Math.min(memory.start, limit), Math.min(memory.end ?? memory.start, limit))
+}
 
 export function installInspector(editor: EditorContext): void {
   const writer = createWriter(editor.bridge)
@@ -58,6 +131,7 @@ export function installInspector(editor: EditorContext): void {
   }
 
   function render(): void {
+    const focus = captureFocus(host)
     clear(host)
     const selection = editor.primarySelection()
 
@@ -101,6 +175,8 @@ export function installInspector(editor: EditorContext): void {
       }
       if (node) host.append(node)
     }
+
+    restoreFocus(host, focus)
   }
 
   // Rebuild only when what the inspector shows actually changed. `hovered` is

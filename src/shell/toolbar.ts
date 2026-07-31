@@ -19,12 +19,20 @@ interface ToolSpec {
   vendor?: string
 }
 
+/**
+ * Figma's tool order, minus the tools that have nothing to act on here.
+ *
+ * Hand and Comment used to sit at the end of this strip. Both were inert — the
+ * canvas is a real scrolling page, so the browser already pans, and there is no
+ * comment store — and an inert tool is worse than a missing one: it teaches the
+ * user the whole strip is decoration. Pen, shapes and Frame are absent for the
+ * same reason at a larger scale: the engine writes Tailwind classes into JSX and
+ * has no verb for inserting geometry.
+ */
 const TOOLS: ToolSpec[] = [
   { id: "move", label: "Move", shortcut: "V", vendor: "select", path: "M4 2.5 12.5 8 8.6 9.1 11 13.4 9.3 14.3 6.9 10 4 12.8z" },
   { id: "select", label: "Scale", shortcut: "K", vendor: "select", path: "M3 3h6v1.6H4.6V9H3zM13 13H7v-1.6h4.4V7H13z" },
   { id: "text", label: "Text", shortcut: "T", vendor: "text", path: "M3 3h10v1.7H8.8V13H7.2V4.7H3z" },
-  { id: "hand", label: "Hand", shortcut: "H", path: "M5 7V4.2a1 1 0 0 1 2 0V7h.6V3.2a1 1 0 0 1 2 0V7h.6V4.4a1 1 0 0 1 2 0V9a4.4 4.4 0 0 1-4.4 4.4A4.2 4.2 0 0 1 3.6 9.2L3 7.6a1 1 0 0 1 1.8-.8z" },
-  { id: "comment", label: "Comment", shortcut: "C", path: "M2.5 3.5h11v7.4H8.6L5.8 13.4v-2.5H2.5z" },
 ]
 
 function icon(path: string): SVGSVGElement {
@@ -75,18 +83,40 @@ export function installToolbar(context: EditorContext): void {
     }
   }
 
-  const zoomLabel = el("span", { class: "de-button", "aria-live": "polite" }, ["100%"])
+  // Figma's zoom readout is a menu; ours is a button, because only one of that
+  // menu's items means anything here. Zoom-to-fit and zoom-to-selection would
+  // have to scale the live app, and a transformed ancestor breaks the product's
+  // own `layoutId` morphs. Reset-to-100% is the item that survives.
+  const zoomLabel = el(
+    "button",
+    {
+      class: "de-button",
+      type: "button",
+      title: "Reset zoom to 100%",
+      "aria-label": "Reset zoom to 100%",
+      "aria-live": "polite",
+      onclick: () => setZoom(1),
+    },
+    ["100%"]
+  )
   const zoomGroup = el("div", { class: "de-toolbar-group" }, [
     el("button", { class: "de-tool", type: "button", title: "Zoom out", "aria-label": "Zoom out", onclick: () => nudgeZoom(1 / 1.2) }, [icon("M3 7.2h10v1.6H3z")]),
     zoomLabel,
     el("button", { class: "de-tool", type: "button", title: "Zoom in", "aria-label": "Zoom in", onclick: () => nudgeZoom(1.2) }, [icon("M7.2 3h1.6v4.2H13v1.6H8.8V13H7.2V8.8H3V7.2h4.2z")]),
   ])
 
-  function nudgeZoom(factor: number): void {
+  function setZoom(scale: number): void {
     try {
       const current = bridge.store.getCanvasTransform()
-      const scale = Math.min(4, Math.max(0.1, current.scale * factor))
-      bridge.store.setCanvasTransform({ ...current, scale })
+      bridge.store.setCanvasTransform({ ...current, scale: Math.min(4, Math.max(0.1, scale)) })
+    } catch {
+      context.toast("Zoom is unavailable in this mode", "error")
+    }
+  }
+
+  function nudgeZoom(factor: number): void {
+    try {
+      setZoom(bridge.store.getCanvasTransform().scale * factor)
     } catch {
       context.toast("Zoom is unavailable in this mode", "error")
     }
@@ -135,11 +165,13 @@ export function installToolbar(context: EditorContext): void {
     el("button", { class: "de-tool", type: "button", title: "Toggle inspector", "aria-label": "Toggle inspector", onclick: () => context.setState({ inspectorOpen: !context.getState().inspectorOpen }) }, [icon("M2 3h12v10H2zm7 1.5v7h3.5v-7z")]),
   ])
 
+  // Figma's shape: tools on the left, everything about the *file* on the right,
+  // with the zoom readout at the far end of that cluster.
   slots.toolbar.append(
     toolGroup,
-    zoomGroup,
     el("div", { class: "de-toolbar-spacer" }),
     panelToggles,
+    zoomGroup,
     el("div", { class: "de-toolbar-group" }, [undoButton, applyButton])
   )
 

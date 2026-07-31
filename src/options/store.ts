@@ -27,15 +27,35 @@ export interface OptionsStore {
   updateActive(selection: Selection): void
   rename(key: string, id: string, name: string): void
   remove(selection: Selection, writer: Writer, id: string): void
+  /** Restores the element's pre-option state without deleting anything. */
+  revert(selection: Selection, writer: Writer): boolean
+  hasBaseline(key: string): boolean
 }
 
 /**
- * The element's state before the first option was applied to it. Deleting the
- * active option restores this instead of leaving a half-applied element.
+ * Reserved id for the pre-option snapshot.
+ *
+ * The baseline is stored *as an option* rather than as a field on the set
+ * because the server's `normalizeOptionSet` rebuilds every set from exactly
+ * four properties and silently drops anything else — a top-level `baseline`
+ * would not survive the PUT round-trip, but an entry in `options[]` does. It is
+ * filtered out of everything a user sees by `visibleOptions`.
+ */
+export const BASELINE_OPTION_ID = "baseline:pre-option-state"
+
+/**
+ * Session-only mirror of the baseline. Kept alongside the persisted copy so
+ * sets written before baselines were durable keep behaving as they did.
  */
 const baselines = new Map<string, OptionSnapshot>()
 
 let cached: OptionsStore | null = null
+
+/** The options a designer saved, without the reserved baseline entry. */
+export function visibleOptions(set: ElementOptionSet | null | undefined): ElementOption[] {
+  if (!set) return []
+  return set.options.filter((option) => option.id !== BASELINE_OPTION_ID)
+}
 
 /** Captures what an option needs to reproduce the element's current look. */
 export function captureSnapshot(element: HTMLElement): OptionSnapshot {
@@ -82,8 +102,26 @@ function snapshotOf(option: ElementOption): OptionSnapshot {
   return { className: option.className, style: option.style, text: option.text }
 }
 
+function baselineEntry(snapshot: OptionSnapshot): ElementOption {
+  return {
+    id: BASELINE_OPTION_ID,
+    name: "Before options",
+    className: snapshot.className,
+    style: snapshot.style,
+    text: snapshot.text,
+    createdAt: Date.now(),
+  }
+}
+
+/** The persisted baseline first, then the session mirror for older sets. */
+export function baselineOf(set: ElementOptionSet | null, key: string): OptionSnapshot | null {
+  const stored = set?.options.find((option) => option.id === BASELINE_OPTION_ID)
+  if (stored) return snapshotOf(stored)
+  return baselines.get(key) ?? null
+}
+
 function nextName(set: ElementOptionSet | null): string {
-  return `Option ${(set?.options.length ?? 0) + 1}`
+  return `Option ${visibleOptions(set).length + 1}`
 }
 
 function createStore(editor: EditorContext): OptionsStore {
@@ -137,6 +175,22 @@ function createStore(editor: EditorContext): OptionsStore {
     )
   }
 
+  /**
+   * Records the element's pre-option look the first time it becomes a variant.
+   * Persisting it is what lets "revert" and "delete the active option" still
+   * work after a reload — the session Map alone dies with the page, which left
+   * elements permanently stuck in a deleted option's styling.
+   */
+  const withBaseline = (set: ElementOptionSet, selection: Selection): ElementOptionSet => {
+    if (!baselines.has(selection.key)) {
+      baselines.set(selection.key, captureSnapshot(selection.element))
+    }
+    if (set.options.some((option) => option.id === BASELINE_OPTION_ID)) return set
+    const snapshot = baselines.get(selection.key)
+    if (!snapshot) return set
+    return { ...set, options: [baselineEntry(snapshot), ...set.options] }
+  }
+
   return {
     ready() {
       loading ??= load()
@@ -147,20 +201,27 @@ function createStore(editor: EditorContext): OptionsStore {
       return getState().optionSets[key] ?? null
     },
 
+    hasBaseline(key) {
+      return baselineOf(getState().optionSets[key] ?? null, key) !== null
+    },
+
     apply(selection, writer, option) {
-      const set = setFor(selection)
-      if (!baselines.has(selection.key)) {
-        baselines.set(selection.key, captureSnapshot(selection.element))
-      }
+      const set = withBaseline(setFor(selection), selection)
       applySnapshot(selection, writer, snapshotOf(option), `Apply option "${option.name}"`)
       commit({ ...set, activeOptionId: option.id })
     },
 
-    saveCurrent(selection, writer) {
+    revert(selection, writer) {
       const set = setFor(selection)
-      if (!baselines.has(selection.key)) {
-        baselines.set(selection.key, captureSnapshot(selection.element))
-      }
+      const baseline = baselineOf(set, selection.key)
+      if (!baseline) return false
+      applySnapshot(selection, writer, baseline, "Revert to pre-option state")
+      commit({ ...set, activeOptionId: null })
+      return true
+    },
+
+    saveCurrent(selection, writer) {
+      const set = withBaseline(setFor(selection), selection)
       const snapshot = captureSnapshot(selection.element)
       const option: ElementOption = {
         id: crypto.randomUUID(),
@@ -190,6 +251,7 @@ function createStore(editor: EditorContext): OptionsStore {
     },
 
     rename(key, id, name) {
+      if (id === BASELINE_OPTION_ID) return
       const set = getState().optionSets[key]
       if (!set) return
       commit({
@@ -199,13 +261,14 @@ function createStore(editor: EditorContext): OptionsStore {
     },
 
     remove(selection, writer, id) {
+      if (id === BASELINE_OPTION_ID) return
       const set = setFor(selection)
       const options = set.options.filter((option) => option.id !== id)
       if (set.activeOptionId === id) {
-        const baseline = baselines.get(selection.key)
+        const baseline = baselineOf(set, selection.key)
         if (baseline) applySnapshot(selection, writer, baseline, "Remove option")
       }
-      if (options.length === 0) {
+      if (visibleOptions({ ...set, options }).length === 0) {
         baselines.delete(selection.key)
         drop(selection.key)
         return

@@ -2,7 +2,8 @@
 
 import { el } from "../core/dom"
 import { section } from "../panels/inspector/field"
-import { optionsStore } from "./store"
+import { installOptionsBrowser, openOptionsBrowser } from "./inventory-panel"
+import { optionsStore, visibleOptions } from "./store"
 import type { InspectorSection, SectionContext } from "../panels/inspector/index"
 import type { ElementOption } from "../core/types"
 
@@ -56,24 +57,12 @@ function optionRow(context: SectionContext, option: ElementOption, active: boole
     option.name,
   ])
 
-  const remove = el(
-    "button",
-    {
-      class: "de-option-delete",
-      type: "button",
-      title: "Delete option",
-      "aria-label": `Delete ${option.name}`,
-      onclick: (event: Event) => {
-        event.stopPropagation()
-        store.remove(selection, writer, option.id)
-      },
-    },
-    ["×"]
-  )
-
   const apply = () => store.apply(selection, writer, option)
 
-  const row = el(
+  // The radio is the choice itself. The delete button used to be nested inside
+  // it, which is invalid ARIA (a `radio` may not own a control) and made the
+  // whole row ambiguous to a keyboard user.
+  const choice = el(
     "div",
     {
       class: "de-option",
@@ -88,7 +77,19 @@ function optionRow(context: SectionContext, option: ElementOption, active: boole
         apply()
       },
     },
-    [name, remove]
+    [name]
+  )
+
+  const remove = el(
+    "button",
+    {
+      class: "de-option-delete",
+      type: "button",
+      title: "Delete this saved variant",
+      "aria-label": `Delete ${option.name}`,
+      onclick: () => store.remove(selection, writer, option.id),
+    },
+    ["×"]
   )
 
   name.addEventListener("dblclick", (event) => {
@@ -96,19 +97,27 @@ function optionRow(context: SectionContext, option: ElementOption, active: boole
     startRename(name, option, (value) => store.rename(selection.key, option.id, value))
   })
 
-  return row
+  return el("div", { class: "de-option-row" }, [choice, remove])
 }
 
 export const optionsSection: InspectorSection = (context) => {
   const store = optionsStore(context.editor)
   void store.ready()
+  // Mount the browser here so its launcher outlives the selection: this section
+  // is the only place in the app that is guaranteed to run, and the inspector
+  // tears every section down the moment nothing is selected.
+  installOptionsBrowser(context.editor)
 
   const set = store.get(context.selection.key)
-  const options = set?.options ?? []
+  const options = visibleOptions(set)
 
   const list = el(
     "div",
-    { role: "radiogroup", "aria-label": "Saved options", style: "display:flex;flex-direction:column" },
+    {
+      role: "radiogroup",
+      "aria-label": "Saved options",
+      style: "display:flex;flex-direction:column",
+    },
     options.length
       ? options.map((option) => optionRow(context, option, option.id === set?.activeOptionId))
       : [
@@ -139,10 +148,33 @@ export const optionsSection: InspectorSection = (context) => {
       },
       ["Update"]
     ),
+    el(
+      "button",
+      {
+        class: "de-button",
+        type: "button",
+        disabled: !store.hasBaseline(context.selection.key),
+        title: "Restore this element's state from before its first option",
+        onclick: () => store.revert(context.selection, context.writer),
+      },
+      ["Revert"]
+    ),
   ])
 
+  const browse = el(
+    "button",
+    {
+      class: "de-opt-link",
+      type: "button",
+      title: "Every control, variant and saved option in one list",
+      onclick: () => openOptionsBrowser(context.editor),
+    },
+    ["Browse all…"]
+  )
+
   return section(
-    "Options",
-    el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [list, actions])
+    `Options (${options.length})`,
+    el("div", { style: "display:flex;flex-direction:column;gap:6px" }, [list, actions]),
+    browse
   )
 }

@@ -27,13 +27,40 @@ export const panelsCss = `/* ---------- panels ---------- */
 
 .de-section { border-bottom: 1px solid ${t.color.border}; }
 .de-section-header {
-  height: 32px;
+  height: ${t.size.sectionHeader}px;
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 8px 0 10px;
   color: ${t.color.text};
   font-size: 11px; font-weight: 600;
 }
 .de-section-body { padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+/* An author \`display\` beats the UA [hidden] rule, so restate it. */
+.de-section-body[hidden] { display: none; }
+
+.de-section-header--collapsible:hover { background: ${t.color.bgRaised}; }
+.de-section-toggle {
+  flex: 1; min-width: 0;
+  height: 100%;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 0;
+  border: none; background: transparent;
+  color: inherit; font-family: inherit; font-size: inherit; font-weight: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.de-section-toggle:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -2px; }
+.de-section-actions { display: inline-flex; align-items: center; gap: 2px; }
+.de-chevron {
+  display: inline-block; width: 10px;
+  color: ${t.color.textDim};
+  transform: rotate(90deg);
+  transition: transform ${t.duration.fast} ${t.ease};
+}
+.de-section-toggle--collapsed .de-chevron { transform: rotate(0deg); }
+
+/* Vertical rhythm inside a section body — one rule instead of an inline style. */
+.de-stack { display: flex; flex-direction: column; gap: 6px; }
+.de-hint { color: ${t.color.textDim}; font-size: 10px; line-height: 1.4; }
 
 /* Selection identity: what you picked, and where it lives in the source. */
 .de-tagname { color: ${t.color.textDim}; font-weight: 400; }
@@ -68,6 +95,61 @@ export const panelsCss = `/* ---------- panels ---------- */
 }
 .de-field input::-webkit-outer-spin-button,
 .de-field input::-webkit-inner-spin-button { appearance: none; margin: 0; }
+.de-field input[disabled] { color: ${t.color.textDim}; cursor: default; }
+.de-field input::placeholder { color: ${t.color.textDim}; }
+.de-field-suffix { color: ${t.color.textDim}; font-size: 10px; user-select: none; }
+
+/* ---------- paint rows (fill / stroke / effects) ---------- */
+.de-paint-row { display: flex; align-items: center; gap: 4px; }
+.de-paint-row .de-field { flex: 1; min-width: 0; }
+.de-paint-row .de-select { flex: 1; min-width: 0; }
+.de-paint-value {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: ${t.color.textMuted};
+  font-family: ${t.font.mono}; font-size: 10px;
+}
+.de-paint-card {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 4px;
+  border: 1px solid ${t.color.border}; border-radius: ${t.radius.md};
+}
+
+.de-mini {
+  width: ${t.size.miniSize}px; height: ${t.size.miniSize}px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: ${t.radius.sm};
+  background: transparent; color: ${t.color.textDim};
+  font-family: inherit; font-size: 11px; line-height: 1;
+  cursor: pointer;
+  transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease};
+}
+.de-mini:hover { background: ${t.color.bgHover}; color: ${t.color.text}; }
+.de-mini[aria-pressed="true"] { color: ${t.color.accent}; }
+.de-mini--danger:hover { background: ${t.color.danger}; color: ${t.color.text}; }
+.de-mini[disabled] { opacity: 0.35; cursor: default; background: transparent; }
+.de-mini:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
+
+/* ---------- segmented control ---------- */
+.de-segmented {
+  display: flex; align-items: stretch;
+  height: ${t.size.rowHeight}px;
+  padding: 2px;
+  border-radius: ${t.radius.md};
+  background: ${t.color.bgSunken};
+}
+.de-segment {
+  flex: 1; min-width: 0;
+  border: none; border-radius: ${t.radius.sm};
+  background: transparent; color: ${t.color.textDim};
+  font-family: inherit; font-size: 10px; line-height: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer;
+  transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease};
+}
+.de-segment:hover { color: ${t.color.text}; }
+.de-segment[aria-pressed="true"] { background: ${t.color.accentSurface}; color: ${t.color.text}; }
+.de-segment:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -1px; }
 
 .de-select {
   height: ${t.size.rowHeight}px;

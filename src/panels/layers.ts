@@ -6,27 +6,29 @@
  * branch is walked only while expanded, and rows are diffed in place.
  */
 
-import { el, isChrome } from "../core/dom"
-import type { RewriteElementInfo } from "../core/bridge"
+import { el } from "../core/dom"
+import { getResolver, isLayerCandidate } from "../core/resolve"
 import type { EditorContext } from "../core/context"
 
-const INDENT = 12, MAX_DEPTH = 40, NAME_MAX = 28
+const INDENT = 12, MAX_DEPTH = 40
 /** Filtering is the only full-tree walk; bound it so typing can never lock up. */
 const FILTER_BUDGET = 6000
 
 /** Everything the vendor server needs to move a node among its JSX siblings. */
 interface DragRef { filePath: string; fromLine: number; parentPath: string; parentLine: number }
-interface Meta { info: RewriteElementInfo | null; name: string; promoted: boolean; drag: DragRef | null }
+interface Meta { name: string; promoted: boolean; drag: DragRef | null }
 interface Row { element: HTMLElement; parent: HTMLElement | null; depth: number; meta: Meta
   open: boolean; hasChildren: boolean; posinset: number; setsize: number }
 
-/** Dev-tool portals are custom elements; neither they nor our chrome are design. */
-function skip(node: Element): boolean {
-  return isChrome(node) || node.tagName.includes("-") || /^(SCRIPT|STYLE|LINK|META|TEMPLATE)$/.test(node.tagName)
-}
-
+/**
+ * Rows stay `HTMLElement`: they take focus, drag, and scroll themselves into
+ * view. An SVG layer root is a layer on the canvas but has no row here until
+ * the selection contract widens past `HTMLElement`.
+ */
 function childrenOf(element: HTMLElement): HTMLElement[] {
-  return Array.from(element.children).filter((k): k is HTMLElement => k instanceof HTMLElement && !skip(k))
+  return Array.from(element.children).filter(
+    (k): k is HTMLElement => k instanceof HTMLElement && isLayerCandidate(k)
+  )
 }
 
 function setAttr(node: Element, name: string, value: string | null): void {
@@ -35,6 +37,7 @@ function setAttr(node: Element, name: string, value: string | null): void {
 }
 
 export function installLayersPanel(context: EditorContext): void {
+  const resolver = getResolver(context.bridge)
   const search = el("input", { class: "de-ai-input", type: "search", placeholder: "Filter layers",
     "aria-label": "Filter layers", style: "min-height:0;height:24px;resize:none" }) as HTMLInputElement
   const tree = el("div", { role: "tree", "aria-label": "Layers",
@@ -54,29 +57,21 @@ export function installLayersPanel(context: EditorContext): void {
   let visible: Row[] = [], focused: HTMLElement | null = null
 
   /**
-   * `elementInfo` reports the *enclosing* component for every DOM node, so a name
-   * only means "this is the component" where it first differs from the parent —
-   * the instance root, and the only node whose line is a reorderable JSX element.
+   * The tree and the canvas must agree on what a layer is, so the instance-root
+   * test and the display name come from `core/resolve`. Only the drag reference
+   * is the panel's own: a row is reorderable where the engine gave it a JSX
+   * line to move, and its host component a line to move it within.
    */
   function metaOf(element: HTMLElement): Meta {
     const cached = metaCache.get(element)
     if (cached) return cached
-    const info = context.bridge.elementInfo(element)
-    const parent = element.parentElement
-    const outer = parent && !skip(parent) ? metaOf(parent).info : null
-    const label = element.getAttribute("aria-label")?.trim()
-    const text = element.children.length ? "" : element.textContent?.trim().slice(0, NAME_MAX)
-    const promoted = Boolean(
-      info?.componentName &&
-        (!outer || outer.componentName !== info.componentName || outer.lineNumber !== info.lineNumber)
-    )
+    const { info, name, isRoot } = resolver.meta(element)
     const host = info?.stack[1]
     const drag =
-      promoted && info?.filePath && info.lineNumber && host?.filePath && host.lineNumber
+      isRoot && info?.filePath && info.lineNumber && host?.filePath && host.lineNumber
         ? { filePath: info.filePath, fromLine: info.lineNumber, parentPath: host.filePath, parentLine: host.lineNumber }
         : null
-    const name = promoted && info ? info.componentName : label || text || element.tagName.toLowerCase()
-    const meta = { info, name, promoted, drag }
+    const meta = { name, promoted: isRoot, drag }
     metaCache.set(element, meta)
     return meta
   }
@@ -179,7 +174,12 @@ export function installLayersPanel(context: EditorContext): void {
   function activate(element: HTMLElement | null, select: boolean): void {
     if (!element) return
     focused = element
-    if (select) context.select(element)
+    if (select) {
+      // A row selects at its own depth, so the canvas scope follows it. Without
+      // that, the next click on the canvas jumps straight back out to the top.
+      context.selectMany([element])
+      context.setState({ scope: resolver.layerParent(element) })
+    }
     render()
     rowByElement.get(element)?.focus()
   }

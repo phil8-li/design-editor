@@ -7,11 +7,14 @@
  */
 
 import { el, isCanvasElement, isChrome } from "../core/dom"
+import { isDeepSelect } from "../core/keymap"
+import { getResolver, isLayerCandidate, toSelectable } from "../core/resolve"
 import type { EditorContext } from "../core/context"
 
 const DRAG_THRESHOLD = 3
 
 export function installMarquee(context: EditorContext): void {
+  const resolver = getResolver(context.bridge)
   const box = el("div", { class: "de-marquee", style: "display:none" })
   context.slots.overlay.append(box)
 
@@ -21,16 +24,31 @@ export function installMarquee(context: EditorContext): void {
   let active = false
   let additive = false
 
-  /** Shallowest fully-enclosed elements: picking descendants too would select
-   * the same thing five times over. */
-  const enclosed = (left: number, top: number, right: number, bottom: number): HTMLElement[] => {
-    const found: HTMLElement[] = []
-    for (const node of Array.from(document.body.querySelectorAll<HTMLElement>("*"))) {
-      if (!isCanvasElement(node)) continue
+  /**
+   * Touching an object selects it. Full enclosure is the intuitive rule and the
+   * wrong one: on a full-bleed layout nothing is ever entirely inside the drag,
+   * so an enclose-only marquee returns almost nothing.
+   */
+  const touched = (element: Element, l: number, t: number, r: number, b: number): boolean => {
+    const rect = element.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return false
+    return !(rect.right < l || rect.left > r || rect.bottom < t || rect.top > b)
+  }
+
+  /**
+   * Candidates come from the current scope at layer granularity, so a marquee
+   * collects the same things a click would — a selection set stays
+   * depth-homogeneous. The deep modifier drops to leaves instead, keeping only
+   * the shallowest of any nested pair.
+   */
+  const swept = (l: number, t: number, r: number, b: number, deep: boolean): Element[] => {
+    const scope = context.getState().scope ?? resolver.scopeRoot()
+    if (!deep) return resolver.layerChildren(scope).filter((node) => touched(node, l, t, r, b))
+    const found: Element[] = []
+    for (const node of Array.from(scope.querySelectorAll("*"))) {
+      if (!isLayerCandidate(node)) continue
       if (found.some((chosen) => chosen.contains(node))) continue
-      const rect = node.getBoundingClientRect()
-      if (rect.width <= 0 || rect.height <= 0) continue
-      if (rect.left < left || rect.top < top || rect.right > right || rect.bottom > bottom) continue
+      if (!touched(node, l, t, r, b)) continue
       found.push(node)
     }
     return found
@@ -75,7 +93,10 @@ export function installMarquee(context: EditorContext): void {
     // One store write for the whole marquee: selecting element-by-element would
     // rebuild every panel once per hit, and a wide drag hits dozens.
     const kept = additive ? context.getState().selection.map((entry) => entry.element) : []
-    context.selectMany([...kept, ...enclosed(left, top, right, bottom)])
+    const hits = swept(left, top, right, bottom, isDeepSelect(event))
+      .map(toSelectable)
+      .filter((node): node is HTMLElement => node !== null)
+    context.selectMany([...kept, ...hits])
   }
 
   window.addEventListener("pointerdown", onPointerDown, true)

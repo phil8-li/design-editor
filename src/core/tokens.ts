@@ -53,6 +53,10 @@ export const tokens = {
     inspectorWidth: 260,
     /** Panel rows and fields. */
     rowHeight: 24,
+    /** Section headers: taller than a row so the fold target is unmissable. */
+    sectionHeader: 32,
+    /** Trailing row affordances (eye, remove) and header adds. */
+    miniSize: 18,
     /** Toolbar hit targets: larger on purpose, they are pointer-first. */
     toolSize: 28,
     /** Handles, guides, and the marquee all share one hairline. */
