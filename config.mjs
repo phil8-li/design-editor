@@ -212,8 +212,8 @@ export async function loadConfig({ configPath, cwd = process.cwd(), overrides = 
 
   let raw = {}
   if (found) {
-    const module = await import(pathToFileURL(found).href)
-    const exported = module.default ?? module.config ?? {}
+    const loaded = await import(pathToFileURL(found).href)
+    const exported = loaded.default ?? loaded.config ?? {}
     raw = typeof exported === "function" ? await exported() : exported
   }
 

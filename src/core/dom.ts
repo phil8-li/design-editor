@@ -14,8 +14,14 @@ export const CHROME_ATTR = "data-design-editor"
  * Our own shell and the vendor root are structural — they exist in every host —
  * so they stay literal. Everything else the host wants excluded (its dev GUI,
  * its debug bars) arrives from `chrome.trustedSelectors` in the config.
+ *
+ * An empty host list is legal and documented, so the parts are filtered before
+ * joining: a trailing comma is not a valid selector, and `closest()` would then
+ * throw on every hit-test rather than once at startup.
  */
-const CHROME_SELECTOR = `[${CHROME_ATTR}],#react-rewrite-root,${config.chrome.trustedSelector}`
+const CHROME_SELECTOR = [`[${CHROME_ATTR}]`, "#react-rewrite-root", config.chrome.trustedSelector]
+  .filter((part) => part.length > 0)
+  .join(",")
 
 type Props = Record<string, string | number | boolean | EventListener | undefined>
 

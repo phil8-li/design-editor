@@ -9,7 +9,7 @@
  * root travels with the config rather than with the installed package.
  */
 
-export default {
+const config = {
   app: {
     // Dev server port. Omit to pass one on the command line instead.
     port: 3000,
@@ -87,3 +87,5 @@ export default {
     systemPrompt: null,
   },
 }
+
+export default config

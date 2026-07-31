@@ -96,7 +96,13 @@ function read(): DesignEditorConfig {
   return {
     apiBase: str(raw.apiBase, FALLBACK.apiBase),
     chrome: {
-      trustedSelector: str(chrome.trustedSelector, FALLBACK.chrome.trustedSelector),
+      // Not `str()`: an empty list is a documented, meaningful answer ("this
+      // host has no dev chrome"), so only an absent key falls back. Treating
+      // "" as absent would hand a stock Next app this app's Leva selectors.
+      trustedSelector:
+        typeof chrome.trustedSelector === "string"
+          ? chrome.trustedSelector
+          : FALLBACK.chrome.trustedSelector,
       dockedPanel: {
         offsetVar: str(panel.offsetVar, FALLBACK.chrome.dockedPanel.offsetVar),
         widthVar: str(panel.widthVar, FALLBACK.chrome.dockedPanel.widthVar),
