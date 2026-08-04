@@ -134,6 +134,9 @@ export const optionsCss = `/* ---------- options / variants ---------- */
 .de-opt-folder-name { flex: none; }
 .de-opt-count { flex: 1; color: ${t.color.textDim}; font-size: 10px; font-weight: 400; }
 .de-opt-folder-body { padding: 0 0 6px 14px; display: flex; flex-direction: column; gap: 2px; }
+/* Only the inspector's inline copy scrolls. The options browser is a full-height
+   list of its own and must keep growing. */
+.de-opt-folder--inline > .de-opt-folder-body { max-height: 260px; overflow-y: auto; }
 
 .de-opt-row {
   display: flex; flex-direction: column; gap: 3px;

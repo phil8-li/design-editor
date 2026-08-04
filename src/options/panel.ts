@@ -129,8 +129,12 @@ export const optionsSection: InspectorSection = (context) => {
       )
     : []
 
+  // Relevance counts a control whose selector matches anything *inside* the
+  // element, so selecting a container binds most of the app's inventory — 177
+  // controls at ~188px each once pushed Appearance 33,000px down the panel.
+  // The modifier caps this list so the property sections below stay reachable.
   const contextual = relevant.length
-    ? el("details", { class: "de-opt-folder", open: true }, [
+    ? el("details", { class: "de-opt-folder de-opt-folder--inline", open: true }, [
         el("summary", { class: "de-opt-summary" }, [
           el("span", { class: "de-opt-folder-name" }, ["Relevant controls"]),
           el("span", { class: "de-opt-count" }, [`${relevant.length} bound`]),

@@ -2,6 +2,33 @@
 
 import { tokens as t } from "../tokens"
 
+/*
+ * The vendored React Rewrite overlay stays loaded — we drive it headlessly for
+ * fiber -> source resolution and source writes — but its chrome is replaced by
+ * ours. Its toasts, drag preview, and drop indicator stay: we call into them.
+ */
+const VENDOR_CHROME = [
+  ".prop-sidebar",
+  ".toolbar",
+  ".tools-panel",
+  ".selection-label",
+  ".changelog-panel",
+  ".changelog-badge",
+  ".help-btn",
+  ".shortcuts-overlay",
+]
+
+/**
+ * The same list, unprefixed, for injection *inside* the vendor's shadow root.
+ *
+ * The vendor mounts its chrome into `#react-rewrite-root`'s open shadow root,
+ * so the descendant selectors below can never match it — which is why its
+ * `.prop-sidebar` kept painting over our inspector at z-index 2147483645
+ * despite having been named in a suppression rule since day one. A shadow
+ * boundary blocks selectors, not stacking.
+ */
+export const vendorChromeCss = `${VENDOR_CHROME.join(",\n")} { display: none !important; }\n`
+
 export const baseCss = `
 :root {
   --de-left: 0px;
@@ -9,19 +36,7 @@ export const baseCss = `
   --de-top: 0px;
 }
 
-/*
- * The vendored React Rewrite overlay stays loaded — we drive it headlessly for
- * fiber -> source resolution and source writes — but its chrome is replaced by
- * ours. Its toasts, drag preview, and drop indicator stay: we call into them.
- */
-#react-rewrite-root .prop-sidebar,
-#react-rewrite-root .toolbar,
-#react-rewrite-root .tools-panel,
-#react-rewrite-root .selection-label,
-#react-rewrite-root .changelog-panel,
-#react-rewrite-root .changelog-badge,
-#react-rewrite-root .help-btn,
-#react-rewrite-root .shortcuts-overlay {
+${VENDOR_CHROME.map((selector) => `#react-rewrite-root ${selector}`).join(",\n")} {
   display: none !important;
 }
 

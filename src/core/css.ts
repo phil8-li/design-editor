@@ -5,7 +5,7 @@
  * edited, and the app's own cascade can never reach in.
  */
 
-import { baseCss } from "./css/base"
+import { baseCss, vendorChromeCss } from "./css/base"
 import { toolbarCss } from "./css/toolbar"
 import { panelsCss } from "./css/panels"
 import { layersCss } from "./css/layers"
@@ -18,3 +18,5 @@ import { canvasCss } from "./css/canvas"
  * single `shellCss` export the shell already imports.
  */
 export const shellCss = baseCss + toolbarCss + panelsCss + layersCss + optionsCss + canvasCss
+
+export { vendorChromeCss }
