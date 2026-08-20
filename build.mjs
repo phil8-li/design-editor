@@ -2,8 +2,8 @@
 /**
  * Bundles the design-editor overlay.
  *
- * The output is concatenated onto the vendored React Rewrite bundle by
- * `scripts/run-design-editor.mjs`, so it must be a self-contained IIFE with no
+ * The output is concatenated onto the vendored React Rewrite bundle by the
+ * package runtime, so it must be a self-contained IIFE with no
  * imports and no globals beyond the bridge it reads from `window`.
  */
 

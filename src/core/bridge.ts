@@ -1,7 +1,7 @@
 /**
  * Typed access to the React Rewrite engine.
  *
- * `scripts/run-design-editor.mjs` patches the vendored overlay bundle to hang
+ * The package runtime patches the vendored overlay bundle to hang
  * this object off `window`. We never import the vendor bundle directly — it is
  * a pinned, minified artifact — so every internal we depend on is listed here
  * and shape-checked by the patch's `requiredFragments` gate.

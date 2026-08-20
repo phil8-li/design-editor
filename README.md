@@ -18,14 +18,18 @@ leaves no trace in your source tree.
 
 ## Install
 
-The package is not published. Install the directory as a local development
-dependency; its prepare script builds the browser bundle.
+The package is currently distributed privately. Install the directory or a
+packed tarball as a development dependency; its prepare script builds the
+browser bundle when installing from source.
 
-1. Copy `design-editor/` into your project root, then install it:
+1. Install it from a sibling checkout:
 
    ```sh
-   npm i -D ./design-editor
+   npm i -D ../design-editor
    ```
+
+   To hand off one immutable artifact instead, run `npm pack` in this package
+   and install the resulting `.tgz` file.
 
 2. Add the scripts:
 
@@ -33,7 +37,6 @@ dependency; its prepare script builds the browser bundle.
    {
      "scripts": {
        "design": "design-editor --no-open 3000",
-       "design:build": "node design-editor/build.mjs",
        "verify:design-editor": "design-editor --verify"
      }
    }
@@ -42,7 +45,7 @@ dependency; its prepare script builds the browser bundle.
 3. When developing the package itself, rebuild after a change under its `src/`:
 
    ```sh
-   npm run design:build
+   npm run build
    ```
 
 4. Ignore the state directory:
@@ -69,7 +72,7 @@ design-editor [appPort] [options]
   --config <path>         Config file (default: nearest one above cwd)
   --proxy-port <n>        Port for the editing proxy the browser loads
   --ws-port <n>           Port for the source-edit WebSocket
-  --host <host>           Dev server host (default: localhost)
+  --host <host>           Dev server host (default: 127.0.0.1)
   --open / --no-open      Open a browser on start (default: no)
   --verify                Check the vendor patch still applies, then exit
   --print-config          Print the resolved config as JSON, then exit
@@ -177,16 +180,28 @@ nothing else. Ship it nowhere near production.
   `.env.local`, which lives in the same project root as your components. Keep
   `source.extensions` restrictive.
 
+## Performance boundary
+
+The host application never imports this package. A normal development server
+and every production build therefore ship zero editor JavaScript; the editor
+bundle is injected only by the separate proxy started with `design-editor`.
+
+While that proxy is active, selection geometry is tracked only while an element
+is selected, hovered, or highlighted. The shared animation-frame loop stops
+when idle, batches layout reads before overlay writes, and reads computed styles
+only while Option/Alt measurement is active.
+
 ## Testing
 
 ```sh
-node design-editor/test/ui-change-cases.mjs
+npm test
 ```
 
-Levels 1, 2, and 4 run offline against throwaway fixtures. Level 3 needs a
-running editor and edits one real component, then asserts the file is restored
-byte for byte. Ports and the API prefix come from the same config the launcher
-used, via `endpoint.json`.
+The package suite covers its npm-bin entry point, options, selection, shell,
+and offline source translation. To exercise the live write path, run
+`node test/ui-change-cases.mjs` while the editor is running. Its live levels use
+throwaway fixtures and restore the one real component they touch byte for byte.
+Ports and the API prefix come from the launcher's `endpoint.json`.
 
 ## Layout
 

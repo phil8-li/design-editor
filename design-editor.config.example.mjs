@@ -13,7 +13,7 @@ const config = {
   app: {
     // Dev server port. Omit to pass one on the command line instead.
     port: 3000,
-    host: "localhost",
+    host: "127.0.0.1",
     open: false,
   },
 

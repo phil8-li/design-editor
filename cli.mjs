@@ -10,8 +10,9 @@
  */
 
 import net from "node:net"
+import fs from "node:fs"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath } from "node:url"
 
 import { loadConfig } from "./config.mjs"
 import { launch, readOverlaySource, resolveVendor } from "./runtime/launcher.mjs"
@@ -23,7 +24,7 @@ const USAGE = `Usage: design-editor [appPort] [options]
   --config <path>         Config file (default: nearest design-editor.config.mjs above cwd)
   --proxy-port <n>        Port for the editing proxy the browser loads
   --ws-port <n>           Port for the source-edit WebSocket
-  --host <host>           Dev server host (default: localhost)
+  --host <host>           Dev server host (default: 127.0.0.1)
   --open / --no-open      Open a browser on start (default: no)
   --verify                Check the vendor patch still applies, then exit
   --print-config          Print the resolved config as JSON, then exit
@@ -130,7 +131,18 @@ export async function main(argv = process.argv.slice(2)) {
   })
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/** npm exposes package bins through a symlink in `node_modules/.bin`. Compare
+ * canonical paths so the installed command boots just like `node cli.mjs`. */
+function isDirectRun(entry = process.argv[1]) {
+  if (!entry) return false
+  try {
+    return fs.realpathSync(entry) === fs.realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+}
+
+if (isDirectRun()) {
   try {
     await main()
   } catch (error) {

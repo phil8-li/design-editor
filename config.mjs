@@ -60,7 +60,7 @@ const V3_SPACING_SCALE = {
 }
 
 export const DEFAULT_CONFIG = {
-  app: { port: null, host: "localhost", open: false, openQuery: "design" },
+  app: { port: null, host: "127.0.0.1", open: false, openQuery: "design" },
   ports: { proxy: "auto", ws: "auto" },
   projectRoot: null,
   stateDir: ".local/design-editor",

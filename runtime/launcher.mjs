@@ -76,12 +76,36 @@ export function readOverlaySource(config) {
   return fs.readFileSync(resolveVendor(config).overlay, "utf8")
 }
 
+/**
+ * React Rewrite 0.1.1 identifies Next only by the presence of a next.config
+ * file. A valid create-next-app project does not need one, so its detector
+ * rejects the framework before it ever looks at the installed `next` package.
+ * Report one virtual config path only during that synchronous detection pass;
+ * nothing is written into the host project and every other filesystem probe
+ * keeps its real answer.
+ */
+function virtualNextConfig(config) {
+  const manifestPath = path.join(config.projectRoot, "package.json")
+  let manifest
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+  } catch {
+    return null
+  }
+  const dependencies = { ...manifest.dependencies, ...manifest.devDependencies }
+  if (!dependencies.next) return null
+
+  const names = ["next.config.js", "next.config.ts", "next.config.mjs"]
+  if (names.some((name) => fs.existsSync(path.join(config.projectRoot, name)))) return null
+  return path.join(config.projectRoot, "next.config.mjs")
+}
+
 function readChromeBundle() {
   try {
     return fs.readFileSync(CHROME_BUNDLE, "utf8")
   } catch {
     console.warn(
-      "[design-editor] chrome bundle missing — run `node design-editor/build.mjs`"
+      "[design-editor] chrome bundle missing — run `npm run build` in the package"
     )
     return ""
   }
@@ -169,6 +193,7 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
   }
 
   const originalCreateReadStream = fs.createReadStream
+  const originalExistsSync = fs.existsSync
   const originalCreateServer = http.createServer
   const originalListen = net.Server.prototype.listen
   const originalWriteHead = http.ServerResponse.prototype.writeHead
@@ -342,6 +367,14 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
   // ours from ever disagreeing about which files are in scope.
   if (path.resolve(process.cwd()) !== config.projectRoot) process.chdir(config.projectRoot)
 
+  const virtualConfig = virtualNextConfig(config)
+  if (virtualConfig) {
+    fs.existsSync = function existsWithConfig(filePath) {
+      return path.resolve(String(filePath)) === virtualConfig || originalExistsSync.call(this, filePath)
+    }
+    syncBuiltinESMExports()
+  }
+
   process.argv = [
     process.argv[0],
     vendor.entry,
@@ -351,5 +384,12 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
     ...(verbose ? ["--verbose"] : []),
   ]
 
-  await import(pathToFileURL(vendor.entry).href)
+  try {
+    await import(pathToFileURL(vendor.entry).href)
+  } finally {
+    if (virtualConfig) {
+      fs.existsSync = originalExistsSync
+      syncBuiltinESMExports()
+    }
+  }
 }
