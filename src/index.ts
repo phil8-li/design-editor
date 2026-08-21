@@ -8,6 +8,7 @@
 
 import { whenBridgeReady } from "./core/bridge"
 import { createContext } from "./core/context"
+import { whenHostHydrated } from "./core/host-readiness"
 import { mountShell } from "./shell/shell"
 import { installToolbar } from "./shell/toolbar"
 import { installCanvas } from "./canvas"
@@ -18,7 +19,7 @@ import { installOptionsBrowser } from "./options/inventory-panel"
 async function boot(): Promise<void> {
   let bridge
   try {
-    bridge = await whenBridgeReady()
+    ;[bridge] = await Promise.all([whenBridgeReady(), whenHostHydrated()])
   } catch (error) {
     console.warn("[design-editor]", error)
     return
@@ -40,8 +41,4 @@ async function boot(): Promise<void> {
   console.info("[design-editor] Figma-style overlay ready")
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => void boot())
-} else {
-  void boot()
-}
+void boot()

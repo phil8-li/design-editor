@@ -12,6 +12,10 @@ leaves no trace in your source tree.
 
 - Node >= 20.9
 - A Next.js app with a dev server you can start yourself
+- App Router and Pages Router are both supported, and neither requires a
+  `next.config` file. The overlay can inspect any Next app; durable layout and
+  appearance edits currently write Tailwind utilities, so full visual editing
+  requires Tailwind. Text edits do not.
 - The package installs `react-rewrite-cli@0.1.1` exactly. The runtime patches
   that build's minified bundle at serve time against 22 pinned anchors; a
   different version will not patch, and the launcher tells you so instead.
@@ -195,10 +199,14 @@ only while Option/Alt measurement is active.
 
 ```sh
 npm test
+npm run test:standalone-next
 ```
 
 The package suite covers its npm-bin entry point, options, selection, shell,
-and offline source translation. To exercise the live write path, run
+hydration readiness, and offline source translation. The standalone test packs
+the package, installs it into a throwaway config-free Next app, and verifies the
+isolated proxy and source-write path in both the App and Pages Routers. To
+exercise the live write path against the current app, run
 `node test/ui-change-cases.mjs` while the editor is running. Its live levels use
 throwaway fixtures and restore the one real component they touch byte for byte.
 Ports and the API prefix come from the launcher's `endpoint.json`.
