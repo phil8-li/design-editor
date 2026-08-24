@@ -3,8 +3,10 @@ import {
   authoredTokenMatches,
   computedTokenMatches,
   textStyleSignature,
+  tokenCssProperty,
   tokenSourceSpelling,
   tokenStyleWrites,
+  tokensForProperty,
   type DesignSystemMatch,
   type DesignTokenProperty,
 } from "../../core/design-system"
@@ -12,7 +14,7 @@ import { el } from "../../core/dom"
 import { toSourceRef } from "../../core/bridge"
 import { elementKey } from "../../core/store"
 import type { Selection } from "../../core/types"
-import { section, selectField } from "./field"
+import { isExpanded, miniButton, section, selectField, setExpanded } from "./field"
 import type { InspectorSection, SectionContext } from "./index"
 
 interface RowSpec {
@@ -22,6 +24,28 @@ interface RowSpec {
   inlineValue: string
   computedValue: string
   displayValue: string
+}
+
+const SIDES = ["top", "right", "bottom", "left"] as const
+const CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"] as const
+
+/** Panel-level, so opening the precision group survives the rebuild each write causes. */
+const PRECISION_EXPANDER = "design-system.precision"
+
+/**
+ * Why a token this row lists is offered but inert. The engine only knows "no
+ * writes"; the sentence belongs here, before the click, because a toast
+ * afterwards is how a designer ends up trying all nine springs one at a time.
+ */
+const UNWRITABLE_REASON: Partial<Record<DesignTokenProperty, string>> = {
+  "motion-duration": "CSS carries a duration but not a spring's bounce",
+}
+
+/** Computed style reports no value for a shorthand, so these read back from their parts. */
+const LONGHANDS: Partial<Record<DesignTokenProperty, readonly string[]>> = {
+  "corner-radius": CORNERS.map((corner) => `border-${corner}-radius`),
+  padding: SIDES.map((side) => `padding-${side}`),
+  margin: SIDES.map((side) => `margin-${side}`),
 }
 
 function directText(element: Element): boolean {
@@ -37,6 +61,15 @@ function uniform(values: string[]): string | null {
 function number(value: string): number {
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function hasUtility(element: Element, stem: string): boolean {
+  return Array.from(element.classList).some((name) => new RegExp(`^${stem}(?:-|$)`).test(name))
+}
+
+/** Only a flex or grid box has a gap to bind; on anything else the row would be inert. */
+function laysOutChildren(computed: CSSStyleDeclaration): boolean {
+  return /^(inline-)?(flex|grid)$/.test(computed.display)
 }
 
 function describeElement(context: SectionContext, element: Element): Selection {
@@ -63,14 +96,11 @@ function iconTarget(context: SectionContext): Selection | null {
   return svg && !directText(element) ? describeElement(context, svg) : null
 }
 
-function tokenList(property: DesignTokenProperty): DesignSystemToken[] {
-  const ds = config.designSystem
-  if (property === "text-style") return [...ds.textStyles, ...ds.uiTextStyles]
-  if (property === "fill-color" || property === "text-color" || property === "stroke-color") return ds.colors
-  if (property === "corner-radius") return ds.radii
-  if (property === "shadow") return ds.effects
-  if (property === "icon-size") return ds.icons
-  return ds.spacing
+/** `fill`/`stroke` paint nothing on an HTML box, so those rows need a real SVG. */
+function svgTarget(context: SectionContext): Selection | null {
+  if (context.selection.element.closest("svg")) return context.selection
+  const icon = iconTarget(context)
+  return icon && icon.element instanceof SVGElement ? icon : null
 }
 
 function resolvedCssValue(element: Element, property: string, variable: string): string {
@@ -86,16 +116,25 @@ function resolvedCssValue(element: Element, property: string, variable: string):
   return resolved || raw
 }
 
-function cssProperty(property: DesignTokenProperty): string {
-  if (property === "fill-color") return "background-color"
-  if (property === "text-color") return "color"
-  if (property === "stroke-color") return "border-color"
-  if (property === "corner-radius") return "border-radius"
-  if (property === "shadow") return "box-shadow"
-  if (property === "gap") return "gap"
-  if (property === "padding") return "padding"
-  if (property === "icon-size") return "width"
-  return "font-size"
+function row(
+  property: DesignTokenProperty,
+  label: string,
+  target: Selection,
+  style: CSSStyleDeclaration
+): RowSpec {
+  const css = tokenCssProperty(property)
+  const parts = LONGHANDS[property]
+  const value = parts
+    ? uniform(parts.map((name) => style.getPropertyValue(name).trim()))
+    : style.getPropertyValue(css).trim()
+  return {
+    property,
+    label,
+    target,
+    inlineValue: target.element.style.getPropertyValue(css),
+    computedValue: value ?? "mixed",
+    displayValue: value === null ? "Mixed" : value || "—",
+  }
 }
 
 function tokenResolvedLabel(spec: RowSpec, token: DesignSystemToken): string {
@@ -107,7 +146,7 @@ function tokenResolvedLabel(spec: RowSpec, token: DesignSystemToken): string {
     return `${shape.fontSize ?? "?"}/${shape.lineHeight ?? "?"}${weight}`
   }
   const writes = tokenStyleWrites(spec.property, token)
-  if (!writes.length) return "unavailable"
+  if (!writes.length) return "not writable"
   const first = writes[0].value
   const variables = first.match(/^var\((--[\w-]+)\)$/)
   return variables
@@ -123,12 +162,12 @@ function matchFor(spec: RowSpec): DesignSystemMatch[] {
     spec.property,
     spec.computedValue,
     config.designSystem,
-    (variable) => resolvedCssValue(spec.target.element, cssProperty(spec.property), variable)
+    (variable) => resolvedCssValue(spec.target.element, tokenCssProperty(spec.property), variable)
   )
 }
 
 function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
-  const tokens = tokenList(spec.property)
+  const tokens = tokensForProperty(spec.property)
   const matches = matchFor(spec)
   const selected = matches.length === 1 ? matches[0].token.id : ""
   const custom = matches.length > 1
@@ -164,64 +203,49 @@ function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
         .map((match) => `${match.token.name} (${match.source})`)
         .join(" · ")}`
     : `Custom value: ${spec.displayValue}`
+  const inert = tokens.filter((token) => !tokenStyleWrites(spec.property, token).length)
 
   return el("div", { class: "de-stack" }, [
     el("div", { class: "de-layout-group-title" }, [spec.label]),
     picker,
     el("div", { class: "de-hint" }, [status]),
+    inert.length
+      ? el("div", { class: "de-hint" }, [
+          `Not writable here — ${UNWRITABLE_REASON[spec.property] ?? "no CSS declaration carries it"}: ${inert
+            .map((token) => token.name)
+            .join(", ")}`,
+        ])
+      : null,
   ])
 }
 
-function rowSpecs(context: SectionContext): RowSpec[] {
+/** The axes a designer reaches for on any element, in Figma's paint-then-box order. */
+function commonRows(context: SectionContext): RowSpec[] {
   const { selection, computed } = context
   const element = selection.element
-  const rows: RowSpec[] = [
-    {
-      property: "fill-color",
-      label: "Fill color",
-      target: selection,
-      inlineValue: element.style.getPropertyValue("background-color"),
-      computedValue: computed.backgroundColor,
-      displayValue: computed.backgroundColor,
-    },
-  ]
+  const rows: RowSpec[] = [row("fill-color", "Fill color", selection, computed)]
 
   if (directText(element)) {
     const letterSpacing = Number.parseFloat(computed.letterSpacing)
-    rows.push(
-      {
-        property: "text-color",
-        label: "Text color",
-        target: selection,
-        inlineValue: element.style.getPropertyValue("color"),
-        computedValue: computed.color,
-        displayValue: computed.color,
-      },
-      {
-        property: "text-style",
-        label: "Text style",
-        target: selection,
-        inlineValue: ["font-size", "line-height", "font-weight", "letter-spacing"]
-          .map((property) => element.style.getPropertyValue(property))
-          .join(" "),
-        computedValue: textStyleSignature({
-          fontSize: number(computed.fontSize),
-          lineHeight: number(computed.lineHeight),
-          fontWeight: number(computed.fontWeight),
-          letterSpacing: Number.isFinite(letterSpacing) ? letterSpacing : 0,
-        }),
-        displayValue: `${computed.fontSize} / ${computed.lineHeight} · ${computed.fontWeight}`,
-      }
-    )
+    rows.push(row("text-color", "Text color", selection, computed), {
+      property: "text-style",
+      label: "Text style",
+      target: selection,
+      inlineValue: ["font-size", "line-height", "font-weight", "letter-spacing"]
+        .map((property) => element.style.getPropertyValue(property))
+        .join(" "),
+      computedValue: textStyleSignature({
+        fontSize: number(computed.fontSize),
+        lineHeight: number(computed.lineHeight),
+        fontWeight: number(computed.fontWeight),
+        letterSpacing: Number.isFinite(letterSpacing) ? letterSpacing : 0,
+      }),
+      displayValue: `${computed.fontSize} / ${computed.lineHeight} · ${computed.fontWeight}`,
+    })
   }
 
-  const borderWidth = Math.max(
-    number(computed.borderTopWidth),
-    number(computed.borderRightWidth),
-    number(computed.borderBottomWidth),
-    number(computed.borderLeftWidth)
-  )
-  if (borderWidth > 0 || Array.from(element.classList).some((name) => /^border(?:-|$)/.test(name))) {
+  const borderWidth = Math.max(...SIDES.map((side) => number(computed.getPropertyValue(`border-${side}-width`))))
+  if (borderWidth > 0 || hasUtility(element, "border")) {
     rows.push({
       property: "stroke-color",
       label: "Stroke color",
@@ -231,51 +255,27 @@ function rowSpecs(context: SectionContext): RowSpec[] {
       displayValue: computed.borderTopColor,
     })
   }
-
-  const radii = [computed.borderTopLeftRadius, computed.borderTopRightRadius, computed.borderBottomRightRadius, computed.borderBottomLeftRadius]
-  const radius = uniform(radii)
-  rows.push({
-    property: "corner-radius",
-    label: "Corner radius",
-    target: selection,
-    inlineValue: element.style.getPropertyValue("border-radius"),
-    computedValue: radius ?? "mixed",
-    displayValue: radius ?? "Mixed",
-  })
-
-  if (computed.boxShadow !== "none" || Array.from(element.classList).some((name) => /^shadow(?:-|$)/.test(name))) {
-    rows.push({
-      property: "shadow",
-      label: "Shadow / effect",
-      target: selection,
-      inlineValue: element.style.getPropertyValue("box-shadow"),
-      computedValue: computed.boxShadow,
-      displayValue: computed.boxShadow,
-    })
+  // A Tailwind v4 ring is a box-shadow, so the rendered proof it exists is the
+  // custom property that shadow reads rather than any border on the box.
+  if (computed.getPropertyValue("--tw-ring-shadow").trim() || hasUtility(element, "ring")) {
+    rows.push(row("ring-color", "Ring color", selection, computed))
+  }
+  if ((number(computed.outlineWidth) > 0 && computed.outlineStyle !== "none") || hasUtility(element, "outline")) {
+    rows.push(row("outline-color", "Outline color", selection, computed))
   }
 
-  if (computed.display === "flex" || computed.display === "inline-flex" || computed.display === "grid" || computed.display === "inline-grid") {
-    rows.push({
-      property: "gap",
-      label: "Container gap",
-      target: selection,
-      inlineValue: element.style.getPropertyValue("gap"),
-      computedValue: computed.gap,
-      displayValue: computed.gap,
-    })
+  const svg = svgTarget(context)
+  if (svg) {
+    const svgStyle = getComputedStyle(svg.element)
+    rows.push(row("svg-fill", "SVG fill", svg, svgStyle), row("svg-stroke", "SVG stroke", svg, svgStyle))
   }
 
-  if (element.childElementCount > 0) {
-    const padding = uniform([computed.paddingTop, computed.paddingRight, computed.paddingBottom, computed.paddingLeft])
-    rows.push({
-      property: "padding",
-      label: "Uniform padding",
-      target: selection,
-      inlineValue: element.style.getPropertyValue("padding"),
-      computedValue: padding ?? "mixed",
-      displayValue: padding ?? "Mixed",
-    })
+  rows.push(row("corner-radius", "Corner radius", selection, computed))
+  if (computed.boxShadow !== "none" || hasUtility(element, "shadow")) {
+    rows.push(row("shadow", "Shadow / effect", selection, computed))
   }
+  if (laysOutChildren(computed)) rows.push(row("gap", "Container gap", selection, computed))
+  if (element.childElementCount > 0) rows.push(row("padding", "Uniform padding", selection, computed))
 
   const icon = iconTarget(context)
   if (icon) {
@@ -290,11 +290,69 @@ function rowSpecs(context: SectionContext): RowSpec[] {
     })
   }
 
-  return rows.filter((row) => tokenList(row.property).length > 0)
+  if (number(computed.transitionDuration) > 0) {
+    rows.push(row("motion-duration", "Motion duration", selection, computed))
+  }
+  return rows
+}
+
+/** The per-side, per-corner and per-axis half of the vocabulary — precision on request. */
+function precisionRows(context: SectionContext): RowSpec[] {
+  const { selection, computed } = context
+  const element = selection.element
+  const rows: RowSpec[] = []
+
+  const radii = CORNERS.map((corner) => computed.getPropertyValue(`border-${corner}-radius`))
+  if (radii.some((value) => number(value) > 0) || hasUtility(element, "rounded")) {
+    rows.push(
+      ...CORNERS.map((corner) =>
+        row(`corner-radius-${corner}`, `Radius ${corner.replace("-", " ")}`, selection, computed)
+      )
+    )
+  }
+  if (laysOutChildren(computed)) {
+    rows.push(row("row-gap", "Row gap", selection, computed), row("column-gap", "Column gap", selection, computed))
+  }
+  if (element.childElementCount > 0) {
+    rows.push(...SIDES.map((side) => row(`padding-${side}`, `Padding ${side}`, selection, computed)))
+  }
+  rows.push(
+    row("margin", "Uniform margin", selection, computed),
+    ...SIDES.map((side) => row(`margin-${side}`, `Margin ${side}`, selection, computed))
+  )
+  return rows
 }
 
 export const designSystemSection: InspectorSection = (context) => {
-  const rows = rowSpecs(context)
-  if (!rows.length) return null
-  return section("Design system", el("div", { class: "de-stack" }, rows.map((spec) => tokenRow(context, spec))))
+  const stocked = (specs: RowSpec[]) => specs.filter((spec) => tokensForProperty(spec.property).length > 0)
+  const common = stocked(commonRows(context))
+  const precision = stocked(precisionRows(context))
+  if (!common.length && !precision.length) return null
+
+  const open = isExpanded(PRECISION_EXPANDER)
+  const toggle = miniButton({
+    label: open ? "Hide per-side tokens" : "Show per-side tokens",
+    glyph: open ? "⊟" : "⊞",
+    pressed: open,
+    onClick: () => {
+      setExpanded(PRECISION_EXPANDER, !open)
+      context.invalidate()
+    },
+  })
+
+  const body = el("div", { class: "de-stack" }, [
+    ...common.map((spec) => tokenRow(context, spec)),
+    precision.length
+      ? el("div", { class: "de-layout-group" }, [
+          el("div", { class: "de-row" }, [
+            el("div", { class: "de-layout-group-title", style: "flex:1" }, ["Per side, corner and axis"]),
+            toggle,
+          ]),
+          // Built only when open: twenty selects a designer is not looking at
+          // still cost a resolved-value probe per option, on every panel rebuild.
+          ...(open ? precision.map((spec) => tokenRow(context, spec)) : []),
+        ])
+      : null,
+  ])
+  return section("Design system", body)
 }

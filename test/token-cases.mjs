@@ -415,11 +415,18 @@ check("every design-system property has a category and a way into source", () =>
 
 console.log("\nInspector controls")
 
-await checkAsync("token controls are named and keep focus across their write", async () => {
-  const dom = new JSDOM(
-    `<!doctype html><html><body><div id="target" class="grid grid-cols-1 border bg-background gap-4 p-4 md:grid-cols-2 dark:md:hover:gap-6 xl:grid-cols-4" style="display:grid;gap:16px;padding:16px;background-color:var(--color-background);border:1px solid var(--sem-border-primary);border-radius:var(--radius-xl);box-shadow:var(--elev-2)">Hello<span></span></div></body></html>`,
-    { pretendToBeVisual: true, url: "http://localhost/" }
-  )
+/**
+ * Mounts the real inspector over a fixture and hands back the panel.
+ *
+ * The sections read `getComputedStyle`, `SVGElement` and `Node` off the global
+ * scope the way they do in the browser, so the JSDOM's own have to be installed
+ * there before the panel is built rather than passed in.
+ */
+async function withInspector(markup, run) {
+  const dom = new JSDOM(`<!doctype html><html><body>${markup}</body></html>`, {
+    pretendToBeVisual: true,
+    url: "http://localhost/",
+  })
   const { window } = dom
   for (const key of [
     "window", "document", "navigator", "Node", "Element", "HTMLElement",
@@ -434,7 +441,6 @@ await checkAsync("token controls are named and keep focus across their write", a
     })
   }
 
-  const target = window.document.getElementById("target")
   const right = window.document.createElement("aside")
   right.setAttribute("data-design-editor", "")
   window.document.body.append(right)
@@ -464,14 +470,55 @@ await checkAsync("token controls are named and keep focus across their write", a
   })
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => ({ ok: true, json: async () => ({}) })
+  const paint = () => new Promise((resolve) =>
+    window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))
+  )
   try {
     helpers.installInspector(editor)
+    const target = window.document.getElementById("target")
     editor.select(target)
-    const paint = () => new Promise((resolve) =>
-      window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))
-    )
     await paint()
+    // The precision expander is panel-level memory that outlives a fixture, so
+    // each case starts collapsed rather than wherever its predecessor left it.
+    const open = right.querySelector('[aria-label="Hide per-side tokens"]')
+    if (open) {
+      open.click()
+      await paint()
+    }
+    await run({ window, right, target, pending, paint })
+  } finally {
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+}
 
+const rowLabels = (right) =>
+  [...right.querySelectorAll('[data-de-field^="design-system."]')].map((node) =>
+    node.getAttribute("aria-label")
+  )
+
+function expectRows(right, { present = [], absent = [] }) {
+  const labels = rowLabels(right)
+  for (const label of present) assert.ok(labels.includes(label), `${label} is missing`)
+  for (const label of absent) assert.equal(labels.includes(label), false, `${label} should not be here`)
+}
+
+/** Picks a token by id in a row and lets the panel rebuild around the write. */
+async function pick({ window, right, paint }, property, tokenId) {
+  const select = right.querySelector(`[data-de-field="design-system.${property}"]`)
+  assert.ok(select, `${property} has no row to pick in`)
+  select.focus()
+  select.value = tokenId
+  select.dispatchEvent(new window.Event("change", { bubbles: true }))
+  await paint()
+  return select
+}
+
+const GRID_FIXTURE = `<div id="target" class="grid grid-cols-1 border bg-background gap-4 p-4 md:grid-cols-2 dark:md:hover:gap-6 xl:grid-cols-4" style="display:grid;gap:16px;padding:16px;background-color:var(--color-background);border:1px solid var(--sem-border-primary);border-radius:var(--radius-xl);box-shadow:var(--elev-2)">Hello<span></span></div>`
+
+await checkAsync("token controls are named and keep focus across their write", async () => {
+  await withInspector(GRID_FIXTURE, async (harness) => {
+    const { window, right, target, pending } = harness
     for (const label of [
       "Fill color token", "Text color token", "Text style token", "Stroke color token",
       "Corner radius token", "Shadow / effect token", "Container gap token",
@@ -483,10 +530,7 @@ await checkAsync("token controls are named and keep focus across their write", a
     // every commit rebuilds the whole panel, and a select that loses focus makes
     // walking a column of token rows by keyboard impossible.
     const before = right.querySelector('[data-de-field="design-system.corner-radius"]')
-    before.focus()
-    before.value = "radius:radius-sm"
-    before.dispatchEvent(new window.Event("change", { bubbles: true }))
-    await paint()
+    await pick(harness, "corner-radius", "radius:radius-sm")
 
     const after = right.querySelector('[data-de-field="design-system.corner-radius"]')
     assert.notEqual(after, before, "the inspector did not rebuild")
@@ -494,10 +538,82 @@ await checkAsync("token controls are named and keep focus across their write", a
     assert.equal(after.value, "radius:radius-sm", "the row does not read back as bound")
     assert.match(target.style.borderRadius, /var\(--radius-sm\)/)
     assert.ok(pending.length > 0, "token pick did not queue a source operation")
-  } finally {
-    globalThis.fetch = originalFetch
-    dom.window.close()
-  }
+  })
+})
+
+// Every axis this box can actually carry, and nothing it cannot: a ring, an
+// outline and a transition are all present, an SVG paint and an icon are not.
+const PAINTED_FIXTURE = `<div id="target" class="flex border p-4" style="display:flex;gap:16px;padding:16px;margin:8px;border:1px solid #000;border-top-left-radius:8px;border-top-right-radius:8px;border-bottom-right-radius:8px;border-bottom-left-radius:8px;box-shadow:0 1px 2px #0002;outline-width:2px;outline-style:solid;transition-duration:0.15s;--tw-ring-shadow:0 0 0 2px #00f">Hello<span></span></div>`
+
+const COMMON_LABELS = [
+  "Fill color token", "Text color token", "Text style token", "Stroke color token",
+  "Ring color token", "Outline color token", "Corner radius token", "Shadow / effect token",
+  "Container gap token", "Uniform padding token", "Motion duration token",
+]
+const PRECISION_LABELS = [
+  "Radius top left token", "Radius top right token", "Radius bottom right token",
+  "Radius bottom left token", "Row gap token", "Column gap token",
+  "Padding top token", "Padding right token", "Padding bottom token", "Padding left token",
+  "Uniform margin token", "Margin top token", "Margin right token", "Margin bottom token",
+  "Margin left token",
+]
+
+await checkAsync("precision axes stay folded until asked for, then write like any other row", async () => {
+  await withInspector(PAINTED_FIXTURE, async (harness) => {
+    const { right, target, pending } = harness
+    expectRows(right, {
+      present: COMMON_LABELS,
+      // Twenty always-visible selects is a worse inspector than nine, so the
+      // per-side half is absent from the DOM rather than merely styled away.
+      absent: [...PRECISION_LABELS, "SVG fill token", "SVG stroke token", "Icon size token"],
+    })
+
+    right.querySelector('[aria-label="Show per-side tokens"]').click()
+    await harness.paint()
+    expectRows(right, { present: [...COMMON_LABELS, ...PRECISION_LABELS] })
+
+    const queued = pending.length
+    await pick(harness, "margin-top", "spacing:spacing-lg")
+    assert.equal(target.style.marginTop, "16px", "the precision row did not paint the preview")
+    assert.ok(pending.length > queued, "the precision row did not queue a source operation")
+
+    await pick(harness, "ring-color", "color:background-primary")
+    assert.equal(
+      target.style.getPropertyValue("--tw-ring-color"),
+      "var(--sem-background-primary)",
+      "a Tailwind v4 ring recolours through its custom property"
+    )
+    assert.ok(pending.length > queued + 1, "the ring row did not queue a source operation")
+  })
+})
+
+await checkAsync("an icon host reaches its own SVG's paint", async () => {
+  await withInspector(
+    `<button id="target" class="p-2" style="padding:8px"><svg style="fill:#ff0000;stroke:#0000ff"></svg></button>`,
+    async ({ right }) => {
+      expectRows(right, {
+        present: ["SVG fill token", "SVG stroke token", "Icon size token"],
+        // No text node of its own, so the two type rows would edit nothing.
+        absent: ["Text color token", "Text style token"],
+      })
+    }
+  )
+})
+
+await checkAsync("a spring that CSS cannot carry says so before the click", async () => {
+  await withInspector(PAINTED_FIXTURE, async ({ right }) => {
+    const select = right.querySelector('[data-de-field="design-system.motion-duration"]')
+    const label = (id) => [...select.options].find((option) => option.value === id)?.label ?? ""
+    assert.match(label("motion:crossfade"), /150ms/)
+    assert.match(label("motion:lively"), /not writable/)
+
+    // The toast fires after the click, which is one spring too late: the row
+    // itself has to name the seven that cannot land and why.
+    const hints = [...select.parentElement.querySelectorAll(".de-hint")].map((node) => node.textContent)
+    assert.equal(hints.length, 2, "the motion row lost its unwritable-token hint")
+    assert.match(hints[1], /bounce/)
+    assert.match(hints[1], /lively/)
+  })
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)
