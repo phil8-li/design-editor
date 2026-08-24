@@ -363,6 +363,22 @@ check("the axes beyond the first nine write a real CSS property and a real class
   assert.equal(replaces("fill", "fill-current"), true)
 })
 
+check("font family and weight patterns cannot replace each other", () => {
+  const family = helpers.toClassUpdate("font-family", "Inter")
+  const weight = helpers.toClassUpdate("font-weight", "650")
+  assert.ok(family?.classPattern)
+  assert.ok(weight?.classPattern)
+
+  const familyPattern = new RegExp(family.classPattern)
+  assert.equal(familyPattern.test("font-[650]"), false)
+  assert.equal(familyPattern.test("font-[number:var(--type-h1-weight)]"), false)
+
+  const weightPattern = new RegExp(weight.classPattern)
+  assert.equal(weightPattern.test("font-sans"), false)
+  assert.equal(weightPattern.test("font-[Inter]"), false)
+  assert.equal(weightPattern.test("font-[family-name:var(--font-family)]"), false)
+})
+
 check("a bouncing spring writes nothing rather than a duration that lies", () => {
   const flat = catalog.motion.filter((token) => token.values.default.bounce === 0)
   assert.deepEqual(flat.map((token) => token.name), ["crossfade", "calm"])
@@ -598,6 +614,23 @@ await checkAsync("an icon host reaches its own SVG's paint", async () => {
       })
     }
   )
+})
+
+await checkAsync("Tailwind's registered ring initial is not mistaken for a ring", async () => {
+  // v4 registers --tw-ring-shadow with an initial value, so it resolves on
+  // EVERY element: 1958 of 1958 on /ds when this was measured in the browser.
+  // A row keyed on "the property is non-empty" is therefore a row on the whole
+  // document — inert, and the disclosure logic doing nothing at all.
+  await withInspector(
+    `<div id="target" class="p-4" style="padding:16px;--tw-ring-shadow:0 0 #0000">Hello<span></span></div>`,
+    async ({ right }) => {
+      expectRows(right, { present: ["Uniform padding token"], absent: ["Ring color token"] })
+    }
+  )
+  // ...and the row is still there when the element really carries one.
+  await withInspector(PAINTED_FIXTURE, async ({ right }) => {
+    expectRows(right, { present: ["Ring color token"] })
+  })
 })
 
 await checkAsync("a spring that CSS cannot carry says so before the click", async () => {

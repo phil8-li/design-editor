@@ -32,6 +32,9 @@ const CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"] as cons
 /** Panel-level, so opening the precision group survives the rebuild each write causes. */
 const PRECISION_EXPANDER = "design-system.precision"
 
+/** Tailwind v4's registered initial for `--tw-ring-shadow`: present, but not a ring. */
+const RING_SHADOW_NONE = "0 0 #0000"
+
 /**
  * Why a token this row lists is offered but inert. The engine only knows "no
  * writes"; the sentence belongs here, before the click, because a toast
@@ -256,8 +259,12 @@ function commonRows(context: SectionContext): RowSpec[] {
     })
   }
   // A Tailwind v4 ring is a box-shadow, so the rendered proof it exists is the
-  // custom property that shadow reads rather than any border on the box.
-  if (computed.getPropertyValue("--tw-ring-shadow").trim() || hasUtility(element, "ring")) {
+  // custom property that shadow reads rather than any border on the box. But v4
+  // REGISTERS that property with an initial value, so it resolves on every
+  // element in the document — measured 1958 of 1958 on /ds. Only a value other
+  // than the transparent initial is a ring; a non-empty string is just Tailwind.
+  const ringShadow = computed.getPropertyValue("--tw-ring-shadow").trim()
+  if ((ringShadow && ringShadow !== RING_SHADOW_NONE) || hasUtility(element, "ring")) {
     rows.push(row("ring-color", "Ring color", selection, computed))
   }
   if ((number(computed.outlineWidth) > 0 && computed.outlineStyle !== "none") || hasUtility(element, "outline")) {
