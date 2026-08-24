@@ -157,7 +157,7 @@ const SCALARS: Record<
    * explicit pattern and only replace a class of their own kind.
    */
   color: { prefix: "text", pattern: colorClass("text") },
-  "font-size": { prefix: "text", pattern: `^text-(\\[(?:[^\\]]*(?:px|rem|em|ch|%)|var\\([^\\]]+\\))\\]|${config.tailwind.fontSizes.join("|")})$` },
+  "font-size": { prefix: "text", pattern: `^text-(\\[(?:[^\\]]*(?:px|rem|em|ch|%)|length:var\\(--[\\w-]+\\))\\]|${config.tailwind.fontSizes.join("|")})$` },
   "border-width": { prefix: "border", pattern: "^border(-\\[[^\\]]*px\\]|-\\d+)?$" },
   "border-color": { prefix: "border", pattern: colorClass("border") },
   // A ring in Tailwind v4 is a box-shadow driven by this custom property, so
@@ -260,10 +260,13 @@ export function toClassUpdate(property: string, rawValue: string): ClassUpdate |
   if (!scalar) return null
 
   const token = spacingToken(scalar.prefix, value)
+  const typedValue = property === "font-size" && /^var\(--[\w-]+\)$/.test(value)
+    ? `length:${toArbitrary(value)}`
+    : toArbitrary(value)
   return {
     tailwindPrefix: scalar.prefix,
     tailwindToken: token,
-    value: token ? value : toArbitrary(value),
+    value: token ? value : typedValue,
     ...(scalar.related ? { relatedPrefixes: scalar.related } : {}),
     ...(scalar.pattern ? { classPattern: scalar.pattern } : {}),
   }

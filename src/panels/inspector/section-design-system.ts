@@ -172,8 +172,12 @@ function matchFor(spec: RowSpec): DesignSystemMatch[] {
 function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
   const tokens = tokensForProperty(spec.property)
   const matches = matchFor(spec)
-  const selected = matches.length === 1 ? matches[0].token.id : ""
-  const custom = matches.length > 1
+  const uncertain = matches.some((match) => match.ambiguous)
+  const selected = matches.length === 1 && !uncertain ? matches[0].token.id : ""
+  const candidateNames = matches.map((match) => match.token.name).join(", ")
+  const custom = uncertain
+    ? `Uncertain: ${candidateNames}`
+    : matches.length > 1
     ? `Multiple matches: ${matches.length}`
     : `Custom: ${spec.displayValue}`
   const picker = selectField({
@@ -201,7 +205,11 @@ function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
     },
   })
 
-  const status = matches.length
+  const status = uncertain
+    ? `Uncertain: theme or scope can change this alias. Candidates: ${candidateNames}. Source: ${matches
+        .map((match) => match.source)
+        .join(" · ")}`
+    : matches.length
     ? `${matches[0].via === "authored" ? "Bound" : "Value matches"}: ${matches
         .map((match) => `${match.token.name} (${match.source})`)
         .join(" · ")}`

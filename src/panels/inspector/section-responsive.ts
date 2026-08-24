@@ -1,14 +1,18 @@
 /** Responsive utilities authored directly on the selected element. */
 
+import { config } from "../../core/config"
 import { el } from "../../core/dom"
 import {
   activeBreakpoint,
   breakpointSteps,
+  containerBreakpointSteps,
   responsiveClassBindings,
   type ResponsiveClassBinding,
 } from "../../core/responsive"
-import { section, textField } from "./field"
+import { isExpanded, miniButton, section, setExpanded, textField } from "./field"
 import type { InspectorSection } from "./index"
+
+const CONTAINER_EXPANDER = "responsive.container-breakpoints"
 
 function utilities(raw: string): string[] {
   return [...new Set(raw.trim().split(/\s+/).filter(Boolean))]
@@ -27,6 +31,8 @@ interface ContainerScope {
   name: string | null
   /** True when the selected element is the container, not merely inside one. */
   self: boolean
+  /** Border-box width when layout has produced one. */
+  width: number | null
 }
 
 /**
@@ -42,11 +48,18 @@ function containerScope(element: HTMLElement): ContainerScope | null {
     const named = Array.from(node.classList).find(
       (name) => name === "@container" || name.startsWith("@container/")
     )
+    const style = getComputedStyle(node)
     if (!named) {
-      const declared = getComputedStyle(node).getPropertyValue("container-type").trim()
+      const declared = style.getPropertyValue("container-type").trim()
       if (["", "normal"].includes(declared)) continue
     }
-    return { name: named?.split("/")[1] ?? null, self: node === element }
+    const cssName = style.getPropertyValue("container-name").trim()
+    const measured = node.getBoundingClientRect().width || node.clientWidth
+    return {
+      name: named?.split("/")[1] ?? (!["", "none"].includes(cssName) ? cssName.split(/\s+/)[0] : null),
+      self: node === element,
+      width: measured > 0 ? measured : null,
+    }
   }
   return null
 }
@@ -83,10 +96,13 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
   const scope = containerScope(selection.element)
   if (!scope && !isLayoutBox(selection.element, computed) && bindings.length === 0) return null
 
-  const steps = breakpointSteps()
+  const viewportSteps = breakpointSteps()
+  const containerSteps = containerBreakpointSteps()
   const viewport = window.innerWidth
-  const active = activeBreakpoint(viewport, steps)
+  const active = activeBreakpoint(viewport, viewportSteps)
+  const activeContainer = scope?.width ? activeBreakpoint(scope.width, containerSteps) : null
   const nested = bindings.filter((binding) => !binding.direct)
+  const containerBindings = bindings.filter((binding) => binding.context === "container")
   const authored = (context: ResponsiveClassBinding["context"], name: string) =>
     bindings.filter(
       (binding) => binding.context === context && binding.direct && binding.breakpoint === name
@@ -118,7 +134,7 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
       }),
     ])
 
-  const viewportRows = steps.map((step) =>
+  const viewportRows = viewportSteps.map((step) =>
     row({
       id: `responsive.${step.name}`,
       label: `${step.name} breakpoint utilities`,
@@ -135,17 +151,27 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
     })
   )
 
-  const containerRows = scope
-    ? steps.map((step) => {
+  const containerContext = Boolean(scope || containerBindings.length)
+  const showAllContainers = isExpanded(CONTAINER_EXPANDER)
+  const defaultContainerSteps = containerSteps.filter(
+    (step) => step.documented || authored("container", step.name).length > 0
+  )
+  const visibleContainerSteps = showAllContainers ? containerSteps : defaultContainerSteps
+  const containerRows = containerContext
+    ? visibleContainerSteps.map((step) => {
         const rowBindings = authored("container", step.name)
+        const basePrefix = step.prefix.endsWith(":") ? step.prefix.slice(0, -1) : step.prefix
         return row({
           id: `responsive.@${step.name}`,
           label: `@${step.name} container utilities`,
-          title: `@${step.name} · container width`,
+          title: `@${step.name} · ${step.px}px and up${activeContainer?.name === step.name ? " · active now" : ""}`,
+          usage: step.usage,
+          owner: step.owner,
+          note: step.documented ? undefined : "Compiles, but this design system declares no container step here.",
           // The first existing variant's own prefix wins, so a row authored
           // against a NAMED container keeps its name instead of being silently
           // retargeted at the nearest one.
-          prefix: rowBindings[0]?.prefix ?? `@${step.name}${scope.name ? `/${scope.name}` : ""}:`,
+          prefix: rowBindings[0]?.prefix ?? `${basePrefix}${scope?.name ? `/${scope.name}` : ""}:`,
           bindings: rowBindings,
           summary: `Set @${step.name} container utilities`,
         })
@@ -166,14 +192,43 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
     )
   }
 
-  const containerNotes: HTMLElement[] = scope
+  const containerToggle = containerContext && containerSteps.length > defaultContainerSteps.length
+    ? miniButton({
+        label: showAllContainers ? "Show documented and authored container steps" : "Show all container steps",
+        glyph: showAllContainers ? "⊟" : "⊞",
+        pressed: showAllContainers,
+        onClick: () => {
+          setExpanded(CONTAINER_EXPANDER, !showAllContainers)
+          invalidate()
+        },
+      })
+    : null
+  const containerNotes: HTMLElement[] = containerContext
     ? [
-        el("div", { class: "de-layout-group-title" }, ["Container queries"]),
-        el("div", { class: "de-hint" }, [
-          `${scope.self ? "This element is" : "Inside"} @container${scope.name ? `/${scope.name}` : ""}. These steps measure that container's width, not the window's.`,
+        el("div", { class: "de-row" }, [
+          el("div", { class: "de-layout-group-title", style: "flex:1" }, ["Container queries"]),
+          containerToggle,
         ]),
       ]
     : []
+  if (scope) {
+    containerNotes.push(
+      el("div", { class: "de-hint" }, [
+        `${scope.self ? "This element is" : "Inside"} @container${scope.name ? `/${scope.name}` : ""}. These steps measure that container's width, not the window's.`,
+      ]),
+      el("div", { class: "de-hint" }, [
+        scope.width === null
+          ? "Nearest container width is not measurable in this preview."
+          : `Nearest container width: ${Math.round(scope.width)}px · ${activeContainer ? `${activeContainer.name} is the active container step` : "below every container step"}.`,
+      ])
+    )
+  } else if (containerBindings.length) {
+    containerNotes.push(
+      el("div", { class: "de-hint" }, [
+        "Container-query utilities are authored, but no container scope was found in this preview.",
+      ])
+    )
+  }
   if (descendants.length) {
     containerNotes.push(
       el("div", { class: "de-hint" }, [
@@ -188,6 +243,15 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
     )
   }
 
+  const measureRows = config.designSystem.responsiveMeasures.map((measure) =>
+    el("div", { class: "de-stack", "data-de-responsive-measure": measure.id }, [
+      el("div", { class: "de-layout-group-title" }, [measure.name]),
+      el("div", { class: "de-source" }, [measure.formula]),
+      el("div", { class: "de-hint" }, [measure.usage]),
+      el("div", { class: "de-source" }, [measure.owner]),
+    ])
+  )
+
   return section(
     "Responsive",
     el("div", { class: "de-stack" }, [
@@ -195,6 +259,14 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
       ...viewportRows,
       ...containerNotes,
       ...containerRows,
+      ...(measureRows.length
+        ? [
+            el("div", { class: "de-layout-group" }, [
+              el("div", { class: "de-layout-group-title" }, ["Responsive measures"]),
+              ...measureRows,
+            ]),
+          ]
+        : []),
     ])
   )
 }

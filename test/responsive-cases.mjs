@@ -110,6 +110,33 @@ check("every Tailwind prefix reaches the catalog, ordered by width", () => {
   }
 })
 
+check("all 13 container prefixes reach the catalog and xl carries the documented decision", () => {
+  assert.equal(catalog.containerBreakpoints.length, 13, "the container scale must not be vacuous")
+  assert.deepEqual(
+    catalog.containerBreakpoints.map((token) => [token.name, token.values.default]),
+    [
+      ["3xs", 256], ["2xs", 288], ["xs", 320], ["sm", 384], ["md", 448],
+      ["lg", 512], ["xl", 576], ["2xl", 672], ["3xl", 768], ["4xl", 896],
+      ["5xl", 1024], ["6xl", 1152], ["7xl", 1280],
+    ]
+  )
+  const documented = catalog.containerBreakpoints.filter((token) => token.documented)
+  assert.deepEqual(documented.map((token) => token.name), ["xl"])
+  assert.match(documented[0].usage, /two columns/)
+  assert.match(documented[0].owner, /stage-section\.tsx$/)
+})
+
+check("the catalog carries exactly the three read-only responsive measures", () => {
+  assert.deepEqual(
+    catalog.responsiveMeasures.map((measure) => [measure.name, measure.formula]),
+    [
+      ["leftPanelFits", "viewport - left panel - right panel >= 720px"],
+      ["rightPanelMaxWidth", "viewport - 560px"],
+      ["contextCardFits", "canvas width >= reader width + 372px * 2"],
+    ]
+  )
+})
+
 check("the four documented steps carry their meaning and their owning file", () => {
   const documented = catalog.breakpoints.filter((token) => token.documented)
   assert.deepEqual(documented.map((token) => token.name), ["md", "lg", "xl", "2xl"])
@@ -150,6 +177,9 @@ check("the browser prelude carries the documented flag to the inspector", () => 
     [["sm", false], ["md", true], ["lg", true], ["xl", true], ["2xl", true]]
   )
   assert.ok(breakpoints.find((token) => token.name === "xl").usage.includes("right panel"))
+  const browserConfig = sandbox.window.__DESIGN_EDITOR_CONFIG__
+  assert.equal(browserConfig.designSystem.containerBreakpoints.length, 13)
+  assert.equal(browserConfig.designSystem.responsiveMeasures.length, 3)
 })
 
 console.log("\nResponsive classes")
@@ -184,6 +214,19 @@ check("the step model carries the catalog's order, widths, and meanings", () => 
   assert.equal(steps.find((step) => step.name === "sm").usage, undefined)
 })
 
+check("the container step model uses the separate 13-step scale", () => {
+  const steps = helpers.containerBreakpointSteps(catalog.containerBreakpoints)
+  assert.equal(steps.length, 13)
+  assert.deepEqual(steps.find((step) => step.name === "xl"), {
+    name: "xl",
+    px: 576,
+    prefix: "@xl:",
+    documented: true,
+    usage: "Project stage rows become two columns once their own container reaches 576px.",
+    owner: "src/components/workspace/project-detail/stage-section.tsx",
+  })
+})
+
 check("the active step is the widest one the window has crossed", () => {
   const steps = helpers.breakpointSteps(catalog.breakpoints)
   assert.equal(helpers.activeBreakpoint(500, steps), null)
@@ -206,12 +249,13 @@ check("responsive parsing distinguishes viewport, container, and base utilities"
   assert.equal(viewport.context, "viewport")
 
   const container = helpers.parseResponsiveClassName(
-    "@lg/sidebar:grid-cols-3",
-    workspace.tailwind.breakpoints
+    "@xl/sidebar:grid-cols-3",
+    workspace.tailwind.breakpoints,
+    workspace.tailwind.containerBreakpoints
   )
-  assert.equal(container.breakpoint, "lg")
-  assert.equal(container.px, null)
-  assert.equal(container.prefix, "@lg/sidebar:")
+  assert.equal(container.breakpoint, "xl")
+  assert.equal(container.px, 576)
+  assert.equal(container.prefix, "@xl/sidebar:")
   assert.equal(container.utility, "grid-cols-3")
   assert.equal(container.context, "container")
 })
@@ -333,7 +377,7 @@ await checkAsync("breakpoint controls are named and keep the caret across their 
  * section instead of surfacing as a swallowed warning from the panel's
  * per-section try/catch.
  */
-function mountResponsiveSection(html) {
+function mountResponsiveSection(html, { containerWidth = null } = {}) {
   const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, {
     pretendToBeVisual: true,
     url: "http://localhost/",
@@ -341,6 +385,16 @@ function mountResponsiveSection(html) {
   const { window } = dom
   installDomGlobals(window)
   const target = window.document.getElementById("target")
+  if (containerWidth !== null) {
+    let container = target
+    while (container && !Array.from(container.classList).some(
+      (name) => name === "@container" || name.startsWith("@container/")
+    )) {
+      container = container.parentElement
+    }
+    assert.ok(container, "the fixture has no container to measure")
+    container.getBoundingClientRect = () => ({ width: containerWidth })
+  }
   const host = window.document.createElement("div")
   window.document.body.append(host)
 
@@ -363,6 +417,9 @@ function mountResponsiveSection(html) {
     host.replaceChildren(node)
   }
   render()
+  // The expander is panel-level memory and survives each fixture. Normalize
+  // every mount to the compact state so cases never depend on execution order.
+  host.querySelector('[aria-label="Show documented and authored container steps"]')?.click()
 
   const field = (id) => host.querySelector(`[data-de-field="${id}"]`)
   return {
@@ -374,6 +431,7 @@ function mountResponsiveSection(html) {
     field,
     /** Everything the row around a control says, title and hints included. */
     rowText: (id) => field(id).closest(".de-stack").textContent,
+    containerFields: () => [...host.querySelectorAll('[data-de-field^="responsive.@"]')],
     type: (id, value) => {
       const input = field(id)
       input.value = value
@@ -433,26 +491,67 @@ check("exactly the step the window is standing on is marked active", () => {
   }
 })
 
-check("a container-query variant on the selection is listed and edited apart from its viewport steps", () => {
+check("container rows stay folded while current width, xl, and three measures remain visible", () => {
   const panel = mountResponsiveSection(
-    `<div class="@container/sidebar"><div id="target" class="grid grid-cols-1 lg:grid-cols-3 @md/sidebar:grid-cols-2" style="display:grid"><span></span></div></div>`
+    `<div class="@container/sidebar"><div id="target" class="grid grid-cols-1 @md/sidebar:grid-cols-2 hover:@lg/sidebar:gap-4" style="display:grid"><span></span></div></div>`,
+    { containerWidth: 600 }
   )
   try {
     assert.match(panel.host.textContent, /Inside @container\/sidebar/)
+    assert.match(panel.host.textContent, /Nearest container width: 600px · xl is the active container step/)
+    assert.equal(panel.containerFields().length, 2, "all 13 container controls rendered while folded")
+    assert.deepEqual(
+      panel.containerFields().map((field) => field.dataset.deField),
+      ["responsive.@md", "responsive.@xl"]
+    )
     assert.equal(panel.field("responsive.@md").value, "grid-cols-2")
+    assert.match(panel.rowText("responsive.@md"), /448px and up/)
+    assert.match(panel.rowText("responsive.@xl"), /576px and up · active now/)
+    assert.match(panel.rowText("responsive.@xl"), /Project stage rows become two columns/)
+    assert.equal(panel.field("responsive.md").value, "")
+    assert.match(panel.host.textContent, /Nested\/state variants stay unchanged: hover:@lg\/sidebar:gap-4/)
+    assert.ok(!panel.host.textContent.includes("—"), "responsive copy contains an em dash")
+
+    const measures = [...panel.host.querySelectorAll("[data-de-responsive-measure]")]
+    assert.equal(measures.length, 3)
+    assert.deepEqual(
+      measures.map((node) => node.getAttribute("data-de-responsive-measure")),
+      [
+        "responsive-measure:left-panel-fits",
+        "responsive-measure:right-panel-max-width",
+        "responsive-measure:context-card-fits",
+      ]
+    )
+    for (const measure of measures) {
+      assert.equal(measure.querySelector("input, select, button"), null, "a responsive measure is editable")
+    }
+
+    panel.host.querySelector('[aria-label="Show all container steps"]').click()
+    assert.equal(panel.containerFields().length, 13)
+    assert.ok(panel.field("responsive.@3xs"))
+    assert.ok(panel.field("responsive.@7xl"))
+  } finally {
+    panel.dom.window.close()
+  }
+})
+
+check("container edits retain the named prefix and every nested or viewport variant", () => {
+  const panel = mountResponsiveSection(
+    `<div class="@container/sidebar"><div id="target" class="grid grid-cols-1 lg:grid-cols-3 @md/sidebar:grid-cols-2 hover:@lg/sidebar:gap-4" style="display:grid"><span></span></div></div>`,
+    { containerWidth: 600 }
+  )
+  try {
     assert.equal(
       panel.field("responsive.@md").getAttribute("aria-label"),
       "@md container utilities"
     )
-    // The container step must not leak into the viewport row of the same name.
-    assert.equal(panel.field("responsive.md").value, "")
-    assert.ok(!panel.rowText("responsive.@md").includes("768px"), "a container step claimed a viewport width")
 
     panel.type("responsive.@md", "grid-cols-4 gap-2")
     const classes = Array.from(panel.target.classList)
     assert.ok(classes.includes("@md/sidebar:grid-cols-4"), "the named container scope was dropped")
     assert.ok(classes.includes("@md/sidebar:gap-2"))
     assert.ok(!classes.includes("@md/sidebar:grid-cols-2"))
+    assert.ok(classes.includes("hover:@lg/sidebar:gap-4"), "a nested container variant was disturbed")
     assert.ok(classes.includes("lg:grid-cols-3"), "a viewport variant was disturbed")
     assert.ok(classes.includes("grid-cols-1"), "a base class was disturbed")
 
@@ -460,10 +559,12 @@ check("a container-query variant on the selection is listed and edited apart fro
     const after = Array.from(panel.target.classList)
     assert.ok(after.includes("lg:grid-cols-6"))
     assert.ok(after.includes("@md/sidebar:grid-cols-4"), "a container variant was disturbed")
+    assert.ok(after.includes("hover:@lg/sidebar:gap-4"), "a nested container variant was disturbed")
 
-    // A step with nothing authored yet takes the scope's name from the ancestor.
+    panel.host.querySelector('[aria-label="Show all container steps"]').click()
     panel.type("responsive.@lg", "grid-cols-5")
     assert.ok(panel.target.classList.contains("@lg/sidebar:grid-cols-5"))
+    assert.ok(panel.target.classList.contains("hover:@lg/sidebar:gap-4"))
   } finally {
     panel.dom.window.close()
   }

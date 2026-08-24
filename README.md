@@ -103,6 +103,8 @@ The settings most likely to matter:
   spacing tokens that do exist in your build.
 - **`tailwind.breakpoints`** — the responsive prefixes the inspector offers;
   the default is Tailwind's `sm` through `2xl` scale.
+- **`tailwind.containerBreakpoints`** — the separate container-query scale.
+  It is empty by default because container variants are host-dependent.
 - **`tailwind.colorWords`** — your palette stems, so `bg-brand-500` is written
   as a class rather than as an arbitrary colour.
 - **`designSystem.manifest`** — the canonical token catalog displayed beside
@@ -127,26 +129,42 @@ The manifest contains `Color`, `Spacing`, and `Radius` collections plus
 The launcher validates those groups and their editable values before serving
 the editor, so a stale generated manifest fails at startup with its field name.
 
-### Documented breakpoints
+### Responsive metadata
 
 Two facts, deliberately kept apart. `tailwind.breakpoints` says which variant
 prefixes your build **compiles**; the optional `designSystem.breakpoints` says
 which of those steps your design system has a **meaning** for:
 
 ```js
+tailwind: {
+  breakpoints: { sm: 640, md: 768, lg: 1024 },
+  containerBreakpoints: { md: 448, lg: 512, xl: 576 },
+},
 designSystem: {
   breakpoints: {
-    md: { usage: "Sheet — the nav stops docking and floats over the canvas.",
+    md: { usage: "Sheet: the nav stops docking and floats over the canvas.",
           owner: "src/hooks/use-mobile.ts" },
+  },
+  containerBreakpoints: {
+    xl: { usage: "Cards: switch to two columns.", owner: "src/cards.tsx" },
+  },
+  responsiveMeasures: {
+    contentFits: {
+      formula: "viewport - navigation >= 720px",
+      usage: "Whether the reading column keeps its minimum measure.",
+      owner: "src/layout.ts",
+    },
   },
 },
 ```
 
-The pixel value keeps its one owner in `tailwind.breakpoints`; an annotation may
-only add prose, and naming a breakpoint that map does not define fails at
-startup. A prefix you leave unannotated still appears in the inspector — it
-compiles, so hiding it would make the panel lie — but it is marked as outside
-the design system rather than presented as a decision someone made.
+Viewport and container pixels keep separate owners in `tailwind.breakpoints`
+and `tailwind.containerBreakpoints`; annotations may only add prose. Naming a
+step its corresponding map does not define fails at startup. A prefix you leave
+unannotated still appears in the inspector because it compiles, but it is marked
+as outside the design system rather than presented as a decision someone made.
+Responsive measures are read-only metadata: they describe product layout rules
+that cannot be represented honestly as one editable CSS declaration.
 
 CSS sources are scanned for custom-property chains and Tailwind `@theme`
 aliases. Resolution stops at a manifest-owned custom property: for example,

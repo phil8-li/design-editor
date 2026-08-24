@@ -39,11 +39,26 @@ const config = {
     cssSources: [], // e.g. ["app/globals.css"]
 
     // Optional prose for the breakpoints your design system actually
-    // documents. The pixel value stays in `tailwind.breakpoints` — its one
-    // owner — and this only says what crossing the step MEANS. A prefix you
+    // documents. The pixel value stays in `tailwind.breakpoints`, its one
+    // owner, and this only says what crossing the step MEANS. A prefix you
     // omit still appears in the inspector, labelled as outside the system.
     breakpoints: {
-      // md: { usage: "Tablet — the nav collapses.", owner: "src/hooks/use-mobile.ts" },
+      // md: { usage: "Tablet: the nav collapses.", owner: "src/hooks/use-mobile.ts" },
+    },
+
+    // Optional annotations for the separate container-query scale below.
+    containerBreakpoints: {
+      // xl: { usage: "Cards: switch to two columns.", owner: "src/cards.tsx" },
+    },
+
+    // Read-only runtime layout rules. These explain responsive behavior but
+    // are not presented as editable CSS tokens.
+    responsiveMeasures: {
+      // contentFits: {
+      //   formula: "viewport - navigation >= 720px",
+      //   usage: "Whether the reading column keeps its minimum measure.",
+      //   owner: "src/layout.ts",
+      // },
     },
   },
 
@@ -105,6 +120,9 @@ const config = {
     spacingScale: "v3-default",
     spacingBase: 4,
     breakpoints: { sm: 640, md: 768, lg: 1024, xl: 1280, "2xl": 1536 },
+    // Container-query names use a separate scale. Leave empty when the host
+    // does not compile container variants.
+    containerBreakpoints: {}, // e.g. { md: 448, lg: 512, xl: 576 }
 
     // Your own colour stems, ADDED to Tailwind's palette and the shadcn
     // semantic tokens. A stem listed here is written as `bg-brand-500`; a

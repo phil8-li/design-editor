@@ -4,7 +4,7 @@ import { config, type DesignSystemToken } from "./config"
 
 export interface BreakpointStep {
   name: string
-  /** Minimum viewport width in CSS pixels. */
+  /** Minimum viewport or container width in CSS pixels. */
   px: number
   /** The variant prefix that compiles, trailing colon included. */
   prefix: string
@@ -26,17 +26,28 @@ export interface BreakpointStep {
 export function breakpointSteps(
   tokens: readonly DesignSystemToken[] = config.designSystem.breakpoints
 ): BreakpointStep[] {
+  return stepsFromTokens(tokens, "")
+}
+
+/** The host's container-query scale, narrowest first. */
+export function containerBreakpointSteps(
+  tokens: readonly DesignSystemToken[] = config.designSystem.containerBreakpoints
+): BreakpointStep[] {
+  return stepsFromTokens(tokens, "@")
+}
+
+function stepsFromTokens(tokens: readonly DesignSystemToken[], prefix: string): BreakpointStep[] {
   return tokens.map((token) => ({
     name: token.name,
     px: Number(token.values.default),
-    prefix: token.prefix ?? `${token.name}:`,
+    prefix: token.prefix ?? `${prefix}${token.name}:`,
     documented: token.documented === true,
     usage: token.usage,
     owner: token.owner,
   }))
 }
 
-/** The widest step the window has crossed; null while it is below every step. */
+/** The widest step a measured width has crossed; null while below every step. */
 export function activeBreakpoint(
   viewportWidth: number,
   steps: readonly BreakpointStep[] = breakpointSteps()
@@ -51,8 +62,8 @@ export interface ResponsiveClassBinding {
   original: string
   className: string
   breakpoint: string
-  /** Configured viewport px. Container-query thresholds are deliberately unknown. */
-  px: number | null
+  /** Minimum viewport or container width in CSS pixels. */
+  px: number
   context: "viewport" | "container"
   /** Every variant before the utility, byte-for-byte, plus the trailing colon. */
   prefix: string
@@ -95,7 +106,8 @@ export function splitVariantChain(className: string): string[] {
 
 export function parseResponsiveClassName(
   className: string,
-  breakpoints: Record<string, number> = config.tailwind.breakpoints
+  breakpoints: Record<string, number> = config.tailwind.breakpoints,
+  containerBreakpoints: Record<string, number> = config.tailwind.containerBreakpoints
 ): ResponsiveClassBinding | null {
   const parts = splitVariantChain(className)
   if (parts.length < 2) return null
@@ -104,10 +116,15 @@ export function parseResponsiveClassName(
   let context: ResponsiveClassBinding["context"] = "viewport"
   for (const variant of variants) {
     const container = /^@([^/]+)(?:\/[^/]+)?$/.exec(variant)
-    const name = container?.[1] ?? variant
-    if (!(name in breakpoints)) continue
-    breakpoint = name
-    context = container ? "container" : "viewport"
+    if (container) {
+      if (!(container[1] in containerBreakpoints)) continue
+      breakpoint = container[1]
+      context = "container"
+      break
+    }
+    if (!(variant in breakpoints)) continue
+    breakpoint = variant
+    context = "viewport"
     break
   }
   if (!breakpoint) return null
@@ -115,7 +132,7 @@ export function parseResponsiveClassName(
     original: className,
     className,
     breakpoint,
-    px: context === "viewport" ? breakpoints[breakpoint] : null,
+    px: context === "viewport" ? breakpoints[breakpoint] : containerBreakpoints[breakpoint],
     context,
     prefix: `${variants.join(":")}:`,
     variants,
@@ -127,18 +144,17 @@ export function parseResponsiveClassName(
 
 export function responsiveClassBindings(
   classNames: readonly string[],
-  breakpoints: Record<string, number> = config.tailwind.breakpoints
+  breakpoints: Record<string, number> = config.tailwind.breakpoints,
+  containerBreakpoints: Record<string, number> = config.tailwind.containerBreakpoints
 ): ResponsiveClassBinding[] {
   return classNames
     .map((className, sourceIndex) => {
-      const parsed = parseResponsiveClassName(className, breakpoints)
+      const parsed = parseResponsiveClassName(className, breakpoints, containerBreakpoints)
       return parsed ? { ...parsed, sourceIndex } : null
     })
     .filter((entry): entry is ResponsiveClassBinding => entry !== null)
     .sort((a, b) => {
-      if (a.px === null && b.px !== null) return 1
-      if (a.px !== null && b.px === null) return -1
-      return (a.px ?? 0) - (b.px ?? 0) || a.sourceIndex - b.sourceIndex
+      return a.px - b.px || a.sourceIndex - b.sourceIndex
     })
 }
 

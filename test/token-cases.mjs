@@ -92,6 +92,8 @@ check("the Workspaces catalog is the non-vacuous 123-asset export", () => {
     icons: 6,
     motion: 9,
   })
+  assert.equal(catalog.textStyles.length, 11)
+  assert.equal(catalog.uiTextStyles.length, 1)
   assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), 123)
 
   const ids = [
@@ -122,6 +124,8 @@ check("a generic host gets no borrowed product tokens", () => {
     assert.deepEqual(generic[group], [], `${group} should be empty`)
   }
   assert.equal(generic.name, null)
+  assert.deepEqual(generic.containerBreakpoints, [])
+  assert.deepEqual(generic.responsiveMeasures, [])
   assert.deepEqual(generic.aliases, { cssVariables: [], tailwind: [] })
   assert.deepEqual(
     generic.breakpoints.map(({ name, prefix, values }) => [name, prefix, values.default]),
@@ -209,6 +213,44 @@ check("CSS variable extraction keeps authored order and removes duplicates", () 
   )
 })
 
+check("scoped aliases stay uncertain while exact evidence wins", () => {
+  const one = helpers.authoredTokenMatches("fill-color", "", ["bg-sidebar"], catalog)
+  assert.deepEqual(one.map((match) => [match.token.id, match.ambiguous]), [
+    ["color:background-chrome", true],
+  ])
+
+  const inline = helpers.authoredTokenMatches(
+    "fill-color",
+    "var(--workspace-theme-chrome)",
+    [],
+    catalog
+  )
+  assert.deepEqual(inline.map((match) => [match.token.id, match.ambiguous]), [
+    ["color:background-chrome", true],
+  ])
+
+  const many = helpers.authoredTokenMatches("fill-color", "", ["bg-sidebar-accent"], catalog)
+  assert.deepEqual(many.map((match) => [match.token.id, match.ambiguous]), [
+    ["color:background-canvas", true],
+    ["color:background-primary-hover", true],
+  ])
+
+  const exact = helpers.authoredTokenMatches("fill-color", "", ["bg-background"], catalog)
+  assert.deepEqual(exact.map((match) => [match.token.id, match.ambiguous]), [
+    ["color:background-primary", false],
+  ])
+
+  const exactOverAlias = helpers.authoredTokenMatches(
+    "fill-color",
+    "var(--sem-background-primary)",
+    ["bg-sidebar"],
+    catalog
+  )
+  assert.deepEqual(exactOverAlias.map((match) => [match.token.id, match.ambiguous]), [
+    ["color:background-primary", false],
+  ])
+})
+
 check("radius, text, spacing, effect, and icon tokens match their authored forms", () => {
   const cases = [
     ["corner-radius", "", ["rounded-[var(--radius-xl)]"], "radius:radius-xl"],
@@ -281,7 +323,7 @@ check("semantic tokens translate to durable Tailwind arbitrary-value shapes", ()
   assert.deepEqual(writes.map(classShape), [
     "bg-[var(--sem-background-primary)]",
     "rounded-[var(--radius-xl)]",
-    "text-[var(--type-h1-size)]",
+    "text-[length:var(--type-h1-size)]",
     "leading-[var(--type-h1-leading)]",
     "font-[number:var(--type-h1-weight)]",
     "tracking-[var(--type-h1-tracking)]",
@@ -379,6 +421,19 @@ check("font family and weight patterns cannot replace each other", () => {
   assert.equal(weightPattern.test("font-[family-name:var(--font-family)]"), false)
 })
 
+check("font size and text color variables cannot replace each other", () => {
+  const size = helpers.toClassUpdate("font-size", "var(--type-h1-size)")
+  const color = helpers.toClassUpdate("color", "var(--sem-text-icon-primary)")
+  assert.equal(`${size.tailwindPrefix}-[${size.value}]`, "text-[length:var(--type-h1-size)]")
+
+  const sizePattern = new RegExp(size.classPattern)
+  const colorPattern = new RegExp(color.classPattern)
+  assert.equal(sizePattern.test("text-[length:var(--type-h1-size)]"), true)
+  assert.equal(sizePattern.test("text-[var(--sem-text-icon-primary)]"), false)
+  assert.equal(colorPattern.test("text-[var(--sem-text-icon-primary)]"), true)
+  assert.equal(colorPattern.test("text-[length:var(--type-h1-size)]"), false)
+})
+
 check("a bouncing spring writes nothing rather than a duration that lies", () => {
   const flat = catalog.motion.filter((token) => token.values.default.bounce === 0)
   assert.deepEqual(flat.map((token) => token.name), ["crossfade", "calm"])
@@ -409,7 +464,17 @@ check("a bouncing spring writes nothing rather than a duration that lies", () =>
 })
 
 check("every design-system property has a category and a way into source", () => {
-  assert.ok(helpers.DESIGN_TOKEN_PROPERTIES.length >= 29, "the vocabulary sweep is not empty")
+  assert.deepEqual(helpers.DESIGN_TOKEN_PROPERTIES, [
+    "fill-color", "text-color", "stroke-color", "ring-color", "outline-color",
+    "svg-fill", "svg-stroke",
+    "corner-radius", "corner-radius-top-left", "corner-radius-top-right",
+    "corner-radius-bottom-right", "corner-radius-bottom-left",
+    "text-style", "shadow", "icon-size",
+    "gap", "row-gap", "column-gap",
+    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "motion-duration",
+  ])
   for (const property of helpers.DESIGN_TOKEN_PROPERTIES) {
     const tokens = helpers.tokensForProperty(property, catalog)
     assert.ok(tokens.length, `${property} maps to no populated catalog category`)
@@ -646,6 +711,42 @@ await checkAsync("a spring that CSS cannot carry says so before the click", asyn
     assert.equal(hints.length, 2, "the motion row lost its unwritable-token hint")
     assert.match(hints[1], /bounce/)
     assert.match(hints[1], /lively/)
+  })
+})
+
+await checkAsync("scoped aliases render as uncertain instead of selected bindings", async () => {
+  const cases = [
+    {
+      markup: `<div id="target" class="bg-sidebar"></div>`,
+      candidates: ["Background/Chrome"],
+    },
+    {
+      markup: `<div id="target" style="background-color:var(--workspace-theme-chrome)"></div>`,
+      candidates: ["Background/Chrome"],
+    },
+    {
+      markup: `<div id="target" class="bg-sidebar-accent"></div>`,
+      candidates: ["Background/Canvas", "Background/Primary hover"],
+    },
+  ]
+  for (const testCase of cases) {
+    await withInspector(testCase.markup, async ({ right }) => {
+      const select = right.querySelector('[data-de-field="design-system.fill-color"]')
+      assert.equal(select.value, "", "an ambiguous alias was selected as a binding")
+      const text = select.closest(".de-stack").textContent
+      assert.match(text, /Uncertain/)
+      assert.match(text, /theme or scope/)
+      for (const candidate of testCase.candidates) assert.match(text, new RegExp(candidate))
+      assert.ok(!text.includes("Bound:"), "an ambiguous alias was labelled Bound")
+    })
+  }
+
+  await withInspector(`<div id="target" class="bg-background"></div>`, async ({ right }) => {
+    const select = right.querySelector('[data-de-field="design-system.fill-color"]')
+    assert.equal(select.value, "color:background-primary")
+    const text = select.closest(".de-stack").textContent
+    assert.match(text, /Bound: Background\/Primary/)
+    assert.ok(!text.includes("Uncertain"), "an exact alias was downgraded to uncertain")
   })
 })
 

@@ -5,7 +5,9 @@ import { aliasesFromCss } from "./design-system-aliases.mjs"
 import {
   emptyDesignSystemCatalog,
   normalizeBreakpoints,
+  normalizeContainerBreakpoints,
   normalizeDesignSystemBreakpoints,
+  normalizeDesignSystemContainerBreakpoints,
   normalizeDesignSystemManifest,
 } from "./design-system-manifest.mjs"
 
@@ -21,7 +23,33 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
-export function resolveDesignSystemConfig(value, projectRoot, breakpoints) {
+function requiredString(value, label) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`Invalid design-system manifest: ${label} must be a non-empty string`)
+  }
+  return value
+}
+
+export function normalizeResponsiveMeasures(value) {
+  if (value === undefined || value === null) return []
+  if (!isPlainObject(value)) {
+    throw new Error("Invalid design-system manifest: designSystem.responsiveMeasures must be an object")
+  }
+  return Object.entries(value).map(([name, raw]) => {
+    const label = `designSystem.responsiveMeasures.${name}`
+    if (!isPlainObject(raw)) throw new Error(`Invalid design-system manifest: ${label} must be an object`)
+    return {
+      id: `responsive-measure:${name.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase()}`,
+      name,
+      category: "responsive-measure",
+      formula: requiredString(raw.formula, `${label}.formula`),
+      usage: requiredString(raw.usage, `${label}.usage`),
+      owner: requiredString(raw.owner, `${label}.owner`),
+    }
+  })
+}
+
+export function resolveDesignSystemConfig(value, projectRoot, breakpoints, containerBreakpoints = {}) {
   if (!isPlainObject(value)) throw new Error("designSystem must be an object with manifest and cssSources")
   if (value.manifest !== null && (typeof value.manifest !== "string" || !value.manifest.trim())) {
     throw new Error("designSystem.manifest must be a non-empty path string or null")
@@ -31,13 +59,22 @@ export function resolveDesignSystemConfig(value, projectRoot, breakpoints) {
   }
 
   const annotations = normalizeDesignSystemBreakpoints(value.breakpoints)
+  const containerAnnotations = normalizeDesignSystemContainerBreakpoints(value.containerBreakpoints)
+  const responsiveMeasures = normalizeResponsiveMeasures(value.responsiveMeasures)
   const manifest = value.manifest ? path.resolve(projectRoot, value.manifest) : null
   const cssSources = value.cssSources.map((entry) => path.resolve(projectRoot, entry))
   if (!manifest) {
+    const catalog = emptyDesignSystemCatalog(
+      breakpoints,
+      annotations,
+      containerBreakpoints,
+      containerAnnotations,
+      responsiveMeasures
+    )
     return Object.freeze({
       manifest: null,
       cssSources: Object.freeze(cssSources),
-      catalog: emptyDesignSystemCatalog(breakpoints, annotations),
+      catalog: Object.freeze(catalog),
     })
   }
 
@@ -58,6 +95,8 @@ export function resolveDesignSystemConfig(value, projectRoot, breakpoints) {
     }
   }
   catalog.breakpoints = normalizeBreakpoints(breakpoints, annotations)
+  catalog.containerBreakpoints = normalizeContainerBreakpoints(containerBreakpoints, containerAnnotations)
+  catalog.responsiveMeasures = responsiveMeasures
   catalog.aliases = aliasesFromCss(catalog, css)
   return Object.freeze({
     manifest,

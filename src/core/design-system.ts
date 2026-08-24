@@ -32,6 +32,8 @@ export type DesignSystemMatch = {
   token: DesignSystemToken
   via: "authored" | "computed"
   source: string
+  /** True when an alias changes meaning across theme or selector scopes. */
+  ambiguous: boolean
 }
 
 export type TokenStyleWrite = { property: string; value: string }
@@ -172,13 +174,14 @@ export function authoredTokenMatches(
 ): DesignSystemMatch[] {
   const tokens = tokensForProperty(property, registry)
   const byId = tokenIndex(registry)
-  const sources = new Map<string, string[]>()
-  const add = (ids: readonly string[], source: string) => {
+  const evidence = new Map<string, { sources: string[]; exact: boolean }>()
+  const add = (ids: readonly string[], source: string, exact = true) => {
     for (const id of ids) {
       if (!byId.has(id) || !tokens.some((token) => token.id === id)) continue
-      const current = sources.get(id) ?? []
-      if (!current.includes(source)) current.push(source)
-      sources.set(id, current)
+      const current = evidence.get(id) ?? { sources: [], exact: false }
+      if (!current.sources.includes(source)) current.sources.push(source)
+      current.exact ||= exact
+      evidence.set(id, current)
     }
   }
 
@@ -189,7 +192,7 @@ export function authoredTokenMatches(
       `var(${variable})`
     )
     const alias = registry.aliases.cssVariables.find((entry) => entry.name === variable)
-    if (alias) add(alias.tokenIds, `var(${variable})`)
+    if (alias) add(alias.tokenIds, `var(${variable})`, !alias.ambiguous)
   }
 
   const utilities = directUtilities(classNames)
@@ -200,10 +203,12 @@ export function authoredTokenMatches(
         `.${utility}`
       )
       const alias = registry.aliases.cssVariables.find((entry) => entry.name === variable)
-      if (alias) add(alias.tokenIds, `.${utility}`)
+      if (alias) add(alias.tokenIds, `.${utility}`, !alias.ambiguous)
     }
     for (const alias of registry.aliases.tailwind) {
-      if (aliasUtility(property, alias) === utility) add(alias.tokenIds, `.${utility}`)
+      if (aliasUtility(property, alias) === utility) {
+        add(alias.tokenIds, `.${utility}`, !alias.ambiguous)
+      }
     }
     if (property === "text-style") {
       for (const token of tokens) if (token.cssUtility === utility) add([token.id], `.${utility}`)
@@ -221,10 +226,13 @@ export function authoredTokenMatches(
     }
   }
 
-  return [...sources].map(([id, found]) => ({
+  const matches = [...evidence]
+  const exact = matches.filter(([, found]) => found.exact)
+  return (exact.length ? exact : matches).map(([id, found]) => ({
     token: byId.get(id) as DesignSystemToken,
     via: "authored",
-    source: found.join(", "),
+    source: found.sources.join(", "),
+    ambiguous: !found.exact,
   }))
 }
 
@@ -307,7 +315,7 @@ export function computedTokenMatches(
       return normalized(candidate) === normalized(computedValue)
     })
     return equal
-      ? [{ token, via: "computed" as const, source: unique(candidates).join(" · ") }]
+      ? [{ token, via: "computed" as const, source: unique(candidates).join(" · "), ambiguous: false }]
       : []
   })
 }

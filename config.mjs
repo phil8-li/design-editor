@@ -87,7 +87,13 @@ export const DEFAULT_CONFIG = {
       edgeGap: 8,
     },
   },
-  designSystem: { manifest: null, cssSources: [] },
+  designSystem: {
+    manifest: null,
+    cssSources: [],
+    breakpoints: null,
+    containerBreakpoints: null,
+    responsiveMeasures: null,
+  },
   controls: { leva: null },
   tailwind: {
     version: 3,
@@ -97,6 +103,7 @@ export const DEFAULT_CONFIG = {
     spacingBase: 4,
     spacingScale: "v3-default",
     breakpoints: DEFAULT_TAILWIND_BREAKPOINTS,
+    containerBreakpoints: {},
     spacedStems: null,
   },
   source: { roots: [], extensions: [".tsx", ".jsx", ".ts", ".js", ".mts", ".mjs"] },
@@ -216,13 +223,22 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
   if (!isPlainObject(merged.tailwind.breakpoints)) {
     throw new Error("tailwind.breakpoints must be an object of CSS pixel values")
   }
+  if (!isPlainObject(merged.tailwind.containerBreakpoints)) {
+    throw new Error("tailwind.containerBreakpoints must be an object of CSS pixel values")
+  }
   const tailwind = Object.freeze({
     ...merged.tailwind,
     colorWords: [...PALETTE_WORDS, ...SHADCN_WORDS, ...merged.tailwind.colorWords],
     spacingScale: resolveSpacingScale(merged.tailwind),
     breakpoints: Object.freeze({ ...merged.tailwind.breakpoints }),
+    containerBreakpoints: Object.freeze({ ...merged.tailwind.containerBreakpoints }),
   })
-  const designSystem = resolveDesignSystemConfig(merged.designSystem, projectRoot, tailwind.breakpoints)
+  const designSystem = resolveDesignSystemConfig(
+    merged.designSystem,
+    projectRoot,
+    tailwind.breakpoints,
+    tailwind.containerBreakpoints
+  )
 
   const apiPrefix = merged.apiPrefix.startsWith("/")
     ? merged.apiPrefix.replace(/\/+$/, "")
