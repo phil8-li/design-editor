@@ -145,16 +145,27 @@ const SCALARS: Record<
   "line-height": { prefix: "leading" },
   "letter-spacing": { prefix: "tracking" },
   "box-shadow": { prefix: "shadow" },
+  // `duration` consults no spacing scale, so a token duration lands as an
+  // arbitrary `duration-[150ms]`. That class compiles under any theme, where
+  // the bare-number form depends on what the host's scale happens to name.
+  "transition-duration": { prefix: "duration" },
 
   /*
-   * `text`, `border`, and `font` each serve two properties. Prefix matching
-   * cannot tell `text-lg` from `text-red-500`, so these carry an explicit
-   * pattern and only replace a class of their own kind.
+   * `text`, `border`, and `font` each serve two properties, and `ring`,
+   * `outline` and `stroke` each carry a width beside their colour. Prefix
+   * matching cannot tell `text-lg` from `text-red-500`, so these carry an
+   * explicit pattern and only replace a class of their own kind.
    */
-  color: { prefix: "text", pattern: `^text-(\\[(#|rgb|hsl|oklch|var).*\\]|${colorWords()})$` },
+  color: { prefix: "text", pattern: colorClass("text") },
   "font-size": { prefix: "text", pattern: `^text-(\\[(?:[^\\]]*(?:px|rem|em|ch|%)|var\\([^\\]]+\\))\\]|${config.tailwind.fontSizes.join("|")})$` },
   "border-width": { prefix: "border", pattern: "^border(-\\[[^\\]]*px\\]|-\\d+)?$" },
-  "border-color": { prefix: "border", pattern: `^border-(\\[(#|rgb|hsl|oklch|var).*\\]|${colorWords()})$` },
+  "border-color": { prefix: "border", pattern: colorClass("border") },
+  // A ring in Tailwind v4 is a box-shadow driven by this custom property, so
+  // recolouring one writes the variable rather than a border it does not have.
+  "--tw-ring-color": { prefix: "ring", pattern: colorClass("ring") },
+  "outline-color": { prefix: "outline", pattern: colorClass("outline") },
+  fill: { prefix: "fill", pattern: colorClass("fill") },
+  stroke: { prefix: "stroke", pattern: colorClass("stroke") },
   "font-family": {
     prefix: "font",
     pattern: `^font-(${config.tailwind.fontFamilies.join("|")}|\\[(?!(?:(?:[1-9]\\d{0,2}|1000)\\]|number:))[^\\]]+\\])$`,
@@ -177,6 +188,14 @@ function colorWords(): string {
   // Tailwind palette stems plus the host's semantic tokens, so a themed class
   // like `text-muted-foreground` is replaced rather than duplicated.
   return `(${config.tailwind.colorWords.join("|")})([-/].*)?`
+}
+
+/**
+ * Colour-valued classes on a stem that also carries a width or a size:
+ * `ring-2`, `outline-none`, `stroke-2` and `border` must survive a recolour.
+ */
+function colorClass(stem: string): string {
+  return `^${stem}-(\\[(#|rgb|hsl|oklch|var).*\\]|${colorWords()})$`
 }
 
 /** Tailwind arbitrary values may not contain spaces; underscores stand in. */

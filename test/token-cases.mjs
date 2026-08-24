@@ -216,21 +216,48 @@ check("radius, text, spacing, effect, and icon tokens match their authored forms
     ["gap", "", ["gap-4"], "spacing:spacing-lg"],
     ["shadow", "", ["shadow-[var(--elev-2)]"], "shadow:elevation-2"],
     ["icon-size", "", ["size-4"], "icon-size:action"],
+    ["corner-radius-bottom-left", "", ["rounded-bl-[var(--radius-xl)]"], "radius:radius-xl"],
+    ["row-gap", "", ["gap-y-4"], "spacing:spacing-lg"],
+    ["column-gap", "", ["gap-x-4"], "spacing:spacing-lg"],
+    ["padding-top", "", ["pt-4"], "spacing:spacing-lg"],
+    ["margin-left", "", ["ml-4"], "spacing:spacing-lg"],
+    ["ring-color", "", ["ring-background"], "color:background-primary"],
+    ["outline-color", "", ["outline-background"], "color:background-primary"],
+    ["svg-fill", "", ["fill-background"], "color:background-primary"],
+    ["svg-stroke", "", ["stroke-background"], "color:background-primary"],
   ]
   for (const [property, inlineValue, classNames, tokenId] of cases) {
     const matches = helpers.authoredTokenMatches(property, inlineValue, classNames, catalog)
     assert.equal(matches[0]?.token.id, tokenId, `${property} did not resolve ${classNames[0]}`)
   }
+
+  // The honesty rule reaches matching too: a 0.3s transition is not `lively`,
+  // because no CSS duration can be. Only the flat springs are ever offered.
+  assert.deepEqual(
+    helpers.computedTokenMatches("motion-duration", "0.15s", catalog).map((match) => match.token.id),
+    ["motion:crossfade"]
+  )
+  assert.deepEqual(helpers.computedTokenMatches("motion-duration", "0.3s", catalog), [])
 })
 
 console.log("\nToken source-write shapes")
 
+function find(group, name) {
+  const token = catalog[group].find((entry) => entry.name === name)
+  assert.ok(token, `${group}/${name} is missing`)
+  return token
+}
+
+/** The class the write would land in source as, or a failure if it lands nowhere. */
+function classShape({ property, value }) {
+  const update = helpers.toClassUpdate(property, value)
+  assert.ok(update, `${property}:${value} did not translate`)
+  return update.tailwindToken
+    ? `${update.tailwindPrefix}-${update.tailwindToken}`
+    : `${update.tailwindPrefix}-[${update.value}]`
+}
+
 check("semantic tokens translate to durable Tailwind arbitrary-value shapes", () => {
-  const find = (group, name) => {
-    const token = catalog[group].find((entry) => entry.name === name)
-    assert.ok(token, `${group}/${name} is missing`)
-    return token
-  }
   const writes = [
     ...helpers.tokenStyleWrites("fill-color", find("colors", "Background/Primary")),
     ...helpers.tokenStyleWrites("corner-radius", find("radii", "radius/xl")),
@@ -251,13 +278,6 @@ check("semantic tokens translate to durable Tailwind arbitrary-value shapes", ()
     { property: "width", value: "16px" },
     { property: "height", value: "16px" },
   ])
-  const classShape = ({ property, value }) => {
-    const update = helpers.toClassUpdate(property, value)
-    assert.ok(update, `${property}:${value} did not translate`)
-    return update.tailwindToken
-      ? `${update.tailwindPrefix}-${update.tailwindToken}`
-      : `${update.tailwindPrefix}-[${update.value}]`
-  }
   assert.deepEqual(writes.map(classShape), [
     "bg-[var(--sem-background-primary)]",
     "rounded-[var(--radius-xl)]",
@@ -278,6 +298,119 @@ check("semantic tokens translate to durable Tailwind arbitrary-value shapes", ()
   assert.equal(`${weight.tailwindPrefix}-[${weight.value}]`, "font-[650]")
   assert.equal(new RegExp(weight.classPattern).test("font-[650]"), true)
   assert.equal(new RegExp(weight.classPattern).test("font-sans"), false)
+})
+
+check("the axes beyond the first nine write a real CSS property and a real class", () => {
+  const cases = [
+    ["ring-color", find("colors", "Background/Primary")],
+    ["outline-color", find("colors", "Background/Primary")],
+    ["svg-fill", find("colors", "Background/Primary")],
+    ["svg-stroke", find("colors", "Background/Primary")],
+    ["corner-radius-top-left", find("radii", "radius/xl")],
+    ["corner-radius-top-right", find("radii", "radius/xl")],
+    ["corner-radius-bottom-right", find("radii", "radius/xl")],
+    ["corner-radius-bottom-left", find("radii", "radius/xl")],
+    ["row-gap", find("spacing", "spacing/lg")],
+    ["column-gap", find("spacing", "spacing/lg")],
+    ["padding-top", find("spacing", "spacing/lg")],
+    ["padding-right", find("spacing", "spacing/lg")],
+    ["padding-bottom", find("spacing", "spacing/lg")],
+    ["padding-left", find("spacing", "spacing/lg")],
+    ["margin", find("spacing", "spacing/lg")],
+    ["margin-top", find("spacing", "spacing/lg")],
+    ["margin-right", find("spacing", "spacing/lg")],
+    ["margin-bottom", find("spacing", "spacing/lg")],
+    ["margin-left", find("spacing", "spacing/lg")],
+    ["motion-duration", find("motion", "crossfade")],
+  ]
+  const rows = cases.flatMap(([property, token]) =>
+    helpers
+      .tokenStyleWrites(property, token)
+      .map((write) => [property, write.property, classShape(write)])
+  )
+  assert.deepEqual(rows, [
+    // A ring is a box-shadow in Tailwind v4, so its colour is the custom
+    // property that shadow reads — not a border-color the element never has.
+    ["ring-color", "--tw-ring-color", "ring-[var(--sem-background-primary)]"],
+    ["outline-color", "outline-color", "outline-[var(--sem-background-primary)]"],
+    ["svg-fill", "fill", "fill-[var(--sem-background-primary)]"],
+    ["svg-stroke", "stroke", "stroke-[var(--sem-background-primary)]"],
+    ["corner-radius-top-left", "border-top-left-radius", "rounded-tl-[var(--radius-xl)]"],
+    ["corner-radius-top-right", "border-top-right-radius", "rounded-tr-[var(--radius-xl)]"],
+    ["corner-radius-bottom-right", "border-bottom-right-radius", "rounded-br-[var(--radius-xl)]"],
+    ["corner-radius-bottom-left", "border-bottom-left-radius", "rounded-bl-[var(--radius-xl)]"],
+    ["row-gap", "row-gap", "gap-y-4"],
+    ["column-gap", "column-gap", "gap-x-4"],
+    ["padding-top", "padding-top", "pt-4"],
+    ["padding-right", "padding-right", "pr-4"],
+    ["padding-bottom", "padding-bottom", "pb-4"],
+    ["padding-left", "padding-left", "pl-4"],
+    ["margin", "margin", "m-4"],
+    ["margin-top", "margin-top", "mt-4"],
+    ["margin-right", "margin-right", "mr-4"],
+    ["margin-bottom", "margin-bottom", "mb-4"],
+    ["margin-left", "margin-left", "ml-4"],
+    ["motion-duration", "transition-duration", "duration-[150ms]"],
+  ])
+
+  // `ring`, `outline` and `stroke` each carry a width as well as a colour, so a
+  // recolour that matched on the stem alone would delete the width with it.
+  const replaces = (property, className) =>
+    new RegExp(helpers.toClassUpdate(property, "var(--sem-background-primary)").classPattern).test(className)
+  assert.equal(replaces("--tw-ring-color", "ring-2"), false)
+  assert.equal(replaces("outline-color", "outline-dashed"), false)
+  assert.equal(replaces("stroke", "stroke-2"), false)
+  assert.equal(replaces("fill", "fill-current"), true)
+})
+
+check("a bouncing spring writes nothing rather than a duration that lies", () => {
+  const flat = catalog.motion.filter((token) => token.values.default.bounce === 0)
+  assert.deepEqual(flat.map((token) => token.name), ["crossfade", "calm"])
+  assert.deepEqual(
+    flat.map((token) => helpers.tokenStyleWrites("motion-duration", token)),
+    [
+      [{ property: "transition-duration", value: "150ms" }],
+      [{ property: "transition-duration", value: "240ms" }],
+    ]
+  )
+
+  // The other seven are the point of the rule: transition-duration has no way
+  // to carry bounce, so applying one would change the feel while the toast said
+  // it worked. No writes is how this module says "not expressible here".
+  const bouncing = catalog.motion.filter((token) => token.values.default.bounce !== 0)
+  assert.equal(bouncing.length, 7)
+  for (const token of bouncing) {
+    assert.deepEqual(
+      helpers.tokenStyleWrites("motion-duration", token),
+      [],
+      `${token.name} bounces and must not be written as a plain duration`
+    )
+  }
+
+  // Motion tokens live in TypeScript, so there is no var() to name them by.
+  assert.equal(helpers.tokenSourceSpelling(find("motion", "lively")), "spring 0.3s · bounce 0.2")
+  assert.equal(helpers.tokenSourceSpelling(find("motion", "crossfade")), "spring 0.15s · bounce 0")
+})
+
+check("every design-system property has a category and a way into source", () => {
+  assert.ok(helpers.DESIGN_TOKEN_PROPERTIES.length >= 29, "the vocabulary sweep is not empty")
+  for (const property of helpers.DESIGN_TOKEN_PROPERTIES) {
+    const tokens = helpers.tokensForProperty(property, catalog)
+    assert.ok(tokens.length, `${property} maps to no populated catalog category`)
+
+    let writable = 0
+    for (const token of tokens) {
+      const writes = helpers.tokenStyleWrites(property, token)
+      if (writes.length) writable += 1
+      for (const write of writes) {
+        assert.ok(
+          helpers.toClassUpdate(write.property, write.value),
+          `${property}/${token.name} writes ${write.property}, which stays preview-only`
+        )
+      }
+    }
+    assert.ok(writable, `${property} can write no token in its category`)
+  }
 })
 
 console.log("\nInspector controls")
