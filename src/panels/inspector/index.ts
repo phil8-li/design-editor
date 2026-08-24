@@ -12,6 +12,8 @@ import type { EditorContext } from "../../core/context"
 import type { Selection } from "../../core/types"
 
 import { unifiedLayoutSection } from "./section-unified-layout"
+import { designSystemSection } from "./section-design-system"
+import { responsiveSection } from "./section-responsive"
 import { appearanceSection } from "./section-appearance"
 import { fillSection } from "./section-fill"
 import { strokeSection } from "./section-stroke"
@@ -36,6 +38,8 @@ export type InspectorSection = (context: SectionContext) => HTMLElement | null
 /** Figma's own top-to-bottom order, minus the sections with no DOM analogue. */
 const SECTIONS: InspectorSection[] = [
   optionsSection,
+  designSystemSection,
+  responsiveSection,
   unifiedLayoutSection,
   appearanceSection,
   fillSection,

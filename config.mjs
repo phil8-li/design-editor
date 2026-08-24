@@ -16,6 +16,11 @@ import fs from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import {
+  DEFAULT_TAILWIND_BREAKPOINTS,
+  resolveDesignSystemConfig,
+} from "./server/design-system-config.mjs"
+
 export const CONFIG_FILE_NAMES = [
   "design-editor.config.mjs",
   "design-editor.config.js",
@@ -82,6 +87,7 @@ export const DEFAULT_CONFIG = {
       edgeGap: 8,
     },
   },
+  designSystem: { manifest: null, cssSources: [] },
   controls: { leva: null },
   tailwind: {
     version: 3,
@@ -90,6 +96,7 @@ export const DEFAULT_CONFIG = {
     fontFamilies: ["sans", "serif", "mono"],
     spacingBase: 4,
     spacingScale: "v3-default",
+    breakpoints: DEFAULT_TAILWIND_BREAKPOINTS,
     spacedStems: null,
   },
   source: { roots: [], extensions: [".tsx", ".jsx", ".ts", ".js", ".mts", ".mjs"] },
@@ -198,11 +205,24 @@ function resolveLevaConfig(value, projectRoot) {
  * tracks the HOST even when this package is installed under node_modules.
  */
 export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd() } = {}) {
+  if (raw.designSystem !== undefined && !isPlainObject(raw.designSystem)) {
+    throw new Error("designSystem must be an object with manifest and cssSources")
+  }
   const merged = merge(DEFAULT_CONFIG, raw)
   const rootBase = configPath ? path.dirname(configPath) : cwd
   const projectRoot = path.resolve(rootBase, merged.projectRoot ?? ".")
   const stateDir = path.resolve(projectRoot, merged.stateDir)
   const leva = resolveLevaConfig(merged.controls?.leva, projectRoot)
+  if (!isPlainObject(merged.tailwind.breakpoints)) {
+    throw new Error("tailwind.breakpoints must be an object of CSS pixel values")
+  }
+  const tailwind = Object.freeze({
+    ...merged.tailwind,
+    colorWords: [...PALETTE_WORDS, ...SHADCN_WORDS, ...merged.tailwind.colorWords],
+    spacingScale: resolveSpacingScale(merged.tailwind),
+    breakpoints: Object.freeze({ ...merged.tailwind.breakpoints }),
+  })
+  const designSystem = resolveDesignSystemConfig(merged.designSystem, projectRoot, tailwind.breakpoints)
 
   const apiPrefix = merged.apiPrefix.startsWith("/")
     ? merged.apiPrefix.replace(/\/+$/, "")
@@ -223,11 +243,8 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
         chromeSelector: merged.chrome.dockedPanel.chromeSelectors.join(","),
       }),
     }),
-    tailwind: Object.freeze({
-      ...merged.tailwind,
-      colorWords: [...PALETTE_WORDS, ...SHADCN_WORDS, ...merged.tailwind.colorWords],
-      spacingScale: resolveSpacingScale(merged.tailwind),
-    }),
+    tailwind,
+    designSystem,
     controls: Object.freeze({ leva }),
     source: Object.freeze({
       ...merged.source,
@@ -270,6 +287,8 @@ export function browserPrelude(config, runtime = {}) {
       dockedPanel: config.chrome.dockedPanel,
     },
     tailwind: config.tailwind,
+    // Absolute manifest and stylesheet paths stay in the server-side config.
+    designSystem: config.designSystem.catalog,
     controls: {
       leva: config.controls.leva
         ? {

@@ -30,6 +30,15 @@ const config = {
   // Change it only if it collides with one of your app's routes.
   apiPrefix: "/__design-editor",
 
+  // Optional canonical token manifest. Keep `manifest` null for a generic
+  // install. CSS sources let the editor connect authored custom properties and
+  // Tailwind theme aliases back to the manifest without exposing these paths
+  // to the browser.
+  designSystem: {
+    manifest: null, // e.g. "docs/design-tokens.json"
+    cssSources: [], // e.g. ["app/globals.css"]
+  },
+
   chrome: {
     // Elements the editor must treat as its own furniture rather than as
     // canvas: your dev GUI, debug bars, anything that is not the product.
@@ -87,6 +96,7 @@ const config = {
     version: 3,
     spacingScale: "v3-default",
     spacingBase: 4,
+    breakpoints: { sm: 640, md: 768, lg: 1024, xl: 1280, "2xl": 1536 },
 
     // Your own colour stems, ADDED to Tailwind's palette and the shadcn
     // semantic tokens. A stem listed here is written as `bg-brand-500`; a

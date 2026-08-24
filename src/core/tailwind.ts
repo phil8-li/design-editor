@@ -108,6 +108,9 @@ const KEYWORDS: Record<string, Record<string, string>> = {
   },
 }
 
+const FONT_WEIGHT_PATTERN =
+  "^font-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black|\\[(?:[1-9]\\d{0,2}|1000|number:var\\(--[\\w-]+\\))\\])$"
+
 /** Prefix stems that need a stem-plus-value class, e.g. `gap` -> `gap-2`. */
 const SCALARS: Record<
   string,
@@ -149,10 +152,13 @@ const SCALARS: Record<
    * pattern and only replace a class of their own kind.
    */
   color: { prefix: "text", pattern: `^text-(\\[(#|rgb|hsl|oklch|var).*\\]|${colorWords()})$` },
-  "font-size": { prefix: "text", pattern: `^text-(\\[[^\\]]*(px|rem|em|ch|%)\\]|${config.tailwind.fontSizes.join("|")})$` },
+  "font-size": { prefix: "text", pattern: `^text-(\\[(?:[^\\]]*(?:px|rem|em|ch|%)|var\\([^\\]]+\\))\\]|${config.tailwind.fontSizes.join("|")})$` },
   "border-width": { prefix: "border", pattern: "^border(-\\[[^\\]]*px\\]|-\\d+)?$" },
   "border-color": { prefix: "border", pattern: `^border-(\\[(#|rgb|hsl|oklch|var).*\\]|${colorWords()})$` },
-  "font-family": { prefix: "font", pattern: `^font-(${config.tailwind.fontFamilies.join("|")}|\\[[^\\]]*\\])$` },
+  "font-family": {
+    prefix: "font",
+    pattern: `^font-(${config.tailwind.fontFamilies.join("|")}|\\[(?!(?:(?:[1-9]\\d{0,2}|1000)\\]|number:))[^\\]]+\\])$`,
+  },
 }
 
 /**
@@ -203,6 +209,21 @@ export function toClassUpdate(property: string, rawValue: string): ClassUpdate |
   const keywords = KEYWORDS[property]
   if (keywords) {
     const token = keywords[value]
+    // The design-system type ramp uses 650, and its CSS-variable spelling is
+    // also a valid Tailwind arbitrary font-weight. Keep this branch narrower
+    // than `font-family`: both share the `font-` stem, so the replacement
+    // pattern must describe weights only or selecting H1 can erase `font-sans`.
+    if (!token && property === "font-weight") {
+      const number = /^(?:[1-9]\d{0,2}|1000)$/.test(value)
+      const variable = /^var\(--[\w-]+\)$/.test(value)
+      if (!number && !variable) return null
+      return {
+        tailwindPrefix: "font",
+        tailwindToken: null,
+        value: variable ? `number:${toArbitrary(value)}` : toArbitrary(value),
+        classPattern: FONT_WEIGHT_PATTERN,
+      }
+    }
     if (!token) return null
     const alternatives = Object.values(keywords)
       .map((cls) => cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))

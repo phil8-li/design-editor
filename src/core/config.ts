@@ -25,8 +25,52 @@ export interface TailwindConfig {
   fontFamilies: string[]
   /** px -> Tailwind step, e.g. `16` -> `"4"`. Misses become arbitrary values. */
   spacingScale: Record<string, string>
+  /** Responsive prefix -> minimum viewport width in CSS pixels. */
+  breakpoints: Record<string, number>
   /** Overrides which stems consult `spacingScale`; null keeps the built-in set. */
   spacedStems: string | null
+}
+
+export interface DesignSystemToken {
+  id: string
+  name: string
+  category: string
+  values: Record<string, unknown>
+  cssVar?: string
+  cssVars?: Record<string, string>
+  cssUtility?: string
+  scope?: string[]
+  codeSyntax?: Record<string, unknown> | null
+  usage?: string
+  prefix?: string
+}
+
+export interface DesignSystemAlias {
+  name: string
+  tokenIds: string[]
+  ambiguous: boolean
+}
+
+export interface TailwindTokenAlias extends DesignSystemAlias {
+  namespace: string
+  cssVar: string
+}
+
+export interface DesignSystemCatalog {
+  name: string | null
+  colors: DesignSystemToken[]
+  spacing: DesignSystemToken[]
+  radii: DesignSystemToken[]
+  textStyles: DesignSystemToken[]
+  uiTextStyles: DesignSystemToken[]
+  effects: DesignSystemToken[]
+  icons: DesignSystemToken[]
+  motion: DesignSystemToken[]
+  breakpoints: DesignSystemToken[]
+  aliases: {
+    cssVariables: DesignSystemAlias[]
+    tailwind: TailwindTokenAlias[]
+  }
 }
 
 export interface DesignEditorConfig {
@@ -37,6 +81,35 @@ export interface DesignEditorConfig {
     dockedPanel: DockedPanelConfig
   }
   tailwind: TailwindConfig
+  designSystem: DesignSystemCatalog
+}
+
+const STANDARD_BREAKPOINTS = { sm: 640, md: 768, lg: 1024, xl: 1280, "2xl": 1536 }
+
+function breakpointTokens(breakpoints: Record<string, number>): DesignSystemToken[] {
+  return Object.entries(breakpoints).map(([name, value]) => ({
+    id: `breakpoint:${name}`,
+    name,
+    category: "breakpoint",
+    prefix: `${name}:`,
+    values: { default: value },
+  })).sort((a, b) => (a.values.default as number) - (b.values.default as number))
+}
+
+function emptyDesignSystem(breakpoints: Record<string, number>): DesignSystemCatalog {
+  return {
+    name: null,
+    colors: [],
+    spacing: [],
+    radii: [],
+    textStyles: [],
+    uiTextStyles: [],
+    effects: [],
+    icons: [],
+    motion: [],
+    breakpoints: breakpointTokens(breakpoints),
+    aliases: { cssVariables: [], tailwind: [] },
+  }
 }
 
 const FALLBACK: DesignEditorConfig = {
@@ -65,12 +138,48 @@ const FALLBACK: DesignEditorConfig = {
       44: "11", 48: "12", 56: "14", 64: "16", 80: "20", 96: "24", 112: "28",
       128: "32",
     },
+    breakpoints: STANDARD_BREAKPOINTS,
     spacedStems: null,
   },
+  designSystem: emptyDesignSystem(STANDARD_BREAKPOINTS),
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+function numberMap(value: unknown, fallback: Record<string, number>): Record<string, number> {
+  if (!isRecord(value)) return fallback
+  const entries = Object.entries(value).filter(
+    (entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]),
+  )
+  return { ...fallback, ...Object.fromEntries(entries) }
+}
+
+function configuredList<T>(value: unknown, fallback: T[]): T[] {
+  return Array.isArray(value) ? value as T[] : fallback
+}
+
+function readDesignSystem(value: unknown, breakpoints: Record<string, number>): DesignSystemCatalog {
+  const fallback = emptyDesignSystem(breakpoints)
+  if (!isRecord(value)) return fallback
+  const aliases = isRecord(value.aliases) ? value.aliases : {}
+  return {
+    name: typeof value.name === "string" ? value.name : null,
+    colors: configuredList(value.colors, fallback.colors),
+    spacing: configuredList(value.spacing, fallback.spacing),
+    radii: configuredList(value.radii, fallback.radii),
+    textStyles: configuredList(value.textStyles, fallback.textStyles),
+    uiTextStyles: configuredList(value.uiTextStyles, fallback.uiTextStyles),
+    effects: configuredList(value.effects, fallback.effects),
+    icons: configuredList(value.icons, fallback.icons),
+    motion: configuredList(value.motion, fallback.motion),
+    breakpoints: configuredList(value.breakpoints, fallback.breakpoints),
+    aliases: {
+      cssVariables: configuredList<DesignSystemAlias>(aliases.cssVariables, []),
+      tailwind: configuredList<TailwindTokenAlias>(aliases.tailwind, []),
+    },
+  }
 }
 
 /**
@@ -91,6 +200,7 @@ function read(): DesignEditorConfig {
     typeof value === "string" && value.length > 0 ? value : fallback
   const list = (value: unknown, fallback: string[]): string[] =>
     Array.isArray(value) && value.length > 0 ? value.filter((v) => typeof v === "string") : fallback
+  const breakpoints = numberMap(tailwind.breakpoints, FALLBACK.tailwind.breakpoints)
 
   return {
     apiBase: str(raw.apiBase, FALLBACK.apiBase),
@@ -114,9 +224,11 @@ function read(): DesignEditorConfig {
       spacingScale: isRecord(tailwind.spacingScale)
         ? (tailwind.spacingScale as Record<string, string>)
         : FALLBACK.tailwind.spacingScale,
+      breakpoints,
       spacedStems:
         typeof tailwind.spacedStems === "string" ? tailwind.spacedStems : null,
     },
+    designSystem: readDesignSystem(raw.designSystem, breakpoints),
   }
 }
 

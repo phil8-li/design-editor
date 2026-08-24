@@ -96,14 +96,43 @@ Copy `design-editor/design-editor.config.example.mjs` to
 not need. The file is discovered by walking up from the working directory, and
 all its paths resolve against the directory holding it.
 
-The three settings most likely to matter:
+The settings most likely to matter:
 
 - **`tailwind.version`** — on Tailwind v4, set `4` and
   `spacingScale: "v4-linear"`, or the editor writes arbitrary values for
   spacing tokens that do exist in your build.
+- **`tailwind.breakpoints`** — the responsive prefixes the inspector offers;
+  the default is Tailwind's `sm` through `2xl` scale.
 - **`tailwind.colorWords`** — your palette stems, so `bg-brand-500` is written
   as a class rather than as an arbitrary colour.
+- **`designSystem.manifest`** — the canonical token catalog displayed beside
+  the selected element. Add `designSystem.cssSources` to map authored CSS and
+  Tailwind aliases back to those tokens.
 - **`source.roots`** — the directories the agent may edit.
+
+### Design-system catalog
+
+The optional catalog keeps the package generic while letting a host expose its
+real token vocabulary in the inspector:
+
+```js
+designSystem: {
+  manifest: "docs/design-tokens.json",
+  cssSources: ["app/globals.css"],
+},
+```
+
+The manifest contains `Color`, `Spacing`, and `Radius` collections plus
+`textStyles`, `uiTextStyles`, `effectStyles`, `iconScale`, and `motion` arrays.
+The launcher validates those groups and their editable values before serving
+the editor, so a stale generated manifest fails at startup with its field name.
+
+CSS sources are scanned for custom-property chains and Tailwind `@theme`
+aliases. Resolution stops at a manifest-owned custom property: for example,
+`--color-background` may point through `--background` to
+`--sem-background-primary`. Conflicting declarations are retained as ambiguous
+aliases rather than assigned to one token. Only the normalized catalog enters
+the browser prelude; manifest and stylesheet paths remain server-side.
 
 ### Dev chrome
 
@@ -219,6 +248,7 @@ config.mjs                  defaults, discovery, resolution, browser prelude
 build.mjs                   bundles src/ into dist/design-editor.js
 runtime/launcher.mjs        vendor resolution, monkey-patches, route mount
 runtime/vendor-patch.mjs    the 22 splices against react-rewrite-cli 0.1.1
+server/design-system-config.mjs token manifest and authored-alias normalization
 server/routes.mjs           loopback-guarded HTTP routes
 server/options-store.mjs    saved option sets
 server/control-defaults.mjs configured literal default reader/writer
