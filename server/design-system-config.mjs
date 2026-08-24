@@ -5,6 +5,7 @@ import { aliasesFromCss } from "./design-system-aliases.mjs"
 import {
   emptyDesignSystemCatalog,
   normalizeBreakpoints,
+  normalizeDesignSystemBreakpoints,
   normalizeDesignSystemManifest,
 } from "./design-system-manifest.mjs"
 
@@ -29,13 +30,14 @@ export function resolveDesignSystemConfig(value, projectRoot, breakpoints) {
     throw new Error("designSystem.cssSources must be an array of non-empty path strings")
   }
 
+  const annotations = normalizeDesignSystemBreakpoints(value.breakpoints)
   const manifest = value.manifest ? path.resolve(projectRoot, value.manifest) : null
   const cssSources = value.cssSources.map((entry) => path.resolve(projectRoot, entry))
   if (!manifest) {
     return Object.freeze({
       manifest: null,
       cssSources: Object.freeze(cssSources),
-      catalog: emptyDesignSystemCatalog(breakpoints),
+      catalog: emptyDesignSystemCatalog(breakpoints, annotations),
     })
   }
 
@@ -55,7 +57,7 @@ export function resolveDesignSystemConfig(value, projectRoot, breakpoints) {
       throw new Error(`Could not read design-system CSS source ${sourcePath}: ${error.message}`)
     }
   }
-  catalog.breakpoints = normalizeBreakpoints(breakpoints)
+  catalog.breakpoints = normalizeBreakpoints(breakpoints, annotations)
   catalog.aliases = aliasesFromCss(catalog, css)
   return Object.freeze({
     manifest,

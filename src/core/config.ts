@@ -43,6 +43,15 @@ export interface DesignSystemToken {
   codeSyntax?: Record<string, unknown> | null
   usage?: string
   prefix?: string
+  /**
+   * Breakpoints only. True when the host's design system documents this step;
+   * false for a Tailwind prefix that compiles but that the system never
+   * declared. The inspector still offers the undocumented prefix — it works —
+   * but must not present it as a design-system decision.
+   */
+  documented?: boolean
+  /** Breakpoints only. The source file that owns the number, for the hint line. */
+  owner?: string
 }
 
 export interface DesignSystemAlias {
@@ -93,6 +102,9 @@ function breakpointTokens(breakpoints: Record<string, number>): DesignSystemToke
     category: "breakpoint",
     prefix: `${name}:`,
     values: { default: value },
+    // No host manifest reached this bundle, so nothing here is a documented
+    // design-system step — only a prefix Tailwind compiles.
+    documented: false,
   })).sort((a, b) => (a.values.default as number) - (b.values.default as number))
 }
 

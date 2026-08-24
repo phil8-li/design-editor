@@ -1,4 +1,8 @@
-/** Deterministic design-system catalog, matching, and responsive-class cases. */
+/**
+ * Deterministic design-system catalog, token-matching, and token-row cases.
+ *
+ * Breakpoints and responsive classes live in responsive-cases.mjs.
+ */
 
 import assert from "node:assert/strict"
 import path from "node:path"
@@ -42,7 +46,6 @@ async function loadEditorHelpers() {
     stdin: {
       contents: `
         export * from "./src/core/design-system"
-        export * from "./src/core/responsive"
         export { toClassUpdate } from "./src/core/tailwind"
         export { createContext } from "./src/core/context"
         export { installInspector } from "./src/panels/inspector"
@@ -220,64 +223,6 @@ check("radius, text, spacing, effect, and icon tokens match their authored forms
   }
 })
 
-console.log("\nResponsive classes")
-
-check("responsive parsing distinguishes viewport, container, and base utilities", () => {
-  assert.equal(helpers.parseResponsiveClassName("gap-4", workspace.tailwind.breakpoints), null)
-
-  const viewport = helpers.parseResponsiveClassName(
-    "dark:md:hover:gap-6",
-    workspace.tailwind.breakpoints
-  )
-  assert.equal(viewport.breakpoint, "md")
-  assert.equal(viewport.px, 768)
-  assert.equal(viewport.prefix, "dark:md:hover:")
-  assert.equal(viewport.utility, "gap-6")
-  assert.equal(viewport.context, "viewport")
-
-  const container = helpers.parseResponsiveClassName(
-    "@lg/sidebar:grid-cols-3",
-    workspace.tailwind.breakpoints
-  )
-  assert.equal(container.breakpoint, "lg")
-  assert.equal(container.px, null)
-  assert.equal(container.prefix, "@lg/sidebar:")
-  assert.equal(container.utility, "grid-cols-3")
-  assert.equal(container.context, "container")
-})
-
-check("responsive bindings are ordered by breakpoint without losing source order ties", () => {
-  const bindings = helpers.responsiveClassBindings(
-    ["xl:grid-cols-4", "md:grid-cols-2", "hover:md:gap-6", "grid"],
-    workspace.tailwind.breakpoints
-  )
-  assert.deepEqual(
-    bindings.map(({ className, px }) => [className, px]),
-    [
-      ["md:grid-cols-2", 768],
-      ["hover:md:gap-6", 768],
-      ["xl:grid-cols-4", 1280],
-    ]
-  )
-})
-
-check("replacing one breakpoint preserves base, siblings, and nested variants", () => {
-  const classes = ["grid", "grid-cols-1", "md:grid-cols-2", "dark:md:hover:gap-6", "xl:grid-cols-4"]
-  const binding = helpers.parseResponsiveClassName(
-    "dark:md:hover:gap-6",
-    workspace.tailwind.breakpoints
-  )
-  const edit = helpers.replaceResponsiveClass(binding, "gap-8")
-  assert.deepEqual(edit, {
-    remove: ["dark:md:hover:gap-6"],
-    add: ["dark:md:hover:gap-8"],
-  })
-  const after = classes.filter((name) => !edit.remove.includes(name)).concat(edit.add)
-  assert.ok(after.includes("grid-cols-1"))
-  assert.ok(after.includes("md:grid-cols-2"))
-  assert.ok(after.includes("xl:grid-cols-4"))
-})
-
 console.log("\nToken source-write shapes")
 
 check("semantic tokens translate to durable Tailwind arbitrary-value shapes", () => {
@@ -337,7 +282,7 @@ check("semantic tokens translate to durable Tailwind arbitrary-value shapes", ()
 
 console.log("\nInspector controls")
 
-await checkAsync("token and breakpoint controls are named and keep focus across their write", async () => {
+await checkAsync("token controls are named and keep focus across their write", async () => {
   const dom = new JSDOM(
     `<!doctype html><html><body><div id="target" class="grid grid-cols-1 border bg-background gap-4 p-4 md:grid-cols-2 dark:md:hover:gap-6 xl:grid-cols-4" style="display:grid;gap:16px;padding:16px;background-color:var(--color-background);border:1px solid var(--sem-border-primary);border-radius:var(--radius-xl);box-shadow:var(--elev-2)">Hello<span></span></div></body></html>`,
     { pretendToBeVisual: true, url: "http://localhost/" }
@@ -401,31 +346,21 @@ await checkAsync("token and breakpoint controls are named and keep focus across 
     ]) {
       assert.ok(right.querySelector(`[aria-label="${label}"]`), `${label} is missing`)
     }
-    for (const breakpoint of ["sm", "md", "lg", "xl", "2xl"]) {
-      assert.ok(
-        right.querySelector(`[aria-label="${breakpoint} breakpoint utilities"]`),
-        `${breakpoint} control is missing`
-      )
-    }
-
-    const before = right.querySelector('[data-de-field="responsive.md"]')
+    // Picking a token is one gesture, so it must not cost the row you were on:
+    // every commit rebuilds the whole panel, and a select that loses focus makes
+    // walking a column of token rows by keyboard impossible.
+    const before = right.querySelector('[data-de-field="design-system.corner-radius"]')
     before.focus()
-    before.value = "grid-cols-3 gap-6"
-    before.setSelectionRange(3, 7)
+    before.value = "radius:radius-sm"
     before.dispatchEvent(new window.Event("change", { bubbles: true }))
     await paint()
 
-    const after = right.querySelector('[data-de-field="responsive.md"]')
+    const after = right.querySelector('[data-de-field="design-system.corner-radius"]')
     assert.notEqual(after, before, "the inspector did not rebuild")
     assert.equal(window.document.activeElement, after)
-    assert.equal(after.selectionStart, 3)
-    assert.equal(after.selectionEnd, 7)
-    assert.ok(target.classList.contains("grid-cols-1"), "base class was removed")
-    assert.ok(target.classList.contains("xl:grid-cols-4"), "sibling breakpoint was removed")
-    assert.ok(target.classList.contains("dark:md:hover:gap-6"), "nested variant was removed")
-    assert.ok(target.classList.contains("md:grid-cols-3"))
-    assert.ok(target.classList.contains("md:gap-6"))
-    assert.ok(pending.length > 0, "responsive edit did not queue a source operation")
+    assert.equal(after.value, "radius:radius-sm", "the row does not read back as bound")
+    assert.match(target.style.borderRadius, /var\(--radius-sm\)/)
+    assert.ok(pending.length > 0, "token pick did not queue a source operation")
   } finally {
     globalThis.fetch = originalFetch
     dom.window.close()

@@ -37,6 +37,14 @@ const config = {
   designSystem: {
     manifest: null, // e.g. "docs/design-tokens.json"
     cssSources: [], // e.g. ["app/globals.css"]
+
+    // Optional prose for the breakpoints your design system actually
+    // documents. The pixel value stays in `tailwind.breakpoints` — its one
+    // owner — and this only says what crossing the step MEANS. A prefix you
+    // omit still appears in the inspector, labelled as outside the system.
+    breakpoints: {
+      // md: { usage: "Tablet — the nav collapses.", owner: "src/hooks/use-mobile.ts" },
+    },
   },
 
   chrome: {

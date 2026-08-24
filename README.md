@@ -127,6 +127,27 @@ The manifest contains `Color`, `Spacing`, and `Radius` collections plus
 The launcher validates those groups and their editable values before serving
 the editor, so a stale generated manifest fails at startup with its field name.
 
+### Documented breakpoints
+
+Two facts, deliberately kept apart. `tailwind.breakpoints` says which variant
+prefixes your build **compiles**; the optional `designSystem.breakpoints` says
+which of those steps your design system has a **meaning** for:
+
+```js
+designSystem: {
+  breakpoints: {
+    md: { usage: "Sheet — the nav stops docking and floats over the canvas.",
+          owner: "src/hooks/use-mobile.ts" },
+  },
+},
+```
+
+The pixel value keeps its one owner in `tailwind.breakpoints`; an annotation may
+only add prose, and naming a breakpoint that map does not define fails at
+startup. A prefix you leave unannotated still appears in the inspector — it
+compiles, so hiding it would make the panel lie — but it is marked as outside
+the design system rather than presented as a decision someone made.
+
 CSS sources are scanned for custom-property chains and Tailwind `@theme`
 aliases. Resolution stops at a manifest-owned custom property: for example,
 `--color-background` may point through `--background` to

@@ -211,24 +211,62 @@ export function normalizeDesignSystemManifest(manifest) {
   return catalog
 }
 
-export function normalizeBreakpoints(breakpoints) {
+/**
+ * Two facts, kept apart on purpose.
+ *
+ * `tailwind.breakpoints` says which variant prefixes the host's Tailwind build
+ * actually COMPILES. `designSystem.breakpoints` says which of those steps the
+ * host's design system has a MEANING for. They are not the same list — this app
+ * ships Tailwind's `sm` at 640 and its design system documents no step there —
+ * and collapsing them would either hide a prefix that works or invent a step the
+ * design system never declared. The pixel value has one owner, the Tailwind map;
+ * the annotation may only add prose.
+ */
+export function normalizeDesignSystemBreakpoints(value) {
+  if (value === undefined || value === null) return {}
+  if (!isPlainObject(value)) manifestError("designSystem.breakpoints", "must be an object keyed by breakpoint name")
+  const annotations = {}
+  for (const [name, raw] of Object.entries(value)) {
+    const label = `designSystem.breakpoints.${name}`
+    const entry = expectObject(raw, label)
+    annotations[name] = {
+      usage: expectString(entry.usage, `${label}.usage`),
+      ...(entry.owner === undefined ? {} : { owner: expectString(entry.owner, `${label}.owner`) }),
+    }
+  }
+  return annotations
+}
+
+export function normalizeBreakpoints(breakpoints, annotations = {}) {
   if (!isPlainObject(breakpoints)) throw new Error("tailwind.breakpoints must be an object of CSS pixel values")
+  for (const name of Object.keys(annotations)) {
+    if (!(name in breakpoints)) {
+      manifestError(`designSystem.breakpoints.${name}`, "names a breakpoint tailwind.breakpoints does not define")
+    }
+  }
   return Object.entries(breakpoints).map(([name, value]) => {
     if (!name.trim()) throw new Error("tailwind breakpoint names must not be empty")
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
       throw new Error(`tailwind.breakpoints.${name} must be a non-negative finite number`)
     }
+    const annotation = annotations[name]
     return {
       id: tokenId("breakpoint", name),
       name,
       category: "breakpoint",
       prefix: `${name}:`,
       values: { default: value },
+      // Present and true only for a step the design system documents. A bare
+      // Tailwind prefix still appears — it compiles, so hiding it would make the
+      // inspector lie — but it is labelled as outside the system.
+      documented: Boolean(annotation),
+      ...(annotation?.usage ? { usage: annotation.usage } : {}),
+      ...(annotation?.owner ? { owner: annotation.owner } : {}),
     }
   }).sort((a, b) => a.values.default - b.values.default)
 }
 
-export function emptyDesignSystemCatalog(breakpoints) {
+export function emptyDesignSystemCatalog(breakpoints, annotations = {}) {
   return {
     name: null,
     colors: [],
@@ -239,7 +277,7 @@ export function emptyDesignSystemCatalog(breakpoints) {
     effects: [],
     icons: [],
     motion: [],
-    breakpoints: normalizeBreakpoints(breakpoints),
+    breakpoints: normalizeBreakpoints(breakpoints, annotations),
     aliases: { cssVariables: [], tailwind: [] },
   }
 }
