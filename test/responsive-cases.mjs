@@ -49,6 +49,26 @@ async function checkAsync(name, fn) {
   }
 }
 
+/**
+ * jsdom does not install its window on the module realm, and the editor is
+ * plain DOM that reaches for these by name. Shared by both render cases so the
+ * two fixtures cannot drift into testing different globals.
+ */
+function installDomGlobals(window) {
+  for (const key of [
+    "window", "document", "navigator", "Node", "Element", "HTMLElement",
+    "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "SVGElement",
+    "Event", "CustomEvent", "KeyboardEvent", "PointerEvent", "requestAnimationFrame",
+    "cancelAnimationFrame", "getComputedStyle",
+  ]) {
+    Object.defineProperty(globalThis, key, {
+      value: key === "getComputedStyle" ? window.getComputedStyle.bind(window) : window[key],
+      configurable: true,
+      writable: true,
+    })
+  }
+}
+
 async function loadEditorHelpers() {
   const { build } = await import("esbuild")
   const bundled = await build({
@@ -57,6 +77,7 @@ async function loadEditorHelpers() {
         export * from "./src/core/responsive"
         export { createContext } from "./src/core/context"
         export { installInspector } from "./src/panels/inspector"
+        export { responsiveSection } from "./src/panels/inspector/section-responsive"
       `,
       resolveDir: PACKAGE_DIR,
       loader: "ts",
@@ -133,7 +154,43 @@ check("the browser prelude carries the documented flag to the inspector", () => 
 
 console.log("\nResponsive classes")
 
+// The bundle reads `window.__DESIGN_EDITOR_CONFIG__` once at import, so the host
+// catalog has to be in place BEFORE the import. Set it afterwards and the panel
+// would render against the generic fallback, where no step is documented and
+// the whole point of the section — the sentence a designer reads — is absent.
+const injected = { window: {} }
+vm.runInNewContext(browserPrelude(workspace, { proxyPort: 4567 }), injected)
+globalThis.__DESIGN_EDITOR_CONFIG__ = injected.window.__DESIGN_EDITOR_CONFIG__
+
 const helpers = await loadEditorHelpers()
+
+check("the step model carries the catalog's order, widths, and meanings", () => {
+  const steps = helpers.breakpointSteps(catalog.breakpoints)
+  assert.deepEqual(
+    steps.map((step) => [step.name, step.px, step.prefix]),
+    [
+      ["sm", 640, "sm:"],
+      ["md", 768, "md:"],
+      ["lg", 1024, "lg:"],
+      ["xl", 1280, "xl:"],
+      ["2xl", 1536, "2xl:"],
+    ]
+  )
+  assert.deepEqual(
+    steps.filter((step) => step.documented).map((step) => step.name),
+    ["md", "lg", "xl", "2xl"]
+  )
+  assert.equal(steps.find((step) => step.name === "xl").owner, "src/lib/use-right-panel-width.ts")
+  assert.equal(steps.find((step) => step.name === "sm").usage, undefined)
+})
+
+check("the active step is the widest one the window has crossed", () => {
+  const steps = helpers.breakpointSteps(catalog.breakpoints)
+  assert.equal(helpers.activeBreakpoint(500, steps), null)
+  assert.equal(helpers.activeBreakpoint(640, steps).name, "sm")
+  assert.equal(helpers.activeBreakpoint(1279, steps).name, "lg")
+  assert.equal(helpers.activeBreakpoint(4000, steps).name, "2xl")
+})
 
 check("responsive parsing distinguishes viewport, container, and base utilities", () => {
   assert.equal(helpers.parseResponsiveClassName("gap-4", workspace.tailwind.breakpoints), null)
@@ -199,18 +256,7 @@ await checkAsync("breakpoint controls are named and keep the caret across their 
     { pretendToBeVisual: true, url: "http://localhost/" }
   )
   const { window } = dom
-  for (const key of [
-    "window", "document", "navigator", "Node", "Element", "HTMLElement",
-    "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "SVGElement",
-    "Event", "CustomEvent", "KeyboardEvent", "PointerEvent", "requestAnimationFrame",
-    "cancelAnimationFrame", "getComputedStyle",
-  ]) {
-    Object.defineProperty(globalThis, key, {
-      value: key === "getComputedStyle" ? window.getComputedStyle.bind(window) : window[key],
-      configurable: true,
-      writable: true,
-    })
-  }
+  installDomGlobals(window)
 
   const target = window.document.getElementById("target")
   const right = window.document.createElement("aside")
@@ -278,6 +324,148 @@ await checkAsync("breakpoint controls are named and keep the caret across their 
   } finally {
     globalThis.fetch = originalFetch
     dom.window.close()
+  }
+})
+
+/**
+ * Renders the section on its own rather than through `installInspector`: these
+ * cases are about what the Responsive rows SAY, and a failure should name that
+ * section instead of surfacing as a swallowed warning from the panel's
+ * per-section try/catch.
+ */
+function mountResponsiveSection(html) {
+  const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, {
+    pretendToBeVisual: true,
+    url: "http://localhost/",
+  })
+  const { window } = dom
+  installDomGlobals(window)
+  const target = window.document.getElementById("target")
+  const host = window.document.createElement("div")
+  window.document.body.append(host)
+
+  const writes = []
+  const writer = {
+    applyClasses(_selection, write, summary) {
+      for (const name of write.remove) target.classList.remove(name)
+      for (const name of write.add) target.classList.add(name)
+      writes.push({ write, summary })
+    },
+  }
+  const render = () => {
+    const node = helpers.responsiveSection({
+      editor: null,
+      writer,
+      selection: { element: target },
+      computed: window.getComputedStyle(target),
+      invalidate: render,
+    })
+    host.replaceChildren(node)
+  }
+  render()
+
+  const field = (id) => host.querySelector(`[data-de-field="${id}"]`)
+  return {
+    dom,
+    window,
+    target,
+    host,
+    writes,
+    field,
+    /** Everything the row around a control says, title and hints included. */
+    rowText: (id) => field(id).closest(".de-stack").textContent,
+    type: (id, value) => {
+      const input = field(id)
+      input.value = value
+      input.dispatchEvent(new window.Event("change", { bubbles: true }))
+    },
+  }
+}
+
+check("a documented step reads its meaning and names the file that owns the number", () => {
+  const panel = mountResponsiveSection(
+    `<div id="target" class="grid grid-cols-1" style="display:grid"><span></span></div>`
+  )
+  try {
+    const md = panel.rowText("responsive.md")
+    assert.match(md, /768px and up/)
+    assert.match(md, /left panel stops docking/)
+    assert.match(md, /src\/hooks\/use-mobile\.ts/)
+    assert.ok(!md.includes("declares no step here"), "a documented step was marked undocumented")
+    assert.match(panel.rowText("responsive.xl"), /docked right panel by default/)
+  } finally {
+    panel.dom.window.close()
+  }
+})
+
+check("an undocumented prefix is offered, marked, and still writes", () => {
+  const panel = mountResponsiveSection(
+    `<div id="target" class="grid grid-cols-1" style="display:grid"><span></span></div>`
+  )
+  try {
+    const sm = panel.rowText("responsive.sm")
+    assert.match(sm, /640px and up/)
+    assert.match(sm, /Compiles, but this design system declares no step here/)
+    assert.ok(!/src\//.test(sm), "an undocumented step invented an owning file")
+
+    panel.type("responsive.sm", "gap-2")
+    assert.ok(panel.target.classList.contains("sm:gap-2"))
+    assert.equal(panel.writes.at(-1).summary, "Set sm responsive utilities")
+  } finally {
+    panel.dom.window.close()
+  }
+})
+
+check("exactly the step the window is standing on is marked active", () => {
+  const panel = mountResponsiveSection(
+    `<div id="target" class="grid" style="display:grid"><span></span></div>`
+  )
+  try {
+    // jsdom's window is 1024 wide, which is `lg` to the pixel.
+    assert.equal(panel.window.innerWidth, 1024)
+    const marked = ["sm", "md", "lg", "xl", "2xl"].filter((name) =>
+      panel.rowText(`responsive.${name}`).includes("active now")
+    )
+    assert.deepEqual(marked, ["lg"])
+    assert.match(panel.host.textContent, /Viewport 1024px · lg is the active step/)
+  } finally {
+    panel.dom.window.close()
+  }
+})
+
+check("a container-query variant on the selection is listed and edited apart from its viewport steps", () => {
+  const panel = mountResponsiveSection(
+    `<div class="@container/sidebar"><div id="target" class="grid grid-cols-1 lg:grid-cols-3 @md/sidebar:grid-cols-2" style="display:grid"><span></span></div></div>`
+  )
+  try {
+    assert.match(panel.host.textContent, /Inside @container\/sidebar/)
+    assert.equal(panel.field("responsive.@md").value, "grid-cols-2")
+    assert.equal(
+      panel.field("responsive.@md").getAttribute("aria-label"),
+      "@md container utilities"
+    )
+    // The container step must not leak into the viewport row of the same name.
+    assert.equal(panel.field("responsive.md").value, "")
+    assert.ok(!panel.rowText("responsive.@md").includes("768px"), "a container step claimed a viewport width")
+
+    panel.type("responsive.@md", "grid-cols-4 gap-2")
+    const classes = Array.from(panel.target.classList)
+    assert.ok(classes.includes("@md/sidebar:grid-cols-4"), "the named container scope was dropped")
+    assert.ok(classes.includes("@md/sidebar:gap-2"))
+    assert.ok(!classes.includes("@md/sidebar:grid-cols-2"))
+    assert.ok(classes.includes("lg:grid-cols-3"), "a viewport variant was disturbed")
+    assert.ok(classes.includes("grid-cols-1"), "a base class was disturbed")
+
+    panel.type("responsive.lg", "grid-cols-6")
+    const after = Array.from(panel.target.classList)
+    assert.ok(after.includes("lg:grid-cols-6"))
+    assert.ok(after.includes("@md/sidebar:grid-cols-4"), "a container variant was disturbed")
+
+    // A step with nothing authored yet takes the scope's name from the ancestor.
+    panel.type("responsive.@lg", "grid-cols-5")
+    assert.ok(panel.target.classList.contains("@lg/sidebar:grid-cols-5"))
+  } finally {
+    panel.dom.window.close()
   }
 })
 

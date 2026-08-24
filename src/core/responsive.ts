@@ -1,6 +1,50 @@
-/** Pure Tailwind breakpoint parsing and replacement helpers. */
+/** The design system's breakpoint steps, plus pure class parsing and replacement. */
 
-import { config } from "./config"
+import { config, type DesignSystemToken } from "./config"
+
+export interface BreakpointStep {
+  name: string
+  /** Minimum viewport width in CSS pixels. */
+  px: number
+  /** The variant prefix that compiles, trailing colon included. */
+  prefix: string
+  /** True when the host's design system declares a meaning at this width. */
+  documented: boolean
+  /** Documented steps only: what changes here, and the file that owns the number. */
+  usage?: string
+  owner?: string
+}
+
+/**
+ * The steps the panel offers, narrowest first.
+ *
+ * Read from the design-system catalog rather than `tailwind.breakpoints`: both
+ * name the same prefixes, but only the catalog says which of them the host
+ * declared a meaning for, and it arrives sorted by width — so the panel is
+ * ordered like a ruler without a second place deciding what the order is.
+ */
+export function breakpointSteps(
+  tokens: readonly DesignSystemToken[] = config.designSystem.breakpoints
+): BreakpointStep[] {
+  return tokens.map((token) => ({
+    name: token.name,
+    px: Number(token.values.default),
+    prefix: token.prefix ?? `${token.name}:`,
+    documented: token.documented === true,
+    usage: token.usage,
+    owner: token.owner,
+  }))
+}
+
+/** The widest step the window has crossed; null while it is below every step. */
+export function activeBreakpoint(
+  viewportWidth: number,
+  steps: readonly BreakpointStep[] = breakpointSteps()
+): BreakpointStep | null {
+  let active: BreakpointStep | null = null
+  for (const step of steps) if (viewportWidth >= step.px) active = step
+  return active
+}
 
 export interface ResponsiveClassBinding {
   /** Exact authored class; retained as `className` for call-site readability. */
