@@ -70,8 +70,25 @@ html.design-editor-active {
   font-family: ${t.font.ui};
   font-size: ${t.type.body};
   line-height: 16px;
-  color: ${t.color.text};
   -webkit-font-smoothing: antialiased;
+}
+/*
+ * Ink is declared at the ROOTS of the chrome, not on every node of it.
+ *
+ * \`el()\` stamps CHROME_ATTR on everything it builds — 1604 elements in a live
+ * session against 4 actual roots — so declaring \`color\` on the bare attribute
+ * re-asserted white on every descendant. A directly matching declaration beats
+ * an inherited value at any specificity, so this silently switched inheritance
+ * off for the whole editor: a surface could flip its ink and none of its
+ * children would follow. That is how the selected token row came to draw dark
+ * text and a WHITE check mark on the same light-indigo fill, at 1.9:1.
+ *
+ * \`accentFill\` cannot own its way out of this — it emits fill and ink together
+ * on the surface, and the bug was that no child could hear it. \`:where()\` keeps
+ * the specificity at (0,1,0), unchanged from the rule this splits.
+ */
+[data-design-editor]:where(:not([data-design-editor] *)) {
+  color: ${t.color.text};
 }
 [data-design-editor] *, [data-design-editor] *::before, [data-design-editor] *::after {
   box-sizing: border-box;

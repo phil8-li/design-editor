@@ -92,14 +92,22 @@ export const tokenPickerCss = `/* ---------- token field ---------- */
  */
 .de-token-group {
   position: sticky; top: 0; z-index: 1;
+  height: 28px;
   padding: 8px 10px 4px;
   background: ${t.color.bgRaised};
   color: ${t.color.textDim};
   font-size: ${t.type.caption}; font-weight: ${t.type.weightSection};
 }
+/*
+ * scroll-margin-top clears the sticky header. Opening the picker scrolls the
+ * current token into view, and \`block: "nearest"\` parks the row flush with the
+ * list's top edge — which is UNDERNEATH the header, so the first row of a group
+ * was sliced in half by the label naming it.
+ */
 .de-token-row {
   display: flex; align-items: center; gap: 8px;
   width: 100%; height: 28px; padding: 0 10px;
+  scroll-margin-top: 28px;
   border: none; background: transparent;
   color: ${t.color.text};
   font: inherit; font-size: ${t.type.body}; text-align: left;

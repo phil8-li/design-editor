@@ -52,6 +52,7 @@ async function loadEditorHelpers() {
         export { createContext } from "./src/core/context"
         export { installInspector } from "./src/panels/inspector"
         export { tokenPickerCss } from "./src/core/css/token-picker"
+        export { baseCss } from "./src/core/css/base"
         export { tokens } from "./src/core/tokens"
       `,
       resolveDir: PACKAGE_DIR,
@@ -287,6 +288,15 @@ await checkAsync("the selected row is filled with the accent and inked with its 
   })
 })
 
+check("a row clears the sticky group header it scrolls up under", () => {
+  const rule = helpers.tokenPickerCss
+  const group = /\.de-token-group \{[^}]*height: (\d+)px/.exec(rule)
+  const row = /\.de-token-row \{[^}]*scroll-margin-top: (\d+)px/.exec(rule)
+  assert.ok(group, "the sticky header declares no height to clear")
+  assert.ok(row, "rows declare no scroll margin, so the first of a group is sliced in half")
+  assert.equal(row[1], group[1], "the margin does not match the header it has to clear")
+})
+
 check("the selected row's ink is the accent's counterpart, never white", () => {
   const rule = helpers.tokenPickerCss
     .split("\n")
@@ -297,6 +307,26 @@ check("the selected row's ink is the accent's counterpart, never white", () => {
   assert.ok(rule.includes(helpers.tokens.color.accentSurface), "the fill is not the accent surface")
   assert.ok(rule.includes(helpers.tokens.color.onAccent), "the ink is not the accent's counterpart")
   assert.ok(!rule.includes("#ffffff"), "white ink on a light accent")
+})
+
+// The other half of that fact: flipping a surface's ink is worth nothing if the
+// children cannot hear it. `el()` stamps CHROME_ATTR on every node it builds —
+// 1604 of them against 4 roots in a live session — so a bare `[data-design-editor]
+// { color }` re-declares the shell's white on every descendant, and a matching
+// declaration beats an inherited value at any specificity. That is what drew a
+// white check mark on the dark-inked selected row, at 1.9:1.
+check("the shell declares ink at its roots, not on every node it stamps", () => {
+  const blanket = /\[data-design-editor\] \{([^}]*)\}/.exec(helpers.baseCss)
+  assert.ok(blanket, "the shell reset went missing")
+  assert.ok(
+    !/(^|[;\s])color:/.test(blanket[1]),
+    "the reset declares color on every stamped element, which switches inheritance off for the whole chrome"
+  )
+  const scoped = /\[data-design-editor\]:where\(:not\(\[data-design-editor\] \*\)\) \{([^}]*)\}/.exec(
+    helpers.baseCss
+  )
+  assert.ok(scoped, "no root-scoped rule declares the shell's ink")
+  assert.ok(scoped[1].includes(helpers.tokens.color.text), "the roots do not carry the shell's ink")
 })
 
 console.log("\nKeyboard and dismissal")
