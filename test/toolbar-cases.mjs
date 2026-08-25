@@ -130,18 +130,40 @@ const toolbar = context.slots.toolbar
 const buttons = () => Array.from(toolbar.querySelectorAll("button"))
 const byText = (text) => buttons().find((button) => button.textContent.trim() === text) ?? null
 const byLabel = (name) => toolbar.querySelector(`[aria-label="${name}"]`)
+/** The mode switch is the one control whose accessible name changes. */
+const mode = () => toolbar.querySelector(".de-button--mode")
 
-// ── The four removed clusters ──────────────────────────────────────────────
+// ── The removed clusters ───────────────────────────────────────────────────
 
 console.log("\nRemoved clusters")
 
-check("the Scale and Text tools are gone", () => {
-  assert.equal(byLabel("Scale"), null)
-  assert.equal(byLabel("Text"), null)
-  // …and the two that survive are still there, so this is not asserting an
-  // empty toolbar.
-  assert.ok(byLabel("Move"))
-  assert.ok(byLabel("Hand (browser scroll)"))
+check("the tool cluster is gone entirely — Scale, Text, Move and Hand alike", () => {
+  for (const gone of ["Scale", "Text", "Move", "Hand (browser scroll)"]) {
+    assert.equal(byLabel(gone), null, `${gone} is still in the bar`)
+  }
+  // The panel toggles are pressable too, so absence of `aria-pressed` is no
+  // longer the signal. What must be gone is a pressable that picks a TOOL.
+  const pressable = Array.from(toolbar.querySelectorAll(".de-tool[aria-pressed]"))
+  assert.deepEqual(
+    pressable.map((button) => button.getAttribute("aria-label")).sort(),
+    ["Toggle inspector", "Toggle layers panel"],
+    "a tool radio survives"
+  )
+  // …and the bar is not simply empty, so this is not asserting nothing.
+  assert.ok(byLabel("Undo"))
+  assert.ok(mode())
+})
+
+// The two panel toggles stay in the bar; what went is the mark they used to
+// wear. A ruled frame said "panel" and nothing else, so the button could only
+// report its state in colour. Their new behaviour is asserted further down.
+check("neither panel toggle still draws the retired ruled frame", () => {
+  for (const button of [byLabel("Toggle layers panel"), byLabel("Toggle inspector")]) {
+    assert.ok(button, "both toggles must still be in the bar")
+    const paths = Array.from(button.querySelectorAll("path")).map((node) => node.getAttribute("d"))
+    // PanelLeft and PanelRight were a rect with one of these ruled down it.
+    assert.ok(!paths.includes("M9 3v18") && !paths.includes("M15 3v18"), "the old glyph is back")
+  }
 })
 
 check("the zoom cluster is gone, readout and steppers alike", () => {
@@ -174,30 +196,24 @@ check("no toolbar button opens a menu any more", () => {
 
 console.log("\nSurviving controls")
 
-check("move, hand, both panel toggles, undo, redo and apply are all present", () => {
-  assert.ok(byLabel("Move"))
-  assert.ok(byLabel("Hand (browser scroll)"))
+check("the mode switch, the two panel toggles, undo, redo and apply are the whole bar", () => {
+  assert.ok(mode())
   assert.ok(byLabel("Toggle layers panel"))
   assert.ok(byLabel("Toggle inspector"))
   assert.ok(byLabel("Undo"))
   assert.ok(byLabel("Redo"))
   assert.ok(byText("Apply to code"))
-  assert.ok(byText("Interactive"))
+  assert.equal(buttons().length, 6, `expected six controls, saw ${buttons().length}`)
 })
 
-check("the panel toggles still flip their store flags", () => {
-  const before = context.getState().layersOpen
-  byLabel("Toggle layers panel").click()
-  assert.equal(context.getState().layersOpen, !before)
-  byLabel("Toggle layers panel").click()
-  assert.equal(context.getState().layersOpen, before)
-})
-
-check("the tool shortcuts still switch tools", () => {
-  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "h", bubbles: true }))
-  assert.equal(context.getState().tool, "hand")
-  assert.equal(byLabel("Hand (browser scroll)").getAttribute("aria-pressed"), "true")
-  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "v", bubbles: true }))
+// V and H picked between two tools. With one tool left there is nothing for a
+// letter to pick, and a letter the bar swallows is a letter the app never gets.
+check("no bare letter is claimed by the bar any more", () => {
+  for (const key of ["h", "v"]) {
+    const event = new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+    window.dispatchEvent(event)
+    assert.equal(event.defaultPrevented, false, `"${key}" was swallowed`)
+  }
   assert.equal(context.getState().tool, "move")
 })
 
@@ -216,13 +232,84 @@ check("the options subsystem still opens from the inspector, not the toolbar", (
   globalThis.fetch = originalFetch
 })
 
+// ── The panel toggles ──────────────────────────────────────────────────────
+
+console.log("\nPanel toggles")
+
+/**
+ * A stable fingerprint of what a button is DRAWING, colour excluded.
+ *
+ * The pressed treatment is a tint, so comparing rendered colour would pass on
+ * the very thing these glyphs exist to replace. This reads the geometry.
+ */
+const drawing = (button) =>
+  Array.from(button.querySelectorAll("rect, path, circle"))
+    .map((node) =>
+      Array.from(node.attributes)
+        .filter((attribute) => attribute.name !== "fill" && attribute.name !== "stroke")
+        .map((attribute) => `${attribute.name}=${attribute.value}`)
+        .join(",")
+    )
+    .join("|")
+
+const TOGGLES = [
+  ["Toggle layers panel", "layersOpen"],
+  ["Toggle inspector", "inspectorOpen"],
+]
+
+check("each toggle draws a different glyph for open than for collapsed", () => {
+  for (const [label, flag] of TOGGLES) {
+    editor.setState({ [flag]: true })
+    const open = drawing(byLabel(label))
+    editor.setState({ [flag]: false })
+    const collapsed = drawing(byLabel(label))
+    assert.notEqual(open, collapsed, `${label} draws the same glyph in both states`)
+    assert.ok(open.length > 0 && collapsed.length > 0, `${label} drew nothing`)
+  }
+})
+
+check("the two toggles are told apart from each other, in both states", () => {
+  for (const open of [true, false]) {
+    editor.setState({ layersOpen: open, inspectorOpen: open })
+    assert.notEqual(
+      drawing(byLabel("Toggle layers panel")),
+      drawing(byLabel("Toggle inspector")),
+      `the pair is indistinguishable while ${open ? "open" : "collapsed"}`
+    )
+  }
+})
+
+// The shell writes these flags too, so the button cannot infer its state from
+// its own last click. It reads the store on every paint.
+check("aria-pressed follows the store, not the click", () => {
+  for (const [label, flag] of TOGGLES) {
+    for (const open of [true, false, true]) {
+      editor.setState({ [flag]: open })
+      assert.equal(byLabel(label).getAttribute("aria-pressed"), String(open), `${label} @ ${open}`)
+    }
+  }
+})
+
+check("clicking a toggle moves its own flag and only its own", () => {
+  editor.setState({ layersOpen: true, inspectorOpen: true })
+  byLabel("Toggle layers panel").click()
+  assert.equal(context.getState().layersOpen, false)
+  assert.equal(context.getState().inspectorOpen, true, "the inspector moved with the layers panel")
+  byLabel("Toggle inspector").click()
+  assert.equal(context.getState().inspectorOpen, false)
+  assert.equal(context.getState().layersOpen, false)
+  byLabel("Toggle layers panel").click()
+  assert.equal(context.getState().layersOpen, true)
+  editor.setState({ layersOpen: true, inspectorOpen: true })
+})
+
 // ── Hover text and accessible names ────────────────────────────────────────
 
 console.log("\nTooltips")
 
 check("every icon-only toolbar button has both a tip and an aria-label", () => {
   const iconOnly = buttons().filter((button) => button.textContent.trim() === "")
-  assert.ok(iconOnly.length >= 4, "expected the tools and both panel toggles")
+  assert.equal(iconOnly.length, 4, "the two panel toggles plus undo and redo")
   for (const button of iconOnly) {
     const tip = button.getAttribute("data-de-tip")
     const label = button.getAttribute("aria-label")
@@ -239,18 +326,18 @@ check("every icon-only toolbar button has both a tip and an aria-label", () => {
 // rather than the name itself.
 check("a tip never leaks into a button's accessible name", () => {
   const tipped = buttons().filter((button) => button.hasAttribute("data-de-tip"))
-  assert.ok(tipped.length >= 8, "every control in the bar carries a tip")
+  assert.equal(tipped.length, buttons().length, "every control in the bar carries a tip")
   for (const button of tipped) {
     assert.ok(button.getAttribute("aria-label"), `tip without a label: ${button.outerHTML}`)
   }
-  for (const text of ["Interactive", "Apply to code"]) {
+  for (const text of ["Inspecting", "Apply to code"]) {
     assert.equal(byText(text).getAttribute("aria-label"), text)
   }
 })
 
 check("a tip names the shortcut where the control has one", () => {
-  assert.equal(byLabel("Move").getAttribute("data-de-tip"), "Move · V")
-  assert.equal(byLabel("Hand (browser scroll)").getAttribute("data-de-tip"), "Hand (browser scroll) · H")
+  assert.match(byLabel("Undo").getAttribute("data-de-tip"), /^Undo · \S/)
+  assert.match(byLabel("Redo").getAttribute("data-de-tip"), /^Redo · \S/)
 })
 
 check("no toolbar control falls back to the native title attribute", () => {
@@ -281,11 +368,12 @@ check("reduced motion drops the fade without dropping the delay", () => {
 
 console.log("\nInteractive mode")
 
-const interactive = () => byText("Interactive")
+const interactive = () => mode()
 
-check("it defaults to off", () => {
+check("it defaults to off, and says so in the label", () => {
   assert.equal(context.getState().interactive, false)
   assert.equal(interactive().getAttribute("aria-pressed"), "false")
+  assert.equal(interactive().textContent.trim(), "Inspecting")
   assert.equal(editor.editorOwnsInput(), true)
 })
 
@@ -296,6 +384,45 @@ check("clicking it toggles both the state and aria-pressed", () => {
   interactive().click()
   assert.equal(context.getState().interactive, false)
   assert.equal(interactive().getAttribute("aria-pressed"), "false")
+})
+
+/*
+ * The switch used to read "Interactive" in both of its states and be told apart
+ * only by a pressed ring, so the word was a promise in one state and a lie in
+ * the other. Now it names the state you are standing in — and it has to do that
+ * in the SHAPE as well as the word, because the glyph is read at 14px in the
+ * corner of the eye. A pair told apart by colour alone is not told apart.
+ */
+check("each state is named in the label and drawn in a different shape", () => {
+  const read = () => {
+    const svg = interactive().querySelector("svg")
+    return {
+      label: interactive().textContent.trim(),
+      name: interactive().getAttribute("aria-label"),
+      tip: interactive().getAttribute("data-de-tip"),
+      d: svg.querySelector("path").getAttribute("d"),
+      fill: svg.getAttribute("fill"),
+    }
+  }
+
+  context.setInteractive(false)
+  const inspecting = read()
+  context.setInteractive(true)
+  const handedOver = read()
+
+  assert.equal(inspecting.label, "Inspecting")
+  assert.equal(handedOver.label, "Interactive")
+  // Voice control types what it sees, so the name follows the word.
+  assert.equal(inspecting.name, inspecting.label)
+  assert.equal(handedOver.name, handedOver.label)
+  // The tip says what pressing DOES, which is the other sentence entirely.
+  assert.notEqual(inspecting.tip, inspecting.label)
+  assert.notEqual(inspecting.tip, handedOver.tip)
+  // Shape and fill, not hue: one arrow solid, the same arrow hollow.
+  assert.notEqual(inspecting.d, handedOver.d)
+  assert.equal(inspecting.fill, "currentColor")
+  assert.equal(handedOver.fill, "none")
+  context.setInteractive(false)
 })
 
 check("the ON state does not borrow the primary action's fill", () => {
@@ -316,20 +443,28 @@ check("the ON state does not borrow the primary action's fill", () => {
   assert.match(pressed, /box-shadow: inset 0 0 0 1px/)
 })
 
-check("the mode sits next to the tools it switches off", () => {
+check("the mode leads the strip, at the far left", () => {
   const groups = Array.from(toolbar.querySelectorAll(".de-toolbar-group"))
-  const owner = interactive().closest(".de-toolbar-group")
-  assert.equal(groups.indexOf(owner), 1, "the mode follows the tool group directly")
-  assert.ok(groups[0].contains(byLabel("Move")))
+  assert.equal(groups.length, 3, "mode, then the panels, then the commit path")
+  assert.equal(groups.indexOf(interactive().closest(".de-toolbar-group")), 0)
+  assert.equal(toolbar.firstElementChild, groups[0])
+  // The toggles sit between the mode and the commit path, not before the mode.
+  assert.equal(groups.indexOf(byLabel("Toggle layers panel").closest(".de-toolbar-group")), 1)
+  assert.equal(groups.indexOf(byLabel("Toggle inspector").closest(".de-toolbar-group")), 1)
 })
 
-check("turning it on stands the tool cluster down", () => {
-  context.setInteractive(true)
-  assert.equal(byLabel("Move").disabled, true)
-  assert.equal(byLabel("Hand (browser scroll)").disabled, true)
+// The mode used to grey the tool cluster out, which was the honest thing to do
+// with controls that could not take effect. There is no such cluster now, so
+// flipping it must change nothing about what is inert — anything it still
+// dimmed would be a control that had quietly stopped meaning anything.
+check("flipping the mode no longer stands anything down", () => {
+  const inert = () => buttons().filter((button) => button.disabled).length
   context.setInteractive(false)
-  assert.equal(byLabel("Move").disabled, false)
-  assert.equal(byLabel("Hand (browser scroll)").disabled, false)
+  const off = inert()
+  context.setInteractive(true)
+  assert.equal(inert(), off)
+  assert.equal(interactive().disabled, false)
+  context.setInteractive(false)
 })
 
 /** Returns whether the canvas swallowed the app's click. */
@@ -380,10 +515,11 @@ check("pointer, key and double-click handlers all stand down together", () => {
   assert.equal(context.getState().scope, null)
 })
 
-check("tool shortcuts reach the app instead of switching tools", () => {
+check("a bare letter reaches the app in interactive mode too", () => {
   context.setInteractive(true)
-  context.setTool("move")
-  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "h", bubbles: true }))
+  const event = new window.KeyboardEvent("keydown", { key: "h", bubbles: true, cancelable: true })
+  window.dispatchEvent(event)
+  assert.equal(event.defaultPrevented, false)
   assert.equal(context.getState().tool, "move")
 })
 

@@ -1,6 +1,5 @@
 /**
- * Floating bottom toolbar: the two tools, the panel toggles, the interactive
- * mode switch, and the commit path.
+ * Floating bottom toolbar: the mode switch, time travel, and the commit path.
  *
  * It used to carry a zoom stepper, a measurement reminder and an overflow menu
  * inventorying every Figma tool this editor does not have. All three answered
@@ -10,9 +9,26 @@
  * it, and the inventory was a changelog wearing a menu. What is left is the set
  * of things a click here actually does.
  *
- * Tool state is mirrored into the vendor engine so its selection mode stays in
- * sync with ours — two sources of truth for "what does a click do" is the
- * fastest way to make a direct-manipulation tool feel broken.
+ * Two more went the same way, and for the same reason.
+ *
+ *  - The Hand tool. It suppressed selection so the page could be scrolled, but
+ *    the wheel and the trackpad scroll the live page in EVERY mode, so all it
+ *    added was a state in which clicking did nothing — the exact thing the mode
+ *    switch below now says in a word.
+ *  - The Move tool, as a separate button. With Hand gone it was a one-member
+ *    radio group: a control whose pressed state could never change. The arrow it
+ *    drew was the useful part, so the arrow moved INTO the mode switch, where it
+ *    finally means something, because there the pointer really does change hands.
+ *
+ * The two panel toggles STAY here, and this is the one place they live — a
+ * disclosure with two homes is a disclosure with two answers. What changed is
+ * that they now report themselves: `aria-pressed` tracks the store, and the
+ * glyph swaps between an open and a collapsed drawing of the same layout, so the
+ * state is legible before the pointer arrives rather than after.
+ *
+ * The remaining tool state is still mirrored into the vendor engine so its
+ * selection mode stays in sync with ours — two sources of truth for "what does a
+ * click do" is the fastest way to make a direct-manipulation tool feel broken.
  */
 
 import { el } from "../core/dom"
@@ -21,25 +37,6 @@ import { icon, type IconName } from "../core/icons"
 import { historyAction, isMac, isTextEntry } from "../core/keymap"
 import { untranslatedProperties } from "../core/writer"
 import type { EditorContext } from "../core/context"
-import type { ToolId } from "../core/types"
-
-interface ToolSpec {
-  id: ToolId
-  label: string
-  shortcut: string
-  glyph: IconName
-  /** Vendor tool name to mirror into, when one exists. */
-  vendor?: string
-}
-
-/**
- * Hand deliberately has no vendor mode: it suppresses selection while the
- * browser's native trackpad/wheel scrolling continues to pan the live page.
- */
-const TOOLS: ToolSpec[] = [
-  { id: "move", label: "Move", shortcut: "V", vendor: "select", glyph: "Move" },
-  { id: "hand", label: "Hand (browser scroll)", shortcut: "H", glyph: "Hand" },
-]
 
 /**
  * Hover text for an icon-only control, plus the label everyone else reads.
@@ -47,9 +44,9 @@ const TOOLS: ToolSpec[] = [
  * `data-de-tip` rather than `title`: the native tooltip waits about a second
  * and then paints in the OS's own chrome, which next to this strip reads as the
  * page having glitched rather than as an answer. The CSS in `css/toolbar.ts`
- * draws it above the bar, because the bar is already at the bottom of the
- * viewport. The `aria-label` is not a duplicate of it — a pseudo-element is not
- * an accessible name, so a tooltip on its own leaves the control unnamed.
+ * draws it above the strip. The `aria-label` is not a duplicate of it — a
+ * pseudo-element is not an accessible name, so a tooltip on its own leaves the
+ * control unnamed.
  */
 function tip(label: string, shortcut?: string): Record<string, string> {
   return { "data-de-tip": shortcut ? `${label} · ${shortcut}` : label, "aria-label": label }
@@ -68,57 +65,86 @@ function hint(label: string, detail: string): Record<string, string> {
   return { "data-de-tip": detail, "aria-label": label }
 }
 
+/**
+ * The two halves of the mode, spelled out.
+ *
+ * The switch used to be labelled "Interactive" in both states and told apart
+ * only by a pressed treatment, which meant the label was a promise in one state
+ * and a lie in the other — you had to look at the ring to learn whether the
+ * editor was still holding your clicks. So the label now names the state you are
+ * STANDING IN, and the tip names what pressing would do; those are different
+ * sentences and they were being asked to share one string.
+ *
+ * The glyph is the same arrow twice, filled while the editor holds the pointer
+ * and hollow once it has handed it over. Shape, not colour: this pair is read at
+ * 14px in the corner of the eye, and a mode told apart by hue alone is not told
+ * apart at all.
+ */
+const MODES = {
+  inspecting: {
+    label: "Inspecting",
+    glyph: "Cursor",
+    detail: "Hand the pointer back to the app",
+  },
+  interactive: {
+    label: "Interactive",
+    glyph: "CursorOutline",
+    detail: "Take the pointer back for the editor",
+  },
+} as const
+
 export function installToolbar(context: EditorContext): void {
   const { slots, bridge } = context
 
-  const toolButtons = new Map<ToolId, HTMLButtonElement>()
-  const toolGroup = el("div", { class: "de-toolbar-group" })
-
-  for (const tool of TOOLS) {
-    const button = el(
-      "button",
-      {
-        class: "de-tool",
-        type: "button",
-        ...tip(tool.label, tool.shortcut),
-        "aria-pressed": "false",
-        onclick: () => selectTool(tool.id),
-      },
-      [icon(tool.glyph)]
-    )
-    toolButtons.set(tool.id, button)
-    toolGroup.append(button)
-  }
-
-  function selectTool(id: ToolId): void {
-    context.setTool(id)
-    if (id === "hand") context.setState({ hovered: null })
-    const spec = TOOLS.find((tool) => tool.id === id)
-    if (spec?.vendor) {
-      try {
-        bridge.store.setActiveTool(spec.vendor)
-      } catch {
-        // Vendor tool set is version-pinned; a missing mode is not fatal.
-      }
-    }
+  /*
+   * One tool, mirrored once.
+   *
+   * The vendor engine has its own idea of the active tool and the canvas reads
+   * ours, so the two have to agree; with the tool cluster gone there is no
+   * moment at which they could diverge, which makes this an install-time
+   * statement rather than a per-click sync.
+   */
+  try {
+    bridge.store.setActiveTool("select")
+  } catch {
+    // Vendor tool set is version-pinned; a missing mode is not fatal.
   }
 
   /**
    * The one control that changes what a click means everywhere, so it is the
-   * one control that spells itself out. An icon would have to say "the editor
-   * is not intercepting you now", and no 16px glyph says that.
+   * one control that spells itself out — and it sits at the far LEFT, first in
+   * the strip, because it is the question every other control's answer depends
+   * on. An icon alone would have to say "the editor is not intercepting you
+   * now", and no 14px glyph says that; a word alone would drop the arrow this
+   * editor's pointer has always been drawn as. It carries both.
    */
+  const modeGlyph = el("span", { class: "de-button-glyph" }, [icon(MODES.inspecting.glyph, 14)])
+  const modeLabel = el("span", {}, [MODES.inspecting.label])
   const interactiveButton = el(
     "button",
     {
-      class: "de-button",
+      class: "de-button de-button--mode",
       type: "button",
       "aria-pressed": "false",
-      ...hint("Interactive", "Click through to the app"),
+      ...hint(MODES.inspecting.label, MODES.inspecting.detail),
       onclick: () => context.setInteractive(!context.getState().interactive),
     },
-    ["Interactive"]
+    [modeGlyph, modeLabel]
   )
+
+  /** Both halves of the switch move together, so one function moves them. */
+  const paintMode = (interactive: boolean) => {
+    const mode = interactive ? MODES.interactive : MODES.inspecting
+    interactiveButton.setAttribute("aria-pressed", String(interactive))
+    // The accessible name tracks the visible word rather than sitting on a
+    // stable "Interactive mode": a name that disagrees with the label on screen
+    // is the failure mode WCAG 2.5.3 exists for, and voice control types what it
+    // sees.
+    interactiveButton.setAttribute("aria-label", mode.label)
+    interactiveButton.setAttribute("data-de-tip", mode.detail)
+    if (modeLabel.textContent !== mode.label) modeLabel.textContent = mode.label
+    modeGlyph.replaceChildren(icon(mode.glyph, 14))
+  }
 
   const applyButton = el(
     "button",
@@ -194,65 +220,89 @@ export function installToolbar(context: EditorContext): void {
     [icon("RotateCw")]
   )
 
-  const panelToggles = el("div", { class: "de-toolbar-group" }, [
-    el(
+  /**
+   * A panel toggle that draws the state it is in.
+   *
+   * The old pair drew one glyph in both states and left the answer to a pressed
+   * tint, which is a colour-only distinction on a 16px outline — the least
+   * legible signal this strip has. Each toggle now owns two glyphs, an open
+   * layout and a collapsed one, and swaps between them, so the shape carries the
+   * state and the tint is only reinforcement.
+   *
+   * `aria-pressed` is set from the store here rather than assumed from the last
+   * click: `layersOpen` and `inspectorOpen` are written by the shell too, and a
+   * button that remembered its own clicks would drift the first time anything
+   * else moved the flag.
+   */
+  const panelToggle = (
+    label: string,
+    open: IconName,
+    collapsed: IconName,
+    read: () => boolean,
+    write: (next: boolean) => void
+  ) => {
+    const button = el(
       "button",
       {
         class: "de-tool",
         type: "button",
-        ...tip("Toggle layers panel"),
-        onclick: () => context.setState({ layersOpen: !context.getState().layersOpen }),
+        ...tip(label),
+        onclick: () => write(!read()),
       },
-      [icon("PanelLeft")]
-    ),
-    el(
-      "button",
-      {
-        class: "de-tool",
-        type: "button",
-        ...tip("Toggle inspector"),
-        onclick: () => context.setState({ inspectorOpen: !context.getState().inspectorOpen }),
-      },
-      [icon("PanelRight")]
-    ),
-  ])
+      [icon(collapsed)]
+    )
+    const paint = () => {
+      const showing = read()
+      button.setAttribute("aria-pressed", String(showing))
+      button.replaceChildren(icon(showing ? open : collapsed))
+    }
+    return { button, paint }
+  }
+
+  const layersToggle = panelToggle(
+    "Toggle layers panel",
+    "SidebarLeft",
+    "SidebarLeftCollapsed",
+    () => context.getState().layersOpen,
+    (next) => context.setState({ layersOpen: next })
+  )
+  const inspectorToggle = panelToggle(
+    "Toggle inspector",
+    "SidebarRight",
+    "SidebarRightCollapsed",
+    () => context.getState().inspectorOpen,
+    (next) => context.setState({ inspectorOpen: next })
+  )
 
   // UI3 keeps one slim, stable strip at the bottom. Selection never moves it.
   //
-  // Interactive sits immediately after the tools it switches off, not out by
-  // the commit path: the mode and the controls it makes inert have to be read
-  // in one glance, or the dimmed tools look broken rather than stood down.
+  // The mode leads and the commit path closes: read left to right the strip is
+  // "what a click does", then "which surfaces are up", then "what has been done
+  // with them". The mode is first because it is the question every other
+  // control's answer depends on.
   slots.toolbar.append(
-    toolGroup,
     el("div", { class: "de-toolbar-group" }, [interactiveButton]),
-    panelToggles,
+    el("div", { class: "de-toolbar-group" }, [layersToggle.button, inspectorToggle.button]),
     el("div", { class: "de-toolbar-group" }, [undoButton, redoButton, applyButton])
   )
 
   const syncPressed = () => {
-    const { tool, interactive } = context.getState()
-    for (const [id, button] of toolButtons) {
-      button.setAttribute("aria-pressed", String(id === tool))
-      // In interactive mode the canvas is not listening, so a tool decides
-      // nothing. Leaving the pair at full strength would advertise a live
-      // cluster that does nothing when clicked — the disabled state is the
-      // honest one, and it is also what stops the click from flipping
-      // `aria-pressed` on a tool that cannot take effect.
-      button.toggleAttribute("disabled", interactive)
-    }
-    interactiveButton.setAttribute("aria-pressed", String(interactive))
+    paintMode(context.getState().interactive)
+    layersToggle.paint()
+    inspectorToggle.paint()
     undoButton.toggleAttribute("disabled", !canUndo())
     redoButton.toggleAttribute("disabled", !canRedo())
     applyButton.toggleAttribute("disabled", !bridge.store.hasChanges())
   }
 
-  // The engine pushes its own change events below; from our store only the
-  // tool, the mode and the dirty flag affect this row. Anything broader would
-  // re-query the engine on every pointermove.
+  // The engine pushes its own change events below; from our store only the mode,
+  // the two panel flags and the dirty flag affect this row. Anything broader
+  // would re-query the engine on every pointermove.
   context.subscribe((next, previous) => {
     if (
-      next.tool === previous.tool &&
       next.interactive === previous.interactive &&
+      next.layersOpen === previous.layersOpen &&
+      next.inspectorOpen === previous.inspectorOpen &&
       next.dirty === previous.dirty
     ) {
       return
@@ -270,9 +320,9 @@ export function installToolbar(context: EditorContext): void {
   window.addEventListener("keydown", (event) => {
     /*
      * Undo and redo are editor commands, not canvas ones, so they are not
-     * gated on `editorOwnsInput()` the way the tool letters below are: the
-     * buttons stay live in interactive mode and the keys have to match them.
-     * A native field keeps its own Cmd+Z — that undo is the user's typing.
+     * gated on `editorOwnsInput()`: the buttons stay live in interactive mode
+     * and the keys have to match them. A native field keeps its own Cmd+Z —
+     * that undo is the user's typing.
      */
     const history = historyAction(event)
     if (history) {
@@ -281,23 +331,17 @@ export function installToolbar(context: EditorContext): void {
       // The vendor's document-capture guard reaches keys too.
       event.stopPropagation()
       travel(history)
-      return
     }
 
-    if (event.metaKey || event.ctrlKey || event.altKey) return
-    // Text entry only. Deliberately not `ownsCanvasKeys`, which also excludes
-    // chrome: clicking a tool leaves focus on its button, and the next letter
-    // must still switch tools.
-    if (isTextEntry(event.target)) return
-    // Interactive mode hands every key to the app, and a tool shortcut is a
-    // key: typing "v" into the product's own search box must reach the box.
-    if (context.getState().interactive) return
-    const match = TOOLS.find((tool) => tool.shortcut.toLowerCase() === event.key.toLowerCase())
-    if (!match) return
-    event.preventDefault()
-    selectTool(match.id)
-    // Capture, so a shortcut is not lost to an app handler that stops the
-    // event on its way up. Every branch above guards on the target first.
+    /*
+     * No bare-letter shortcuts here any more.
+     *
+     * V and H picked between two tools; with one tool left there is nothing for
+     * a letter to pick, and a letter that reaches the page and does nothing is
+     * worse than no letter — it swallows a keystroke the app might have wanted.
+     * Capture is kept for the history branch above, which has to beat an app
+     * handler that stops the event on its way up.
+     */
   }, true)
 
   syncPressed()
