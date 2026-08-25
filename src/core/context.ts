@@ -6,7 +6,7 @@
 
 import { config } from "./config"
 import { elementKey, getState, primarySelection, setState, subscribe } from "./store"
-import { toSourceRef, type RewriteBridge } from "./bridge"
+import { resolveElementSource, toSourceRef, type RewriteBridge } from "./bridge"
 import type { LayerElement, Selection, ToolId } from "./types"
 
 export interface EditorSlots {
@@ -49,6 +49,35 @@ export interface EditorContext {
 const refreshListeners = new Set<() => void>()
 
 export function createContext(bridge: RewriteBridge, slots: EditorSlots): EditorContext {
+  /**
+   * React 19 dropped `fiber._debugSource`, so the synchronous walk behind
+   * `toSourceRef` answers `null` for every element in this app — measured 0/12
+   * on a live page, against 12/12 for the owner-stack resolver. The writer
+   * already copes by resolving lazily at Apply time, but a Selection built here
+   * is also what the inspector header reads, which is why it showed a component
+   * name and no file. Nothing else may re-derive an element's source: this
+   * patches the stored Selection in place when the resolver lands, so the panel
+   * repaints from the one answer rather than asking a second time.
+   *
+   * Only the element the inspector is actually describing is primed. A marquee
+   * over fifty nodes would otherwise pay fifty owner-stack walks to fill a
+   * header that shows one of them.
+   */
+  const primeSource = (element: LayerElement): void => {
+    void resolveElementSource(bridge, element)
+      .then((source) => {
+        if (!source) return
+        const current = getState().selection
+        const index = current.findIndex((entry) => entry.element === element)
+        // Gone, or already answered by a later selection: leave it alone.
+        if (index === -1 || current[index].source) return
+        const selection = current.slice()
+        selection[index] = { ...selection[index], source }
+        setState({ selection })
+      })
+      .catch(() => null)
+  }
+
   const describe = (element: LayerElement): Selection => {
     const info = bridge.elementInfo(element)
     const componentName = info?.componentName || element.tagName.toLowerCase()
@@ -76,6 +105,7 @@ export function createContext(bridge: RewriteBridge, slots: EditorSlots): Editor
         return
       }
       const selection = describe(element)
+      if (!selection.source) primeSource(element)
       const current = getState().selection
       if (options.additive) {
         const existing = current.findIndex((entry) => entry.element === element)
@@ -102,6 +132,7 @@ export function createContext(bridge: RewriteBridge, slots: EditorSlots): Editor
         seen.add(element)
         selection.push(describe(element))
       }
+      if (selection.length && !selection[0].source) primeSource(selection[0].element)
       setState({ selection })
     },
 

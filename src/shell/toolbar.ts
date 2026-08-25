@@ -35,6 +35,7 @@ import { el } from "../core/dom"
 import { canRedo, canUndo, onHistoryChange, redo, undo } from "../core/history"
 import { icon, type IconName } from "../core/icons"
 import { historyAction, isMac, isTextEntry } from "../core/keymap"
+import { copyChangePrompt, previewOnlyChanges } from "../core/change-prompt"
 import { untranslatedProperties } from "../core/writer"
 import type { EditorContext } from "../core/context"
 
@@ -181,6 +182,41 @@ export function installToolbar(context: EditorContext): void {
   )
 
   /**
+   * The other half of the commit path, and the honest half.
+   *
+   * Apply writes everything that became a utility class. Some changes never can
+   * be one — an icon swap, a spring's physics, a value that lives in a shared
+   * token — and those used to be dropped in silence on the next hot reload.
+   * They are recorded now, and this hands them over as a written brief instead
+   * of pretending they were saved.
+   *
+   * `copyChangePrompt()` is called synchronously in the click task, before any
+   * await: the Clipboard API needs the transient user activation, and a browser
+   * drops it the moment the handler yields. Same reason, same shape as the
+   * app's agentation Copy.
+   */
+  const copyButton = el(
+    "button",
+    {
+      class: "de-button",
+      type: "button",
+      ...hint("Copy change prompts", "Copy the changes that cannot be written as classes"),
+      onclick: () => {
+        const changes = previewOnlyChanges()
+        if (!changes.length) {
+          context.toast("Nothing to hand over — every change here can be applied to code")
+          return
+        }
+        void copyChangePrompt()
+        context.toast(
+          `Copied ${changes.length} change${changes.length === 1 ? "" : "s"} for an agent`
+        )
+      },
+    },
+    ["Copy change prompts"]
+  )
+
+  /**
    * The button and the shortcut are the same call, not two that agree.
    *
    * `travel` is what Cmd+Z runs and what the button runs, so the toast, the
@@ -283,7 +319,7 @@ export function installToolbar(context: EditorContext): void {
   slots.toolbar.append(
     el("div", { class: "de-toolbar-group" }, [interactiveButton]),
     el("div", { class: "de-toolbar-group" }, [layersToggle.button, inspectorToggle.button]),
-    el("div", { class: "de-toolbar-group" }, [undoButton, redoButton, applyButton])
+    el("div", { class: "de-toolbar-group" }, [undoButton, redoButton, copyButton, applyButton])
   )
 
   const syncPressed = () => {
@@ -293,6 +329,10 @@ export function installToolbar(context: EditorContext): void {
     undoButton.toggleAttribute("disabled", !canUndo())
     redoButton.toggleAttribute("disabled", !canRedo())
     applyButton.toggleAttribute("disabled", !bridge.store.hasChanges())
+    // Independent of Apply's: a change can be un-writable while nothing is
+    // pending for source, and both buttons live at once when a session has some
+    // of each.
+    copyButton.toggleAttribute("disabled", previewOnlyChanges().length === 0)
   }
 
   // The engine pushes its own change events below; from our store only the mode,
