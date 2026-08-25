@@ -88,6 +88,17 @@ export interface RewriteBridge {
   // `Element`, not `HTMLElement`: the runtime resolves any host node, and an
   // SVG icon is a legitimate target now that hit-testing reaches one.
   elementInfo(el: Element): RewriteElementInfo | null
+  /**
+   * The only accessor that answers "which file is this element written in"
+   * under React 19.
+   *
+   * `elementInfo` walks `fiber._debugSource`, which React 19.2 removed — it
+   * returns a populated object whose `filePath` is the empty string for every
+   * node in this app. This one reads the owner stack and symbolicates it
+   * through the chunk's sourcemap, so it is async and it is fallible.
+   * Optional because an older patched bundle will not have it.
+   */
+  elementSourceAsync?(el: Element): Promise<RewriteElementInfo | null>
   resolveSourceAt(x: number, y: number): Promise<RewriteElementInfo | null>
   hitTest(x: number, y: number): HTMLElement | null
   selectedElement(): HTMLElement | null
@@ -139,4 +150,207 @@ export function toSourceRef(info: RewriteElementInfo | null): SourceRef | null {
     columnNumber: info.columnNumber,
     componentName: info.componentName,
   }
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Source resolution — one owner
+ * ---------------------------------------------------------------------------
+ *
+ * "Which file is this element written in" is a fact, so it has exactly one
+ * function that answers it: `resolveElementSource`. Everything that writes to
+ * source goes through it, because the three ways of asking disagree.
+ *
+ *   - `elementInfo` is synchronous and, under React 19.2, always answers "".
+ *   - `elementSourceAsync` answers correctly about half the time; the other
+ *     half it hands back the BUNDLER CHUNK the component was compiled into.
+ *   - `discoverFile` greps the project for the component name and is the only
+ *     one that works when the sourcemap does not.
+ *
+ * Measured live against this app on 2026-08-23: `Button` resolved to
+ * `/Users/…/src/components/ui/button.tsx:57`, while `FolderChip` resolved to
+ * `src_components_workspace_space_0w_i7fl._.js:953` — a chunk filename the
+ * server would try to open and fail on. A resolver that trusted either answer
+ * alone would be wrong for half the page, which is why validation is not
+ * optional here.
+ */
+
+/**
+ * A synthetic bundler root, e.g. `[project]/src/app/page.tsx`.
+ *
+ * The vendor strips a list of URL schemes but not this, because turbopack
+ * writes it as a path segment rather than a protocol. Left on, the server
+ * resolves it into a directory that does not exist.
+ */
+const BUNDLER_ROOT = /^\[[^\]]*\]\//
+const URL_SCHEME = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//
+const SOURCE_EXTENSION = /\.(?:tsx|ts|jsx|js|mjs|cjs)$/
+
+export function normalizeSourcePath(raw: string | null | undefined): string {
+  if (!raw) return ""
+  let path = raw.trim()
+  if (path.includes("%")) {
+    try {
+      // React 19 owner stacks percent-encode spaces in absolute paths, and this
+      // project lives under a directory with two of them.
+      path = decodeURIComponent(path)
+    } catch {
+      // A literal `%` that is not an escape sequence. Keep the path as written.
+    }
+  }
+  path = path.replace(URL_SCHEME, "")
+  while (BUNDLER_ROOT.test(path)) path = path.replace(BUNDLER_ROOT, "")
+  while (path.startsWith("./")) path = path.slice(2)
+  return path
+}
+
+/**
+ * Whether the server could open this and find JSX in it.
+ *
+ * The rejections are all things the resolver has actually been observed to
+ * return. A turbopack chunk is the common one and it is recognisable two ways:
+ * its basename carries `._.`, and it arrives with no directory at all — the
+ * server's path resolver needs either a project-relative path or an absolute
+ * one inside the project, so a bare basename is unusable even when it is real.
+ */
+export function isProjectSourcePath(path: string): boolean {
+  if (!path) return false
+  if (!SOURCE_EXTENSION.test(path)) return false
+  const basename = path.slice(path.lastIndexOf("/") + 1)
+  if (basename.includes("._.")) return false
+  if (!path.includes("/")) return false
+  if (path.includes("node_modules/")) return false
+  if (path.includes("/_next/") || path.includes(".next/")) return false
+  if (path.includes("/chunks/") || path.includes("/dist/") || path.includes("/build/")) {
+    return false
+  }
+  return true
+}
+
+/** The first frame of an owner stack whose file the server can actually open. */
+function usableFrame(info: RewriteElementInfo | null): SourceRef | null {
+  if (!info) return null
+  const frames: RewriteStack[] = [
+    {
+      componentName: info.componentName,
+      filePath: info.filePath,
+      lineNumber: info.lineNumber,
+      columnNumber: info.columnNumber,
+    },
+    // The owner stack, so a component whose own frame symbolicated into a chunk
+    // can still be written through the parent that renders it.
+    ...(Array.isArray(info.stack) ? info.stack : []),
+  ]
+  for (const frame of frames) {
+    const filePath = normalizeSourcePath(frame.filePath)
+    if (!isProjectSourcePath(filePath)) continue
+    return {
+      filePath,
+      lineNumber: frame.lineNumber ?? 0,
+      columnNumber: frame.columnNumber ?? 0,
+      componentName: frame.componentName || info.componentName,
+    }
+  }
+  return null
+}
+
+/** Per-element, because resolution costs a sourcemap fetch and never changes. */
+const sourceByElement = new WeakMap<Element, Promise<SourceRef | null>>()
+/** Per-component, because `discoverFile` shells out to `grep`. */
+const pathByComponent = new Map<string, Promise<string | null>>()
+
+function discoverPath(bridge: RewriteBridge, componentName: string): Promise<string | null> {
+  const cached = pathByComponent.get(componentName)
+  if (cached) return cached
+  const pending = Promise.resolve()
+    .then(() => bridge.discoverFile(componentName))
+    .then((path) => {
+      const normalized = normalizeSourcePath(path)
+      return isProjectSourcePath(normalized) ? normalized : null
+    })
+    .catch(() => null)
+  pathByComponent.set(componentName, pending)
+  return pending
+}
+
+async function resolve(bridge: RewriteBridge, element: Element): Promise<SourceRef | null> {
+  let info: RewriteElementInfo | null = null
+  try {
+    info = bridge.elementInfo(element)
+  } catch {
+    // The fiber lookup throws on a node React never rendered.
+  }
+
+  const fromSync = usableFrame(info)
+  if (fromSync) return fromSync
+
+  if (typeof bridge.elementSourceAsync === "function") {
+    let asyncInfo: RewriteElementInfo | null = null
+    try {
+      asyncInfo = await bridge.elementSourceAsync(element)
+    } catch {
+      // Symbolication is best-effort; the grep below is the fallback.
+    }
+    const fromAsync = usableFrame(asyncInfo)
+    if (fromAsync) return fromAsync
+    // The async walk names the component even when it cannot place it, and the
+    // sync walk under React 19 often names nothing at all.
+    if (asyncInfo && !info?.componentName) info = asyncInfo
+  }
+
+  // Last resort: the owner stack named a component but every frame it gave us
+  // was a chunk. `discoverFile` greps the project for where that component is
+  // defined, which is a file the AST writer can find the element inside using
+  // the tag name, the class list and the sibling index.
+  const componentName = info?.componentName
+  if (!componentName) return null
+  const discovered = await discoverPath(bridge, componentName)
+  if (!discovered) return null
+  return {
+    filePath: discovered,
+    // No line, deliberately. The batch transformer treats `line`/`col` as a
+    // hint it cross-validates against `tagName` and falls back to matching on
+    // tag, class overlap and `nthOfType` — a wrong line is worse than none.
+    lineNumber: 0,
+    columnNumber: 0,
+    componentName,
+  }
+}
+
+/**
+ * Where this element is written, resolved once and remembered.
+ *
+ * A `null` is not cached: the first ask can land before the sourcemap has been
+ * fetched, and a permanently-remembered "no" would leave that element
+ * unwritable for as long as it stays mounted.
+ */
+export function resolveElementSource(
+  bridge: RewriteBridge,
+  element: Element
+): Promise<SourceRef | null> {
+  const cached = sourceByElement.get(element)
+  if (cached) return cached
+  const pending = resolve(bridge, element).then((source) => {
+    if (!source) sourceByElement.delete(element)
+    return source
+  })
+  sourceByElement.set(element, pending)
+  return pending
+}
+
+/**
+ * Start resolving before the user edits anything.
+ *
+ * Selection is the moment we know which element matters and the moment the
+ * user is least likely to notice a round trip, so priming here is the
+ * difference between the first edit queueing instantly and it queueing a
+ * few hundred milliseconds later. Nothing depends on the result.
+ */
+export function primeElementSource(bridge: RewriteBridge, element: Element): void {
+  void resolveElementSource(bridge, element).catch(() => null)
+}
+
+/** Test seam: drops the per-component grep results. */
+export function resetSourceResolutionCache(): void {
+  pathByComponent.clear()
 }

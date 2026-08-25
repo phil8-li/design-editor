@@ -33,7 +33,7 @@ function buildInteractionPatch(config) {
     // `Element.closest("")` throws SyntaxError, so a host that declares no dev
     // chrome must short-circuit rather than call it.
     'function designEditorElementIsTrustedChrome(e){return e instanceof Element&&(e.id==="react-rewrite-root"||!!designEditorChromeSelector&&!!e.closest(designEditorChromeSelector))}',
-    'function designEditorInstallBridge(){if(window.__DESIGN_EDITOR_BRIDGE__)return;window.__DESIGN_EDITOR_BRIDGE__={version:1,tokens:{get colors(){return l},get shadows(){return $},get radii(){return L},get font(){return x}},send:Ae,subscribe:ie,discoverFile:at,elementInfo:function(e){try{return Yl(e)}catch{return null}},resolveSourceAt:function(e,t){return vl(e,t)},hitTest:Pt,selectedElement:Wl,refreshGeometry:ot,toast:V,root:Z,store:jo}}',
+    'function designEditorInstallBridge(){if(window.__DESIGN_EDITOR_BRIDGE__)return;window.__DESIGN_EDITOR_BRIDGE__={version:1,tokens:{get colors(){return l},get shadows(){return $},get radii(){return L},get font(){return x}},send:Ae,subscribe:ie,discoverFile:at,elementInfo:function(e){try{return Yl(e)}catch{return null}},elementSourceAsync:function(e){return Promise.resolve().then(function(){return zu(e)}).catch(function(){return null})},resolveSourceAt:function(e,t){return vl(e,t)},hitTest:Pt,selectedElement:Wl,refreshGeometry:ot,toast:V,root:Z,store:jo}}',
     'function designEditorEventIsInsideTrustedChrome(e){return e.composedPath().some(designEditorElementIsTrustedChrome)}',
     'function designEditorEventIsInsideLevaChrome(e){return!!designEditorDockChromeSelector&&e.composedPath().some(t=>t instanceof Element&&!!t.closest(designEditorDockChromeSelector))}',
     'function designEditorLevaPanel(){if(!designEditorDockSelector)return null;let e=document.querySelector(designEditorDockSelector);if(e)return e;if(!designEditorDockFallbackSelector)return null;return[...document.querySelectorAll(designEditorDockFallbackSelector)].find(t=>getComputedStyle(t).position==="fixed")||null}',
@@ -82,6 +82,12 @@ const BORROWED_DECLARATIONS = [
     "ie", // subscribe
     "at", // discoverFile
     "Yl", // elementInfo
+    // elementSourceAsync — the element-taking async twin of `Yl`. React 19.2
+    // removed `fiber._debugSource`, so the synchronous walk `Yl` performs
+    // returns an empty `filePath` for every node in this app; this one reads
+    // the owner stack and symbolicates it through the chunk's sourcemap, which
+    // is the only route to a real file under React 19.
+    "zu",
     "vl", // resolveSourceAt
     "Pt", // hitTest
     "Wl", // selectedElement
@@ -364,6 +370,11 @@ export function patchOverlay(source, config) {
     "Trigger action",
     "window.__DESIGN_EDITOR_BRIDGE__",
     "designEditorInstallBridge()",
+    // Without this accessor every source write silently drops on React 19, and
+    // the failure is invisible: the preview still paints, the Apply button just
+    // never leaves its disabled state. A vendor upgrade that renames the async
+    // resolver has to fail here rather than degrade into that.
+    "elementSourceAsync:function(e){return Promise.resolve().then(function(){return zu(e)})",
     "function qe(){for(let e of [se,j,...G])",
   ]
   for (const fragment of requiredFragments) {
