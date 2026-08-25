@@ -101,6 +101,114 @@ export function tokenCssProperty(property: DesignTokenProperty): string {
   return CSS_PROPERTY[property]
 }
 
+/** Human group names for the categories whose tokens carry no path of their own. */
+const CATEGORY_GROUP: Record<string, string> = {
+  color: "Color",
+  spacing: "Spacing",
+  radius: "Radius",
+  typography: "Text",
+  shadow: "Effect",
+  "icon-size": "Icon",
+  motion: "Motion",
+}
+
+/**
+ * A token name split into the group it lists under and the leaf a row shows.
+ *
+ * This split is why the old picker read long: every line repeated the path, so
+ * forty colours were forty spellings of `Background/…` and `Text and Icon/…`.
+ * Saying the group once, in a header, is the same information in a third of the
+ * ink — and it is a fact about the token, so it lives with the token.
+ */
+export function tokenNameParts(token: DesignSystemToken): { group: string; leaf: string } {
+  const cut = token.name.lastIndexOf("/")
+  if (cut < 0) return { group: CATEGORY_GROUP[token.category] ?? "Tokens", leaf: token.name }
+  return { group: token.name.slice(0, cut), leaf: token.name.slice(cut + 1) }
+}
+
+/**
+ * What a swatch paints for this token, or null when it has no paint.
+ *
+ * The custom property rather than the literal value: the editor draws inside
+ * the host document, so the variable resolves to whatever the live theme says,
+ * where a hard-coded light value would lie in dark mode. This is a CSS value
+ * for a `style` attribute, never a string anyone reads.
+ */
+export function tokenSwatchCss(token: DesignSystemToken): string | null {
+  if (token.cssVar) return `var(${token.cssVar})`
+  const literal = Object.values(token.values).find((entry): entry is string => typeof entry === "string")
+  return literal ?? null
+}
+
+/** `16/20` — the size and leading pair a text style is recognised by. */
+export function tokenTextPair(token: DesignSystemToken): string {
+  const value = token.values.default
+  if (!value || typeof value !== "object") return ""
+  const shape = value as Record<string, unknown>
+  const fontSize = scalar(shape.fontSize)
+  const lineHeight = scalar(shape.lineHeight)
+  return fontSize === null || lineHeight === null ? "" : `${fontSize}/${lineHeight}`
+}
+
+/** Which of the picker's three previews an axis can draw. */
+export function tokenPreviewKind(
+  property: DesignTokenProperty
+): "color" | "text" | "radius" | "none" {
+  const category = PROPERTY_CATEGORY[property]
+  if (category === "colors") return "color"
+  if (category === "textStyles") return "text"
+  if (category === "radii") return "radius"
+  return "none"
+}
+
+const HEX = /^#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i
+const RGB = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i
+const DURATION = /^([\d.]+)(ms|s)$/
+
+function hexChannel(channel: string): string {
+  return Math.max(0, Math.min(255, Math.round(Number(channel)))).toString(16).padStart(2, "0")
+}
+
+/**
+ * The plain human spelling of a rendered value, or "" when it has none.
+ *
+ * The empty string is the important half. A computed value can still be a
+ * custom property, an `oklch()` or a `color-mix()`, and printing any of those
+ * on a design surface is exactly what this picker exists to stop. Showing
+ * nothing costs little, because the swatch beside it already carries the
+ * colour; showing the machine's spelling costs the whole point.
+ */
+export function plainValue(property: DesignTokenProperty, value: string): string {
+  const raw = value.trim()
+  if (!raw) return ""
+  if (property === "text-style") {
+    const [fontSize, lineHeight] = raw.split("|")
+    return fontSize && lineHeight ? `${fontSize}/${lineHeight}` : ""
+  }
+  const category = PROPERTY_CATEGORY[property]
+  if (category === "colors") {
+    if (HEX.test(raw)) {
+      // One casing, so the same colour never reads as two different values on
+      // two rows just because two authors typed it differently.
+      const digits = raw.slice(1).toLowerCase()
+      return digits.length === 3
+        ? `#${[...digits].map((digit) => digit + digit).join("")}`
+        : `#${digits.slice(0, 6)}`
+    }
+    const channels = RGB.exec(raw)
+    return channels ? `#${channels.slice(1, 4).map(hexChannel).join("")}` : ""
+  }
+  if (category === "radii" || category === "spacing" || category === "icons") {
+    const px = scalar(raw)
+    return px === null ? "" : `${px}px`
+  }
+  if (category === "motion") {
+    const duration = DURATION.exec(raw)
+    return duration ? `${Math.round(Number(duration[1]) * (duration[2] === "s" ? 1000 : 1))}ms` : ""
+  }
+  return ""
+}
+
 function unique<T>(values: readonly T[]): T[] { return [...new Set(values)] }
 
 /** The catalog tokens a property may be bound to. One owner: panels list these. */
@@ -327,22 +435,6 @@ function spring(token: DesignSystemToken): { visualDuration: number; bounce: num
   const visualDuration = scalar(shape.visualDuration)
   const bounce = scalar(shape.bounce)
   return visualDuration === null || bounce === null ? null : { visualDuration, bounce }
-}
-
-export function tokenSourceSpelling(token: DesignSystemToken): string {
-  if (token.cssUtility) return `.${token.cssUtility}`
-  if (token.cssVar) return `var(${token.cssVar})`
-  const variables = Object.values(token.cssVars ?? {})
-  if (variables.length) return variables.map((name) => `var(${name})`).join(" · ")
-  const web = token.codeSyntax?.WEB
-  if (typeof web === "string") return web
-  // Motion springs are declared in TypeScript, not in globals.css, so they have
-  // no custom property to name. Spell the spring itself rather than inventing a
-  // var() the stylesheet does not define.
-  const curve = spring(token)
-  if (curve) return `spring ${curve.visualDuration}s · bounce ${curve.bounce}`
-  const value = token.values.default
-  return typeof value === "number" ? `${value}px` : JSON.stringify(value)
 }
 
 function shadowValue(value: unknown): string | null {

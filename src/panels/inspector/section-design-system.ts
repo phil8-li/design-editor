@@ -2,10 +2,14 @@ import { config, type DesignSystemToken } from "../../core/config"
 import {
   authoredTokenMatches,
   computedTokenMatches,
+  plainValue,
   textStyleSignature,
   tokenCssProperty,
-  tokenSourceSpelling,
+  tokenNameParts,
+  tokenPreviewKind,
   tokenStyleWrites,
+  tokenSwatchCss,
+  tokenTextPair,
   tokensForProperty,
   type DesignSystemMatch,
   type DesignTokenProperty,
@@ -14,7 +18,8 @@ import { el } from "../../core/dom"
 import { toSourceRef } from "../../core/bridge"
 import { elementKey } from "../../core/store"
 import type { Selection } from "../../core/types"
-import { isExpanded, miniButton, section, selectField, setExpanded } from "./field"
+import { isExpanded, miniButton, section, setExpanded } from "./field"
+import { tokenField, type TokenChoice, type TokenPreview } from "./token-picker"
 import type { InspectorSection, SectionContext } from "./index"
 
 interface RowSpec {
@@ -23,7 +28,6 @@ interface RowSpec {
   target: Selection
   inlineValue: string
   computedValue: string
-  displayValue: string
 }
 
 const SIDES = ["top", "right", "bottom", "left"] as const
@@ -39,9 +43,11 @@ const RING_SHADOW_NONE = "0 0 #0000"
  * Why a token this row lists is offered but inert. The engine only knows "no
  * writes"; the sentence belongs here, before the click, because a toast
  * afterwards is how a designer ends up trying all nine springs one at a time.
+ * Worded as a design fact — a bounce that cannot arrive — rather than as the
+ * mechanism, which is the machine's business and not the designer's.
  */
 const UNWRITABLE_REASON: Partial<Record<DesignTokenProperty, string>> = {
-  "motion-duration": "CSS carries a duration but not a spring's bounce",
+  "motion-duration": "only a spring with no bounce arrives intact",
 }
 
 /** Computed style reports no value for a shorthand, so these read back from their parts. */
@@ -136,25 +142,7 @@ function row(
     target,
     inlineValue: target.element.style.getPropertyValue(css),
     computedValue: value ?? "mixed",
-    displayValue: value === null ? "Mixed" : value || "—",
   }
-}
-
-function tokenResolvedLabel(spec: RowSpec, token: DesignSystemToken): string {
-  if (spec.property === "text-style") {
-    const value = token.values.default
-    if (!value || typeof value !== "object") return "compound style"
-    const shape = value as Record<string, unknown>
-    const weight = typeof shape.fontWeight === "number" ? ` · ${shape.fontWeight}` : ""
-    return `${shape.fontSize ?? "?"}/${shape.lineHeight ?? "?"}${weight}`
-  }
-  const writes = tokenStyleWrites(spec.property, token)
-  if (!writes.length) return "not writable"
-  const first = writes[0].value
-  const variables = first.match(/^var\((--[\w-]+)\)$/)
-  return variables
-    ? resolvedCssValue(spec.target.element, writes[0].property, variables[1]) || first
-    : first
 }
 
 function matchFor(spec: RowSpec): DesignSystemMatch[] {
@@ -169,35 +157,68 @@ function matchFor(spec: RowSpec): DesignSystemMatch[] {
   )
 }
 
+/** A token's own preview, in the one shape the picker knows how to draw. */
+function tokenPreview(spec: RowSpec, token: DesignSystemToken): TokenPreview {
+  const kind = tokenPreviewKind(spec.property)
+  if (kind === "text") {
+    const shape = (token.values.default ?? {}) as Record<string, unknown>
+    return { kind: "text", fontSize: typeof shape.fontSize === "number" ? shape.fontSize : 12 }
+  }
+  if (kind === "radius") {
+    return { kind: "radius", px: typeof token.values.default === "number" ? token.values.default : 0 }
+  }
+  const css = kind === "color" ? tokenSwatchCss(token) : null
+  return css ? { kind: "color", css } : { kind: "none" }
+}
+
+/** The element's own value in the same shape, for a field with nothing bound. */
+function valuePreview(spec: RowSpec): TokenPreview {
+  const kind = tokenPreviewKind(spec.property)
+  if (kind === "color") {
+    // The computed value, not a resolved literal: a `var()` here still paints,
+    // because the swatch lives in the same document the app is themed in.
+    return spec.computedValue === "mixed" ? { kind: "none" } : { kind: "color", css: spec.computedValue }
+  }
+  if (kind === "text") return { kind: "text", fontSize: number(spec.computedValue.split("|")[0]) || 12 }
+  if (kind === "radius") return { kind: "radius", px: number(spec.computedValue) }
+  return { kind: "none" }
+}
+
+function tokenChoice(spec: RowSpec, token: DesignSystemToken): TokenChoice {
+  const { group, leaf } = tokenNameParts(token)
+  return {
+    id: token.id,
+    group,
+    leaf,
+    name: token.name,
+    preview: tokenPreview(spec, token),
+    detail: spec.property === "text-style" ? tokenTextPair(token) : "",
+    disabled: tokenStyleWrites(spec.property, token).length === 0,
+  }
+}
+
 function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
   const tokens = tokensForProperty(spec.property)
   const matches = matchFor(spec)
-  const uncertain = matches.some((match) => match.ambiguous)
-  const selected = matches.length === 1 && !uncertain ? matches[0].token.id : ""
-  const candidateNames = matches.map((match) => match.token.name).join(", ")
-  const custom = uncertain
-    ? `Uncertain: ${candidateNames}`
-    : matches.length > 1
-    ? `Multiple matches: ${matches.length}`
-    : `Custom: ${spec.displayValue}`
-  const picker = selectField({
+  // One exact match is a binding. An alias that changes meaning across theme or
+  // scope is not, and neither are two candidates, so the field falls back to the
+  // element's own value rather than naming a token it cannot vouch for.
+  const bound = matches.length === 1 && !matches[0].ambiguous ? matches[0].token.id : ""
+  const field = tokenField({
     id: `design-system.${spec.property}`,
-    label: `${spec.label} token`,
-    value: selected,
-    options: [
-      { value: "", label: custom },
-      ...tokens.map((token) => ({
-        value: token.id,
-        label: `${token.name} · ${tokenSourceSpelling(token)} · ${tokenResolvedLabel(spec, token)}`,
-      })),
-    ],
+    title: spec.label,
+    selectedId: bound,
+    choices: tokens.map((token) => tokenChoice(spec, token)),
+    fallback: {
+      preview: valuePreview(spec),
+      text: spec.computedValue === "mixed" ? "Mixed" : plainValue(spec.property, spec.computedValue) || "—",
+    },
     onCommit: (id) => {
-      if (!id) return
       const token = tokens.find((entry) => entry.id === id)
       if (!token) return
       const writes = tokenStyleWrites(spec.property, token)
       if (!writes.length) {
-        context.editor.toast(`${token.name} cannot be written to this element`, "error")
+        context.editor.toast(`${token.name} cannot be applied here`, "error")
         return
       }
       context.writer.applyStyles(spec.target, writes, `Apply ${token.name}`)
@@ -205,24 +226,14 @@ function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
     },
   })
 
-  const status = uncertain
-    ? `Uncertain: theme or scope can change this alias. Candidates: ${candidateNames}. Source: ${matches
-        .map((match) => match.source)
-        .join(" · ")}`
-    : matches.length
-    ? `${matches[0].via === "authored" ? "Bound" : "Value matches"}: ${matches
-        .map((match) => `${match.token.name} (${match.source})`)
-        .join(" · ")}`
-    : `Custom value: ${spec.displayValue}`
   const inert = tokens.filter((token) => !tokenStyleWrites(spec.property, token).length)
 
   return el("div", { class: "de-stack" }, [
     el("div", { class: "de-layout-group-title" }, [spec.label]),
-    picker,
-    el("div", { class: "de-hint" }, [status]),
+    field,
     inert.length
       ? el("div", { class: "de-hint" }, [
-          `Not writable here — ${UNWRITABLE_REASON[spec.property] ?? "no CSS declaration carries it"}: ${inert
+          `Unavailable — ${UNWRITABLE_REASON[spec.property] ?? "this element has nothing to carry them"}: ${inert
             .map((token) => token.name)
             .join(", ")}`,
         ])
@@ -251,7 +262,6 @@ function commonRows(context: SectionContext): RowSpec[] {
         fontWeight: number(computed.fontWeight),
         letterSpacing: Number.isFinite(letterSpacing) ? letterSpacing : 0,
       }),
-      displayValue: `${computed.fontSize} / ${computed.lineHeight} · ${computed.fontWeight}`,
     })
   }
 
@@ -263,7 +273,6 @@ function commonRows(context: SectionContext): RowSpec[] {
       target: selection,
       inlineValue: element.style.getPropertyValue("border-color"),
       computedValue: computed.borderTopColor,
-      displayValue: computed.borderTopColor,
     })
   }
   // A Tailwind v4 ring is a box-shadow, so the rendered proof it exists is the
@@ -301,7 +310,6 @@ function commonRows(context: SectionContext): RowSpec[] {
       target: icon,
       inlineValue: `${icon.element.style.width} ${icon.element.style.height}`,
       computedValue: iconStyle.width,
-      displayValue: `${iconStyle.width} × ${iconStyle.height}`,
     })
   }
 
