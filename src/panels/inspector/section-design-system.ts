@@ -51,6 +51,32 @@ const UNWRITABLE_REASON: Partial<Record<DesignTokenProperty, string>> = {
   "motion-duration": "only a spring with no bounce arrives intact",
 }
 
+/**
+ * The three axes with no honest raw form, so their picker offers none.
+ *
+ * `text-style` is four declarations and `icon-size` is two: one typed string
+ * cannot say which of them it is, and a field that quietly wrote only the first
+ * would ship half a style while reporting success. `motion-duration` is the
+ * sharper case — it deliberately refuses seven of its nine tokens, because a
+ * spring that bounces cannot survive the trip into `transition-duration`, and a
+ * typed number there is exactly the bypass that honesty exists to prevent.
+ * Everything else is a single declaration, which is what a typed value is.
+ */
+const NO_RAW_FORM = new Set<DesignTokenProperty>(["text-style", "icon-size", "motion-duration"])
+
+/**
+ * The shape a hand-typed value takes on this axis.
+ *
+ * Shown in the empty field rather than said in prose: the picker's own rule is
+ * that nothing code-shaped reaches the screen as text, and an example a
+ * designer overwrites the moment they type is not text they have to read.
+ */
+function customPlaceholder(property: DesignTokenProperty): string {
+  if (tokenPreviewKind(property) === "color") return "#0a0a0a"
+  if (property === "shadow") return "0 1px 2px #00000033"
+  return "12px"
+}
+
 /** Computed style reports no value for a shorthand, so these read back from their parts. */
 const LONGHANDS: Partial<Record<DesignTokenProperty, readonly string[]>> = {
   "corner-radius": CORNERS.map((corner) => `border-${corner}-radius`),
@@ -244,6 +270,22 @@ function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
       context.writer.applyStyles(spec.target, styles, `Apply ${tokenDisplayName(token)}`)
       context.invalidate()
     },
+    // The one declaration this axis owns, written straight. The Tailwind layer
+    // already carries an off-scale value through as an arbitrary class, so this
+    // reaches source the same way a token does rather than staying a preview.
+    custom: NO_RAW_FORM.has(spec.property)
+      ? undefined
+      : {
+          placeholder: customPlaceholder(spec.property),
+          onCommit: (raw) => {
+            context.writer.applyStyles(
+              spec.target,
+              [{ property: tokenCssProperty(spec.property), value: raw }],
+              `Set ${spec.label.toLowerCase()} to ${raw}`
+            )
+            context.invalidate()
+          },
+        },
   })
 
   const inert = tokens.filter((token) => !(writes.get(token.id) ?? []).length)

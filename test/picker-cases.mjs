@@ -54,6 +54,7 @@ async function loadEditorHelpers() {
         export { tokenPickerCss } from "./src/core/css/token-picker"
         export { baseCss } from "./src/core/css/base"
         export { tokens } from "./src/core/tokens"
+        export { toClassUpdate } from "./src/core/tailwind"
       `,
       resolveDir: PACKAGE_DIR,
       loader: "ts",
@@ -148,6 +149,7 @@ function open(harness, property) {
 }
 
 const rowsOf = (popover) => [...popover.querySelectorAll(".de-token-row")]
+const customOf = (popover) => popover.querySelector(".de-token-custom-input")
 const key = (window, node, name) =>
   node.dispatchEvent(new window.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }))
 
@@ -460,6 +462,154 @@ await checkAsync("the picker flips above the field rather than off the bottom", 
   })
 })
 
+console.log("\nA value of your own")
+
+/** One svg child and no direct text, which is the only shape an icon row appears on. */
+const ICON_FIXTURE = `<div id="target" style="display:flex;gap:16px"><svg></svg></div>`
+/**
+ * No classes on the box.
+ *
+ * FIXTURE carries `bg-background`, and authored tracing reads a class ahead of
+ * the element's own value — so its fill field keeps naming that token until the
+ * source write lands, whatever is typed. That is a fact about tracing rather
+ * than about this footer, and it lives in core, so the round trip is measured
+ * on a box where the typed value is the only thing there is to report.
+ */
+const PLAIN_FIXTURE = `<div id="target" style="display:flex;padding:16px;gap:16px;background-color:rgb(240, 242, 245);border-radius:20px">Hello<span></span></div>`
+/** The two axes that only appear on an element that actually moves and casts. */
+const MOTION_FIXTURE = `<div id="target" style="display:flex;gap:16px;transition-duration:0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.2)">Hi<span></span></div>`
+
+await checkAsync("a typed value lands on the element, in source, and hands the field back", async () => {
+  await withInspector(PLAIN_FIXTURE, async (harness) => {
+    const { window, right, target, pending } = harness
+    const { popover } = open(harness, "fill-color")
+    const custom = customOf(popover)
+    assert.ok(custom, "the picker offers no way out of the list")
+    // The example is in the empty field, not in prose beside it.
+    assert.equal(custom.getAttribute("placeholder"), "#0a0a0a")
+
+    const before = field(right, "fill-color")
+    custom.value = "#123456"
+    key(window, custom, "Enter")
+    await harness.paint()
+
+    assert.equal(window.document.querySelector(".de-token-popover"), null, "the picker stayed open")
+    assert.match(target.style.backgroundColor, /^(?:#123456|rgb\(18, 52, 86\))$/)
+    assert.ok(pending.length > 0, "the typed value queued no source operation")
+    // And it reaches source as a class, not as a preview the writer dropped.
+    assert.deepEqual(pending.at(-1)[1].updates[0].value, "#123456")
+    assert.equal(pending.at(-1)[1].updates[0].tailwindPrefix, "bg")
+
+    // Same contract as a picked token: close first, write second, so the panel
+    // has a field to hand focus back to instead of dropping it to <body>.
+    const after = field(right, "fill-color")
+    assert.notEqual(after, before, "the inspector did not rebuild")
+    assert.equal(window.document.activeElement, after)
+    // The closed field still says one thing, and now it is the designer's value.
+    assert.equal(after.textContent, "#123456")
+    assert.equal(after.querySelector(".de-token-custom"), null, "the escape hatch leaked into the closed field")
+  })
+})
+
+await checkAsync("Enter in the typed field takes what was typed, not the row the arrows are on", async () => {
+  await withInspector(FIXTURE, async (harness) => {
+    const { window, target } = harness
+    const { popover } = open(harness, "corner-radius")
+    const custom = customOf(popover)
+    assert.ok(custom, "the radius picker offers no way out of the list")
+
+    // A row IS highlighted — opening the picker parks the cursor on the binding
+    // — so the window-level capture handler has a token ready to commit.
+    const active = popover.querySelector('[data-active="true"]')
+    assert.ok(active, "no row is highlighted, so this case cannot catch the bug it exists for")
+
+    custom.value = "7px"
+    key(window, custom, "Enter")
+    await harness.paint()
+
+    assert.equal(target.style.borderRadius, "7px")
+    assert.ok(
+      !target.style.borderRadius.includes("var("),
+      "Enter committed the highlighted token instead of the typed value"
+    )
+  })
+})
+
+await checkAsync("an empty field commits nothing and leaves the picker up", async () => {
+  await withInspector(FIXTURE, async (harness) => {
+    const { window, target, pending } = harness
+    const before = target.style.backgroundColor
+    const { popover } = open(harness, "fill-color")
+    key(window, customOf(popover), "Enter")
+    await harness.paint()
+    assert.ok(window.document.querySelector(".de-token-popover"), "an empty Enter closed the picker")
+    assert.equal(target.style.backgroundColor, before)
+    assert.equal(pending.length, 0)
+  })
+})
+
+await checkAsync("Escape still belongs to the picker while the caret is in the typed field", async () => {
+  await withInspector(FIXTURE, async (harness) => {
+    const { window } = harness
+    const { node, popover } = open(harness, "fill-color")
+    const custom = customOf(popover)
+    custom.value = "#123456"
+    key(window, custom, "Escape")
+    assert.equal(window.document.querySelector(".de-token-popover"), null, "there is no way out of the field")
+    assert.equal(window.document.activeElement, node)
+  })
+})
+
+await checkAsync("the three compound axes offer no typed value, and every single-declaration axis does", async () => {
+  // text-style writes four declarations and icon-size writes two: one typed
+  // string cannot say which of them it is. motion-duration is the sharper case
+  // — it refuses seven of its nine tokens because a spring that bounces cannot
+  // survive the trip into a duration, and a typed number is that bypass.
+  const has = (harness, property) => customOf(open(harness, property).popover) !== null
+
+  await withInspector(FIXTURE, async (harness) => {
+    assert.equal(has(harness, "text-style"), false, "a text style is four declarations, not one typed string")
+    for (const property of ["fill-color", "text-color", "corner-radius", "gap", "padding"]) {
+      assert.equal(has(harness, property), true, `${property} is one declaration and has no way out of the list`)
+    }
+  })
+  await withInspector(ICON_FIXTURE, async (harness) => {
+    assert.equal(has(harness, "icon-size"), false, "an icon size is a width and a height, not one typed string")
+    assert.equal(has(harness, "svg-fill"), true)
+  })
+  await withInspector(MOTION_FIXTURE, async (harness) => {
+    assert.equal(has(harness, "motion-duration"), false, "a typed duration walks around the bounce this axis refuses")
+    assert.equal(has(harness, "shadow"), true)
+  })
+})
+
+check("a typed value survives the trip into source as an arbitrary class", () => {
+  // One per axis family the escape hatch is offered on. The engine assembles
+  // `prefix-[value]`, so what matters is that the translation admits the raw
+  // spelling rather than refusing it and leaving the edit preview-only.
+  const shape = (property, value) => {
+    const update = helpers.toClassUpdate(property, value)
+    assert.ok(update, `${property} refuses a typed value, so it would never reach source`)
+    assert.equal(update.tailwindToken, null, `${property} pretended a typed value was on the scale`)
+    return `${update.tailwindPrefix}-[${update.value}]`
+  }
+  assert.equal(shape("background-color", "#123456"), "bg-[#123456]")
+  assert.equal(shape("color", "#123456"), "text-[#123456]")
+  assert.equal(shape("border-radius", "7px"), "rounded-[7px]")
+  assert.equal(shape("gap", "13px"), "gap-[13px]")
+  assert.equal(shape("box-shadow", "0 1px 2px #00000033"), "shadow-[0_1px_2px_#00000033]")
+  assert.equal(shape("--tw-ring-color", "#123456"), "ring-[#123456]")
+
+  // `bg` is not only a colour stem. Without a pattern of its own a recolour
+  // matched on the bare prefix, so typing a fill took `bg-cover` off with it.
+  const fill = new RegExp(helpers.toClassUpdate("background-color", "#123456").classPattern)
+  assert.equal(fill.test("bg-[#123456]"), true)
+  assert.equal(fill.test("bg-background"), true, "a themed fill must be replaced rather than duplicated")
+  for (const survivor of ["bg-cover", "bg-center", "bg-no-repeat", "bg-contain"]) {
+    assert.equal(fill.test(survivor), false, `recolouring the box deleted ${survivor}`)
+  }
+})
+
 console.log("\nNothing code-shaped on the screen")
 
 /**
@@ -526,11 +676,17 @@ await checkAsync("no field, list or hint carries a machine spelling", async () =
       }
 
       const read = []
+      let scannedTheWayOut = false
       for (const property of properties) {
         read.push(field(right, property).closest(".de-stack").textContent)
         const { popover } = open(harness, property)
+        scannedTheWayOut ||= popover.querySelector(".de-token-custom") !== null
         read.push(popover.textContent)
       }
+      // The escape hatch puts a label of its own in the popover, and the label
+      // it must never grow back is on the list below. A sweep that never met one
+      // would pass while the footer said anything at all.
+      assert.ok(scannedTheWayOut, "no picker in this sweep carried the way out of the list")
       for (const text of read) {
         assert.deepEqual(offenders(text), [], `a machine spelling is on the screen: ${text.slice(0, 160)}`)
       }
