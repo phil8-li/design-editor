@@ -81,41 +81,70 @@ const context = editorModule.createContext(bridge, {
 })
 editorModule.installToolbar(context)
 
+/**
+ * The pass count is counted, never typed. It used to be a literal at the foot
+ * of the file, which meant an edit that removed an assertion could still print
+ * a bigger number than the run before it.
+ */
+let passed = 0
+let failed = 0
+
+async function check(name, fn) {
+  try {
+    await fn()
+    passed += 1
+    console.log(`  ok   ${name}`)
+  } catch (error) {
+    failed += 1
+    console.log(`  FAIL ${name}\n       ${error.message}`)
+  }
+}
+
 const label = (name) => context.slots.toolbar.querySelector(`[aria-label="${name}"]`)
-assert.ok(label("Move"))
-assert.ok(label("Hand (browser scroll)"))
-assert.ok(label("Toggle layers panel"))
-assert.ok(label("Toggle inspector"))
+
+await check("the toolbar draws its two tools and both panel toggles", () => {
+  assert.ok(label("Move"))
+  assert.ok(label("Hand (browser scroll)"))
+  assert.ok(label("Toggle layers panel"))
+  assert.ok(label("Toggle inspector"))
+})
 
 // The toolbar no longer dispatches the options event — the inspector's empty
 // state is now its only in-chrome caller besides the browser's own launcher.
 // The subsystem must still be reachable, so this asserts the receiver, not the
 // removed sender. Full coverage of the four removed clusters is in
 // test/toolbar-cases.mjs.
-const toolbarText = context.slots.toolbar.textContent
-assert.doesNotMatch(toolbarText, /Variables/)
-assert.doesNotMatch(toolbarText, /Actions/)
-assert.equal(context.slots.toolbar.querySelector(".de-actions-menu"), null)
+await check("no overflow menu and no capability inventory", () => {
+  const toolbarText = context.slots.toolbar.textContent
+  assert.doesNotMatch(toolbarText, /Variables/)
+  assert.doesNotMatch(toolbarText, /Actions/)
+  assert.equal(context.slots.toolbar.querySelector(".de-actions-menu"), null)
+})
 
-assert.match(editorModule.shellCss, /bottom:/)
-assert.doesNotMatch(editorModule.shellCss, /transition: padding/)
-assert.doesNotMatch(editorModule.shellCss, /de-outline--scope/)
-assert.match(
-  editorModule.shellCss,
-  /\.de-outline\s*\{[^}]*transition: none;[^}]*animation: none;/s
-)
-assert.match(editorModule.shellCss, /\.de-outline--hover\s*\{[^}]*opacity: 1;/s)
-assert.doesNotMatch(editorModule.shellCss, /\.de-outline--hover\s*\{[^}]*opacity: 0\.48;/s)
-assert.match(
-  editorModule.shellCss,
-  /\.de-handle\s*\{[^}]*border-radius: 0;[^}]*transition: none;[^}]*animation: none;/s
-)
-assert.match(editorModule.shellCss, /\.de-layer\s*\{[^}]*transition: none;[^}]*animation: none;/s)
+await check("the shell keeps its quiet, motionless chrome", () => {
+  assert.match(editorModule.shellCss, /bottom:/)
+  assert.doesNotMatch(editorModule.shellCss, /transition: padding/)
+  assert.doesNotMatch(editorModule.shellCss, /de-outline--scope/)
+  assert.match(
+    editorModule.shellCss,
+    /\.de-outline\s*\{[^}]*transition: none;[^}]*animation: none;/s
+  )
+  assert.match(editorModule.shellCss, /\.de-outline--hover\s*\{[^}]*opacity: 1;/s)
+  assert.doesNotMatch(editorModule.shellCss, /\.de-outline--hover\s*\{[^}]*opacity: 0\.48;/s)
+  assert.match(
+    editorModule.shellCss,
+    /\.de-handle\s*\{[^}]*border-radius: 0;[^}]*transition: none;[^}]*animation: none;/s
+  )
+  assert.match(editorModule.shellCss, /\.de-layer\s*\{[^}]*transition: none;[^}]*animation: none;/s)
+})
 
 editorModule.installSelectionFrame(context)
-assert.equal(context.slots.overlay.querySelectorAll(".de-outline").length, 2)
-assert.equal(context.slots.overlay.querySelector(".de-badge"), null)
-assert.equal(context.slots.overlay.querySelectorAll("[data-handle]").length, 8)
+
+await check("the frame mounts one node pool and nothing else", () => {
+  assert.equal(context.slots.overlay.querySelectorAll(".de-outline").length, 2)
+  assert.equal(context.slots.overlay.querySelector(".de-badge"), null)
+  assert.equal(context.slots.overlay.querySelectorAll("[data-handle]").length, 8)
+})
 
 const selectedTarget = window.document.createElement("main")
 selectedTarget.getBoundingClientRect = () => new window.DOMRect(20, 30, 100, 60)
@@ -126,19 +155,23 @@ const hoverOutline = context.slots.overlay.querySelector(".de-outline--hover")
 const selectionOutline = context.slots.overlay.querySelector(".de-outline:not(.de-outline--hover)")
 const selectionHandles = Array.from(context.slots.overlay.querySelectorAll("[data-handle]"))
 
-context.setState({ hovered: selectedTarget, selection: [] })
-await nextPaint()
-assert.equal(hoverOutline.style.display, "block")
-assert.equal(hoverOutline.style.transform, "translate(20px, 30px)")
-assert.equal(selectionOutline.style.display, "none")
-assert.ok(selectionHandles.every((handle) => handle.style.display === "none"))
+await check("a hover paints the hover outline and no handles", async () => {
+  context.setState({ hovered: selectedTarget, selection: [] })
+  await nextPaint()
+  assert.equal(hoverOutline.style.display, "block")
+  assert.equal(hoverOutline.style.transform, "translate(20px, 30px)")
+  assert.equal(selectionOutline.style.display, "none")
+  assert.ok(selectionHandles.every((handle) => handle.style.display === "none"))
+})
 
-context.select(selectedTarget)
-await nextPaint()
-assert.equal(hoverOutline.style.display, "none")
-assert.equal(selectionOutline.style.display, "block")
-assert.equal(selectionOutline.style.transform, "translate(20px, 30px)")
-assert.ok(selectionHandles.every((handle) => handle.style.display === "block"))
+await check("a selection takes the outline over and brings the handles", async () => {
+  context.select(selectedTarget)
+  await nextPaint()
+  assert.equal(hoverOutline.style.display, "none")
+  assert.equal(selectionOutline.style.display, "block")
+  assert.equal(selectionOutline.style.transform, "translate(20px, 30px)")
+  assert.ok(selectionHandles.every((handle) => handle.style.display === "block"))
+})
 
 context.select(null)
 context.setState({ hovered: null })
@@ -151,14 +184,17 @@ const vendorSource = await fs.readFile(
   "utf8"
 )
 const patchedVendor = patchOverlay(vendorSource, resolveConfig({}, { cwd: ROOT }))
-assert.match(
-  patchedVendor,
-  /function qe\(\)\{for\(let e of \[se,j,\.\.\.G\]\)e&&\(e\.current=\{\.\.\.e\.target\},e\.opacity=e\.targetOpacity\);P&&oe&&P\.clearRect/
-)
-assert.doesNotMatch(
-  patchedVendor,
-  /function qe\(\)\{Yt===null&&\(Yt=requestAnimationFrame\(bs\)\)\}/
-)
+
+await check("the vendor overlay is patched off its own rAF loop", () => {
+  assert.match(
+    patchedVendor,
+    /function qe\(\)\{for\(let e of \[se,j,\.\.\.G\]\)e&&\(e\.current=\{\.\.\.e\.target\},e\.opacity=e\.targetOpacity\);P&&oe&&P\.clearRect/
+  )
+  assert.doesNotMatch(
+    patchedVendor,
+    /function qe\(\)\{Yt===null&&\(Yt=requestAnimationFrame\(bs\)\)\}/
+  )
+})
 
 const disabledControl = {
   path: "Cards.Layout.gap",
@@ -178,29 +214,34 @@ const disabledControl = {
   defaultKey: null,
   canPersistDefault: false,
 }
-const disabledRow = editorModule.controlRow(disabledControl, context)
-assert.ok(Array.from(disabledRow.querySelectorAll(".de-opt-chip")).every((button) => button.disabled))
+await check("a disabled control disables every input it draws", () => {
+  const disabledRow = editorModule.controlRow(disabledControl, context)
+  assert.ok(
+    Array.from(disabledRow.querySelectorAll(".de-opt-chip")).every((button) => button.disabled)
+  )
+  const disabledNumber = editorModule.controlRow(
+    { ...disabledControl, type: "NUMBER", variants: null, variantValues: null },
+    context
+  )
+  assert.equal(disabledNumber.querySelector(".de-opt-input").disabled, true)
+})
 
-const disabledNumber = editorModule.controlRow(
-  { ...disabledControl, type: "NUMBER", variants: null, variantValues: null },
-  context
-)
-assert.equal(disabledNumber.querySelector(".de-opt-input").disabled, true)
+await check("the options browser still answers the open event and returns focus", () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) })
+  editorModule.installOptionsBrowser(context)
+  const returnTarget = window.document.createElement("button")
+  window.document.body.append(returnTarget)
+  returnTarget.focus()
+  window.dispatchEvent(new window.CustomEvent("design-editor:open-options"))
+  const optionsPanel = window.document.querySelector(".de-opt-window")
+  assert.equal(optionsPanel.hidden, false)
+  assert.equal(window.document.activeElement?.className, "de-opt-filter")
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+  assert.equal(optionsPanel.hidden, true)
+  assert.equal(window.document.activeElement, returnTarget)
+  globalThis.fetch = originalFetch
+})
 
-const originalFetch = globalThis.fetch
-globalThis.fetch = async () => ({ ok: true, json: async () => ({}) })
-editorModule.installOptionsBrowser(context)
-const returnTarget = window.document.createElement("button")
-window.document.body.append(returnTarget)
-returnTarget.focus()
-window.dispatchEvent(new window.CustomEvent("design-editor:open-options"))
-const optionsPanel = window.document.querySelector(".de-opt-window")
-assert.equal(optionsPanel.hidden, false)
-assert.equal(window.document.activeElement?.className, "de-opt-filter")
-window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
-assert.equal(optionsPanel.hidden, true)
-assert.equal(window.document.activeElement, returnTarget)
-globalThis.fetch = originalFetch
-
-console.log("34 passed, 0 failed")
-process.exit(0)
+console.log(`\n${passed} passed, ${failed} failed`)
+process.exit(failed > 0 ? 1 : 0)
