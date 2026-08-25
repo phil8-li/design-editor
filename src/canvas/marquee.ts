@@ -72,7 +72,7 @@ export function installMarquee(context: EditorContext): MarqueeController {
 
   const begin = (event: PointerEvent, target: HTMLElement | null): boolean => {
     const { tool } = context.getState()
-    if (event.button !== 0 || (tool !== "move" && tool !== "select")) return false
+    if (event.button !== 0 || tool !== "move") return false
     if (isChrome(event.target)) return false
 
     // A live app often fills every canvas pixel, leaving no literal body area.

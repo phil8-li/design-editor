@@ -7,6 +7,7 @@
  */
 
 import { isChrome, round } from "../core/dom"
+import { editorOwnsInput } from "../core/store"
 import type { EditorContext } from "../core/context"
 import type { HandleId } from "./selection"
 
@@ -112,8 +113,9 @@ export function installTransform(context: EditorContext): void {
     })
 
   const onPointerDown = (event: PointerEvent) => {
+    if (!editorOwnsInput()) return
     const state = context.getState()
-    if (state.tool !== "move" && state.tool !== "select") return
+    if (state.tool !== "move") return
     if (event.button !== 0) return
 
     const target = event.target as HTMLElement | null

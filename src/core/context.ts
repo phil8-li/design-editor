@@ -32,6 +32,12 @@ export interface EditorContext {
   /** Replaces the selection in one store write — one repaint, not one per element. */
   selectMany(els: HTMLElement[]): void
   setTool(tool: ToolId): void
+  /**
+   * Enters or leaves pass-through mode. Entering it drops the hover target as
+   * well: the highlight is suppressed either way, but a stale `hovered` would
+   * keep the chrome's frame loop awake for a canvas nobody is painting.
+   */
+  setInteractive(interactive: boolean): void
   /** Rebuilds every registered panel. Cheap: panels diff internally. */
   refresh(): void
   onRefresh(fn: () => void): () => void
@@ -101,6 +107,10 @@ export function createContext(bridge: RewriteBridge, slots: EditorSlots): Editor
 
     setTool(tool) {
       setState({ tool })
+    },
+
+    setInteractive(interactive) {
+      setState(interactive ? { interactive, hovered: null } : { interactive })
     },
 
     refresh() {

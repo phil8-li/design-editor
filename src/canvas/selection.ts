@@ -122,9 +122,25 @@ export function installSelectionFrame(context: EditorContext): void {
     node.style.display = "none"
   }
 
+  const hideAll = () => {
+    hide(hoverOutline)
+    hide(boundsOutline)
+    members.flush()
+    related.flush()
+    for (const handle of handles.values()) hide(handle)
+  }
+
   const paintSelection = () => {
     const state = context.getState()
     const selection = state.selection
+
+    // Interactive mode is a claim that the editor is not there. An outline left
+    // standing over an app the user is now clicking through is the one thing
+    // that would disprove it, so the chrome goes before the handlers do.
+    if (state.interactive) {
+      hideAll()
+      return
+    }
 
     // Every rect this frame needs is read before anything is written. Writing a
     // style between two reads invalidates layout, so an interleaved loop forces
@@ -188,7 +204,7 @@ export function installSelectionFrame(context: EditorContext): void {
     boundsOutline.style.borderStyle = "solid"
     placeNode(boundsOutline, left, top, width, height)
 
-    const showHandles = count === 1 && (state.tool === "move" || state.tool === "select")
+    const showHandles = count === 1 && state.tool === "move"
     for (const [id, fx, fy] of HANDLES) {
       const handle = handles.get(id)
       if (!handle) continue
@@ -220,6 +236,10 @@ export function installSelectionFrame(context: EditorContext): void {
     const state = context.getState()
     // Selected or hovered app content may move under Motion, so track it. Once
     // both are empty, stop entirely until the store wakes the painter again.
+    // Interactive mode stops it too: a selection survives the mode switch so
+    // the user gets it back on the way out, but tracking geometry nobody is
+    // drawing would cost a layout read per frame for a blank overlay.
+    if (state.interactive) return
     if (state.selection.length > 0 || state.hovered || highlighted.length > 0) schedule()
   }
 
@@ -228,7 +248,8 @@ export function installSelectionFrame(context: EditorContext): void {
     if (
       next.selection !== previous.selection ||
       next.hovered !== previous.hovered ||
-      next.tool !== previous.tool
+      next.tool !== previous.tool ||
+      next.interactive !== previous.interactive
     ) {
       schedule()
     }

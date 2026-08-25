@@ -8,6 +8,16 @@ import type { ElementOptionSet, Selection, ToolId } from "./types"
 
 export interface EditorState {
   tool: ToolId
+  /**
+   * Hands the page back to the app: clicks, keys and drags reach the product
+   * instead of the editor, and the canvas paints nothing over it.
+   *
+   * Default `false`, because the editor's whole reason to exist is that a click
+   * selects rather than navigates. This is a MODE rather than a tool — a tool
+   * changes what a canvas gesture means, this decides whether there is a canvas
+   * gesture at all — so it lives beside `tool` instead of inside it.
+   */
+  interactive: boolean
   /** Primary selection is `selection[0]`. */
   selection: Selection[]
   /**
@@ -29,6 +39,7 @@ type Listener = (state: EditorState, previous: EditorState) => void
 
 const state: EditorState = {
   tool: "move",
+  interactive: false,
   selection: [],
   scope: null,
   hovered: null,
@@ -64,6 +75,20 @@ export function setState(patch: Partial<EditorState>): void {
 
 export function primarySelection(): Selection | null {
   return state.selection[0] ?? null
+}
+
+/**
+ * Whether a canvas gesture belongs to the editor at all.
+ *
+ * Every pointer and key handler in the canvas lane asks this one function
+ * rather than reading `interactive` for itself. Interactive mode is only
+ * trustworthy if it is airtight: a mode that leaks through a single handler —
+ * the double-click that still drills, the pointerdown that still starts a drag
+ * — is worse than no mode, because the user has already stopped expecting the
+ * editor to intercept anything.
+ */
+export function editorOwnsInput(): boolean {
+  return !state.interactive
 }
 
 /** `tag` plus index among same-tag siblings — one step of a DOM path. */
