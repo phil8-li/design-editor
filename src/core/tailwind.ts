@@ -141,7 +141,10 @@ const SCALARS: Record<
   "border-top-right-radius": { prefix: "rounded-tr", related: ["rounded", "rounded-t"] },
   "border-bottom-right-radius": { prefix: "rounded-br", related: ["rounded", "rounded-b"] },
   "border-bottom-left-radius": { prefix: "rounded-bl", related: ["rounded", "rounded-b"] },
-  "background-color": { prefix: "bg" },
+  // `bg` is not only a colour stem: `bg-cover`, `bg-center` and `bg-no-repeat`
+  // all sit on it, and a prefix match would take a repeat rule off the element
+  // as the price of recolouring it. Same reason `text` and `border` carry one.
+  "background-color": { prefix: "bg", pattern: colorClass("bg") },
   "line-height": { prefix: "leading" },
   "letter-spacing": { prefix: "tracking" },
   "box-shadow": { prefix: "shadow" },
