@@ -90,7 +90,7 @@ const prelude = browserPrelude(workspace, { proxyPort: 4567 })
 const browserSandbox = { window: {} }
 vm.runInNewContext(prelude, browserSandbox)
 
-check("the Workspaces catalog is the non-vacuous 116-asset export", () => {
+check("the Workspaces catalog is the non-vacuous 115-asset export", () => {
   const counts = {
     colors: catalog.colors.length,
     spacing: catalog.spacing.length,
@@ -101,7 +101,7 @@ check("the Workspaces catalog is the non-vacuous 116-asset export", () => {
     motion: catalog.motion.length,
   }
   assert.deepEqual(counts, {
-    colors: 64,
+    colors: 63,
     spacing: 11,
     radii: 8,
     text: 12,
@@ -111,7 +111,7 @@ check("the Workspaces catalog is the non-vacuous 116-asset export", () => {
   })
   assert.equal(catalog.textStyles.length, 11)
   assert.equal(catalog.uiTextStyles.length, 1)
-  assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), 116)
+  assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), 115)
 
   const ids = [
     ...catalog.colors,
@@ -162,7 +162,7 @@ check("the browser prelude carries the catalog but no server filesystem paths", 
   assert.equal(prelude.includes("src/app/globals.css"), false)
 
   const browserConfig = browserSandbox.window.__DESIGN_EDITOR_CONFIG__
-  assert.equal(browserConfig.designSystem.colors.length, 64)
+  assert.equal(browserConfig.designSystem.colors.length, 63)
   assert.equal(browserConfig.designSystem.breakpoints.length, 5)
   assert.equal("manifest" in browserConfig.designSystem, false)
   assert.equal("cssSources" in browserConfig.designSystem, false)
