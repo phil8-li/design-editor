@@ -16,8 +16,9 @@
  */
 
 import { el } from "../core/dom"
+import { canRedo, canUndo, onHistoryChange, redo, undo } from "../core/history"
 import { icon, type IconName } from "../core/icons"
-import { isTextEntry } from "../core/keymap"
+import { historyAction, isMac, isTextEntry } from "../core/keymap"
 import { untranslatedProperties } from "../core/writer"
 import type { EditorContext } from "../core/context"
 import type { ToolId } from "../core/types"
@@ -153,19 +154,44 @@ export function installToolbar(context: EditorContext): void {
     ["Apply to code"]
   )
 
+  /**
+   * The button and the shortcut are the same call, not two that agree.
+   *
+   * `travel` is what Cmd+Z runs and what the button runs, so the toast, the
+   * refresh and the disabled state cannot drift apart — which is the shape the
+   * old Undo button failed at from the other direction: it asked the vendor
+   * engine whether there was anything to undo, and the answer was always no.
+   */
+  const travel = (direction: "undo" | "redo") => {
+    const label = direction === "undo" ? undo() : redo()
+    const verb = direction === "undo" ? "Undo" : "Redo"
+    context.toast(label ? `${verb}: ${label}` : `Nothing to ${direction}`)
+    // The inspector reads the element, so the panel is stale until it re-reads.
+    context.refresh()
+  }
+
   const undoButton = el(
     "button",
     {
-      class: "de-button",
+      class: "de-tool",
       type: "button",
-      ...hint("Undo", "Undo last canvas change"),
-      onclick: () => {
-        const label = bridge.store.canvasUndo()
-        context.toast(label ? `Undo: ${label}` : "Nothing to undo")
-        context.refresh()
-      },
+      // Spelled the way the platform spells it, since the tooltip is the only
+      // place the shortcut is written down.
+      ...tip("Undo", isMac() ? "⌘Z" : "Ctrl+Z"),
+      onclick: () => travel("undo"),
     },
-    ["Undo"]
+    [icon("RotateCcw")]
+  )
+
+  const redoButton = el(
+    "button",
+    {
+      class: "de-tool",
+      type: "button",
+      ...tip("Redo", isMac() ? "⇧⌘Z" : "Shift+Ctrl+Z"),
+      onclick: () => travel("redo"),
+    },
+    [icon("RotateCw")]
   )
 
   const panelToggles = el("div", { class: "de-toolbar-group" }, [
@@ -200,7 +226,7 @@ export function installToolbar(context: EditorContext): void {
     toolGroup,
     el("div", { class: "de-toolbar-group" }, [interactiveButton]),
     panelToggles,
-    el("div", { class: "de-toolbar-group" }, [undoButton, applyButton])
+    el("div", { class: "de-toolbar-group" }, [undoButton, redoButton, applyButton])
   )
 
   const syncPressed = () => {
@@ -215,7 +241,8 @@ export function installToolbar(context: EditorContext): void {
       button.toggleAttribute("disabled", interactive)
     }
     interactiveButton.setAttribute("aria-pressed", String(interactive))
-    undoButton.toggleAttribute("disabled", !bridge.store.canUndo())
+    undoButton.toggleAttribute("disabled", !canUndo())
+    redoButton.toggleAttribute("disabled", !canRedo())
     applyButton.toggleAttribute("disabled", !bridge.store.hasChanges())
   }
 
@@ -233,6 +260,7 @@ export function installToolbar(context: EditorContext): void {
     syncPressed()
   })
   context.onRefresh(syncPressed)
+  onHistoryChange(syncPressed)
   try {
     bridge.store.onStateChange(syncPressed)
   } catch {
@@ -240,6 +268,22 @@ export function installToolbar(context: EditorContext): void {
   }
 
   window.addEventListener("keydown", (event) => {
+    /*
+     * Undo and redo are editor commands, not canvas ones, so they are not
+     * gated on `editorOwnsInput()` the way the tool letters below are: the
+     * buttons stay live in interactive mode and the keys have to match them.
+     * A native field keeps its own Cmd+Z — that undo is the user's typing.
+     */
+    const history = historyAction(event)
+    if (history) {
+      if (isTextEntry(event.target)) return
+      event.preventDefault()
+      // The vendor's document-capture guard reaches keys too.
+      event.stopPropagation()
+      travel(history)
+      return
+    }
+
     if (event.metaKey || event.ctrlKey || event.altKey) return
     // Text entry only. Deliberately not `ownsCanvasKeys`, which also excludes
     // chrome: clicking a tool leaves focus on its button, and the next letter
@@ -252,7 +296,9 @@ export function installToolbar(context: EditorContext): void {
     if (!match) return
     event.preventDefault()
     selectTool(match.id)
-  })
+    // Capture, so a shortcut is not lost to an app handler that stops the
+    // event on its way up. Every branch above guards on the target first.
+  }, true)
 
   syncPressed()
 }

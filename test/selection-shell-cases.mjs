@@ -20,6 +20,7 @@ for (const key of [
   "Element",
   "HTMLElement",
   "SVGElement",
+  "SVGSVGElement",
   "Event",
   "CustomEvent",
   "KeyboardEvent",
@@ -70,8 +71,6 @@ const bridge = {
   store: {
     setActiveTool() {},
     hasChanges: () => false,
-    canUndo: () => false,
-    canvasUndo: () => null,
     onStateChange() {},
   },
 }

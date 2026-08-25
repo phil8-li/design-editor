@@ -11,6 +11,7 @@
 import { el } from "../../core/dom"
 import { numberField, section, segmented } from "./field"
 import type { InspectorSection } from "./index"
+import type { LayerElement } from "../../core/types"
 
 type Axis = "width" | "height"
 type Mode = "fixed" | "hug" | "fill"
@@ -25,7 +26,7 @@ const STEM: Record<Axis, string> = { width: "w", height: "h" }
  * every one of them to used pixels. So this reads what we wrote inline first,
  * then the Tailwind classes that are the actual source of truth.
  */
-function modeOf(element: HTMLElement, axis: Axis): Mode {
+function modeOf(element: LayerElement, axis: Axis): Mode {
   const inline = element.style.getPropertyValue(axis).trim()
   if (inline === HUG || inline === "max-content" || inline === "auto") return "hug"
   if (inline === FILL) return "fill"

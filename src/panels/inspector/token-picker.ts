@@ -20,6 +20,10 @@ export type TokenPreview =
   | { kind: "color"; css: string }
   | { kind: "text"; fontSize: number }
   | { kind: "radius"; px: number }
+  // A drawing, not data about one: this module deliberately knows nothing about
+  // icons, so the caller hands over the mark already made. Rebuilt per row
+  // rather than shared, because a node can only be in one place at a time.
+  | { kind: "glyph"; draw: () => SVGElement }
   | { kind: "none" }
 
 export interface TokenChoice {
@@ -92,6 +96,9 @@ function previewNode(preview: TokenPreview): HTMLElement {
       },
       ["Ag"]
     )
+  }
+  if (preview.kind === "glyph") {
+    return el("span", { class: "de-token-swatch de-token-swatch--glyph" }, [preview.draw()])
   }
   if (preview.kind === "radius") {
     const scaled = Math.min((preview.px / RADIUS_REFERENCE) * SWATCH, SWATCH / 2)

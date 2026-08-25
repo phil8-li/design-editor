@@ -62,6 +62,18 @@ const config = {
     },
   },
 
+  // Your icon set: the drawings, not the size scale. With both halves set, a
+  // selected <svg> names itself and the inspector can swap it for another
+  // glyph. `attribute` is what your icon factory stamps on each element;
+  // `data` is a JSON map of name to { nodes, rootFill, rootStroke }. The set
+  // is fetched from `GET {apiPrefix}/icons` on demand rather than shipped in
+  // the prelude, so a large library costs nothing until the panel opens. An
+  // icon swap is preview-only — the source writer speaks in classes and text.
+  icons: {
+    attribute: "", // e.g. "data-app-icon"
+    data: null, // e.g. "src/components/icons/icon-data.json"
+  },
+
   chrome: {
     // Elements the editor must treat as its own furniture rather than as
     // canvas: your dev GUI, debug bars, anything that is not the product.

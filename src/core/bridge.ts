@@ -68,8 +68,6 @@ export interface RewriteStore {
   ): void
   buildBatchOperations(): unknown[]
   hasChanges(): boolean
-  canUndo(): boolean
-  canvasUndo(): string | null
   addMove(move: unknown): unknown
   updateMoveDelta(id: string, delta: { x: number; y: number }): void
   getMoveForElement(el: Element): unknown

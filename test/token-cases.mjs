@@ -595,7 +595,7 @@ async function withInspector(markup, run) {
   const { window } = dom
   for (const key of [
     "window", "document", "navigator", "Node", "Element", "HTMLElement",
-    "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "SVGElement",
+    "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "SVGElement", "SVGSVGElement",
     "Event", "CustomEvent", "KeyboardEvent", "PointerEvent", "requestAnimationFrame",
     "cancelAnimationFrame", "getComputedStyle",
   ]) {
@@ -626,9 +626,7 @@ async function withInspector(markup, run) {
       addPendingPropertyOperation: (...args) => pending.push(args),
       getCanvasTransform: () => ({ x: 0, y: 0, scale: 1 }),
       setCanvasTransform() {}, onCanvasTransformChange: () => () => {},
-      onStateChange: () => () => {}, hasChanges: () => false, canUndo: () => false,
-      canvasUndo: () => null,
-    },
+      onStateChange: () => () => {}, hasChanges: () => false,    },
   }
   const editor = helpers.createContext(bridge, {
     overlay: slot(), toolbar: slot(), left: slot(), right,

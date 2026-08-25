@@ -20,7 +20,7 @@ import { icon } from "../core/icons"
 import { elementKey, getState } from "../core/store"
 import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
-import type { ElementOption, ElementOptionSet, Selection } from "../core/types"
+import type { ElementOption, ElementOptionSet, LayerElement, Selection } from "../core/types"
 import {
   controlValueAtPath,
   filterTree,
@@ -326,7 +326,7 @@ function levaTab(editor: EditorContext, query: string): HTMLElement {
  * step is used as a pre-filter, because asking the engine to resolve a fiber for
  * every node in the document is far more expensive than a querySelector.
  */
-function findElement(editor: EditorContext, key: string): HTMLElement | null {
+function findElement(editor: EditorContext, key: string): LayerElement | null {
   const current = editor.primarySelection()
   if (current?.key === key) return current.element
 
@@ -498,7 +498,7 @@ function variantsTab(editor: EditorContext, query: string): HTMLElement {
         "localStorage, so they are the same on every origin."
     ),
     ...sets.map((set) => {
-      let cachedElement: HTMLElement | null = null
+      let cachedElement: LayerElement | null = null
       const resolve = (): Selection | null => {
         cachedElement ??= findElement(editor, set.key)
         if (!cachedElement?.isConnected) cachedElement = findElement(editor, set.key)

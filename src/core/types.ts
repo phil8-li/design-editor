@@ -13,9 +13,20 @@ export interface SourceRef {
   componentName: string
 }
 
+/**
+ * What the editor can select.
+ *
+ * Not plain `Element`: an `<svg>` icon is a layer the user selects and the
+ * inspector writes to, so the union has to be exactly the two things
+ * `toSelectable` can return — both of which carry `style` and `classList`,
+ * which is what every write path needs. Widening to `Element` instead would
+ * make `.style` unavailable and push a cast into each of them.
+ */
+export type LayerElement = HTMLElement | SVGSVGElement
+
 /** One selectable thing on the canvas. */
 export interface Selection {
-  element: HTMLElement
+  element: LayerElement
   tagName: string
   componentName: string
   source: SourceRef | null
@@ -77,7 +88,7 @@ export interface ElementOptionSet {
 /** Layers-panel node projected from the React fiber tree. */
 export interface LayerNode {
   id: string
-  element: HTMLElement
+  element: LayerElement
   name: string
   tagName: string
   isComponent: boolean

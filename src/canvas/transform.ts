@@ -9,10 +9,11 @@
 import { isChrome, round } from "../core/dom"
 import { editorOwnsInput } from "../core/store"
 import type { EditorContext } from "../core/context"
+import type { LayerElement } from "../core/types"
 import type { HandleId } from "./selection"
 
 interface DragTarget {
-  element: HTMLElement
+  element: LayerElement
   offsetX: number
   offsetY: number
 }
@@ -36,13 +37,13 @@ export interface DragGeometry {
 }
 
 export interface DragInfo {
-  element: HTMLElement
+  element: LayerElement
   mode: "move" | "resize"
   rect: DOMRect
 }
 
 type DragHook = (gesture: {
-  element: HTMLElement
+  element: LayerElement
   rect: DOMRect
   proposed: DragGeometry
 }) => DragGeometry
@@ -84,7 +85,7 @@ export function isAltDown(): boolean {
   return altDown
 }
 
-function readOffset(element: HTMLElement): { x: number; y: number } {
+function readOffset(element: LayerElement): { x: number; y: number } {
   const style = getComputedStyle(element)
   const matrix = new DOMMatrixReadOnly(style.transform === "none" ? "" : style.transform)
   return { x: matrix.m41, y: matrix.m42 }
@@ -94,7 +95,7 @@ function readOffset(element: HTMLElement): { x: number; y: number } {
  * The element's translate offset shifted by a delta. One definition, so drag
  * and keyboard nudge can never disagree about what "move by 1px" means.
  */
-export function translateBy(element: HTMLElement, dx: number, dy: number): string {
+export function translateBy(element: LayerElement, dx: number, dy: number): string {
   const offset = readOffset(element)
   return `translate(${round(offset.x + dx)}px, ${round(offset.y + dy)}px)`
 }
@@ -106,7 +107,7 @@ export function installTransform(context: EditorContext): void {
   let capture: Element | null = null
   let pointerId = -1
 
-  const targetsFor = (elements: HTMLElement[]): DragTarget[] =>
+  const targetsFor = (elements: LayerElement[]): DragTarget[] =>
     elements.map((element) => {
       const offset = readOffset(element)
       return { element, offsetX: offset.x, offsetY: offset.y }

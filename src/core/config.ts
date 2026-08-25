@@ -104,6 +104,17 @@ export interface DesignEditorConfig {
   }
   tailwind: TailwindConfig
   designSystem: DesignSystemCatalog
+  icons: IconSetConfig
+}
+
+/**
+ * The host's icon set, as the browser half sees it: the attribute an icon names
+ * itself with, and whether the loopback route has drawings to serve. The
+ * drawings themselves are fetched, not injected — see `icon-set.ts`.
+ */
+export interface IconSetConfig {
+  attribute: string
+  available: boolean
 }
 
 const STANDARD_BREAKPOINTS = { sm: 640, md: 768, lg: 1024, xl: 1280, "2xl": 1536 }
@@ -177,6 +188,7 @@ const FALLBACK: DesignEditorConfig = {
     spacedStems: null,
   },
   designSystem: emptyDesignSystem(STANDARD_BREAKPOINTS),
+  icons: { attribute: "", available: false },
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -221,6 +233,15 @@ function readDesignSystem(
       tailwind: configuredList<TailwindTokenAlias>(aliases.tailwind, []),
     },
   }
+}
+
+function readIconSet(value: unknown): IconSetConfig {
+  if (!isRecord(value)) return FALLBACK.icons
+  const attribute = typeof value.attribute === "string" ? value.attribute : ""
+  // Both halves or nothing: an attribute with no set names icons the picker
+  // cannot offer, and a set with no attribute cannot be matched to a selection.
+  if (!attribute || value.available !== true) return FALLBACK.icons
+  return { attribute, available: true }
 }
 
 /**
@@ -275,6 +296,7 @@ function read(): DesignEditorConfig {
         typeof tailwind.spacedStems === "string" ? tailwind.spacedStems : null,
     },
     designSystem: readDesignSystem(raw.designSystem, breakpoints, containerBreakpoints),
+    icons: readIconSet(raw.icons),
   }
 }
 

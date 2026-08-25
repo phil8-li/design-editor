@@ -11,6 +11,7 @@ import { createWriter, type Writer } from "../../core/writer"
 import type { EditorContext } from "../../core/context"
 import type { Selection } from "../../core/types"
 
+import { iconSection } from "./section-icon"
 import { unifiedLayoutSection } from "./section-unified-layout"
 import { designSystemSection } from "./section-design-system"
 import { responsiveSection } from "./section-responsive"
@@ -37,6 +38,9 @@ export type InspectorSection = (context: SectionContext) => HTMLElement | null
 
 /** Figma's own top-to-bottom order, minus the sections with no DOM analogue. */
 const SECTIONS: InspectorSection[] = [
+  // First, like Figma's instance properties: the first question about a placed
+  // symbol is which symbol it is.
+  iconSection,
   optionsSection,
   designSystemSection,
   responsiveSection,

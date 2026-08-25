@@ -57,7 +57,7 @@ async function checkAsync(name, fn) {
 function installDomGlobals(window) {
   for (const key of [
     "window", "document", "navigator", "Node", "Element", "HTMLElement",
-    "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "SVGElement",
+    "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "SVGElement", "SVGSVGElement",
     "Event", "CustomEvent", "KeyboardEvent", "PointerEvent", "requestAnimationFrame",
     "cancelAnimationFrame", "getComputedStyle",
   ]) {
@@ -323,9 +323,7 @@ await checkAsync("breakpoint controls are named and keep the caret across their 
       addPendingPropertyOperation: (...args) => pending.push(args),
       getCanvasTransform: () => ({ x: 0, y: 0, scale: 1 }),
       setCanvasTransform() {}, onCanvasTransformChange: () => () => {},
-      onStateChange: () => () => {}, hasChanges: () => false, canUndo: () => false,
-      canvasUndo: () => null,
-    },
+      onStateChange: () => () => {}, hasChanges: () => false,    },
   }
   const editor = helpers.createContext(bridge, {
     overlay: slot(), toolbar: slot(), left: slot(), right,

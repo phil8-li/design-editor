@@ -18,7 +18,7 @@ import {
 import { el } from "../../core/dom"
 import { toSourceRef } from "../../core/bridge"
 import { elementKey } from "../../core/store"
-import type { Selection } from "../../core/types"
+import type { LayerElement, Selection } from "../../core/types"
 import { isExpanded, miniButton, section, setExpanded } from "./field"
 import { tokenField, type TokenChoice, type TokenPreview } from "./token-picker"
 import type { InspectorSection, SectionContext } from "./index"
@@ -82,27 +82,29 @@ function laysOutChildren(computed: CSSStyleDeclaration): boolean {
   return /^(inline-)?(flex|grid)$/.test(computed.display)
 }
 
-function describeElement(context: SectionContext, element: Element): Selection {
+function describeElement(context: SectionContext, element: LayerElement): Selection {
   const info = context.editor.bridge.elementInfo(element)
   const componentName = info?.componentName || element.tagName.toLowerCase()
   return {
-    // SVG nodes have the same class/style/parent surface Writer uses. Selection
-    // remains HTMLElement-shaped elsewhere because canvas selection normalises
-    // icons to their host; this local target lets an icon-only host edit its SVG.
-    element: element as HTMLElement,
+    element,
     tagName: element.tagName.toLowerCase(),
     componentName,
     source: toSourceRef(info),
-    key: elementKey(element as HTMLElement, componentName, info?.lineNumber ?? 0),
+    key: elementKey(element, componentName, info?.lineNumber ?? 0),
   }
 }
 
+/**
+ * An icon-only host edits its `<svg>`: `fill` and `stroke` paint nothing on the
+ * `<button>` around a glyph. Selecting the icon directly is the other way in,
+ * and both arrive at the same target because both are a `LayerElement`.
+ */
 function iconTarget(context: SectionContext): Selection | null {
   const { selection } = context
   const element = selection.element
   if (element.tagName === "IMG" || element.getAttribute("role") === "img") return selection
   const children = Array.from(element.children)
-  const svg = children.length === 1 && children[0] instanceof SVGElement ? children[0] : null
+  const svg = children.length === 1 && children[0] instanceof SVGSVGElement ? children[0] : null
   return svg && !directText(element) ? describeElement(context, svg) : null
 }
 

@@ -9,7 +9,7 @@
 import { getState, setState } from "../core/store"
 import type { EditorContext } from "../core/context"
 import type { StyleWrite, Writer } from "../core/writer"
-import type { ElementOption, ElementOptionSet, Selection, StyleEdit } from "../core/types"
+import type { ElementOption, ElementOptionSet, LayerElement, Selection, StyleEdit } from "../core/types"
 
 /** The element state an option captures and restores. */
 export interface OptionSnapshot {
@@ -59,7 +59,7 @@ export function visibleOptions(set: ElementOptionSet | null | undefined): Elemen
 }
 
 /** Captures what an option needs to reproduce the element's current look. */
-export function captureSnapshot(element: HTMLElement): OptionSnapshot {
+export function captureSnapshot(element: LayerElement): OptionSnapshot {
   const style: StyleEdit = {}
   for (const property of Array.from(element.style)) {
     style[property] = element.style.getPropertyValue(property)

@@ -57,6 +57,7 @@ for (const key of [
   "Element",
   "HTMLElement",
   "SVGElement",
+  "SVGSVGElement",
   "Event",
   "CustomEvent",
   "MouseEvent",
@@ -110,8 +111,6 @@ const bridge = {
     setActiveTool() {},
     hasChanges: () => false,
     buildBatchOperations: () => [],
-    canUndo: () => false,
-    canvasUndo: () => null,
     onStateChange() {},
     getCanvasTransform: () => ({ x: 0, y: 0, scale: 1 }),
     viewportToPage: (x, y) => ({ x, y }),
@@ -175,12 +174,13 @@ check("no toolbar button opens a menu any more", () => {
 
 console.log("\nSurviving controls")
 
-check("move, hand, both panel toggles, undo and apply are all present", () => {
+check("move, hand, both panel toggles, undo, redo and apply are all present", () => {
   assert.ok(byLabel("Move"))
   assert.ok(byLabel("Hand (browser scroll)"))
   assert.ok(byLabel("Toggle layers panel"))
   assert.ok(byLabel("Toggle inspector"))
-  assert.ok(byText("Undo"))
+  assert.ok(byLabel("Undo"))
+  assert.ok(byLabel("Redo"))
   assert.ok(byText("Apply to code"))
   assert.ok(byText("Interactive"))
 })
@@ -233,16 +233,17 @@ check("every icon-only toolbar button has both a tip and an aria-label", () => {
 
 // The tip is a ::after, and CSS generated content joins name-from-content. On a
 // button that shows no text that is harmless because the aria-label pins the
-// name; on a button that DOES show text, an unpinned name becomes "Undo Undo
-// last canvas change". jsdom computes no accessible name, so this asserts the
-// thing that makes the name correct rather than the name itself.
+// name; on a button that DOES show text, an unpinned name becomes "Apply to
+// code Write pending visual changes back to source". jsdom computes no
+// accessible name, so this asserts the thing that makes the name correct
+// rather than the name itself.
 check("a tip never leaks into a button's accessible name", () => {
   const tipped = buttons().filter((button) => button.hasAttribute("data-de-tip"))
-  assert.ok(tipped.length >= 7, "every control in the bar carries a tip")
+  assert.ok(tipped.length >= 8, "every control in the bar carries a tip")
   for (const button of tipped) {
     assert.ok(button.getAttribute("aria-label"), `tip without a label: ${button.outerHTML}`)
   }
-  for (const text of ["Interactive", "Undo", "Apply to code"]) {
+  for (const text of ["Interactive", "Apply to code"]) {
     assert.equal(byText(text).getAttribute("aria-label"), text)
   }
 })

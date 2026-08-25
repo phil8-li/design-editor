@@ -4,7 +4,7 @@
  * continuous gestures (one live value, many followers).
  */
 
-import type { ElementOptionSet, Selection, ToolId } from "./types"
+import type { ElementOptionSet, LayerElement, Selection, ToolId } from "./types"
 
 export interface EditorState {
   tool: ToolId
@@ -111,7 +111,7 @@ function step(el: Element): string {
  * resolve at all, which reports line 0 — would otherwise collapse onto one key
  * and share another element's saved options.
  */
-export function elementKey(el: HTMLElement, componentName: string, line: number): string {
+export function elementKey(el: LayerElement, componentName: string, line: number): string {
   const path: string[] = []
   for (let node: Element | null = el; node && node !== document.body; node = node.parentElement) {
     path.unshift(step(node))

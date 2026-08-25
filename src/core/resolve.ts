@@ -13,6 +13,8 @@
  */
 
 import { isCanvasElement } from "./dom"
+import { iconNameOf } from "./icon-set"
+import type { LayerElement } from "./types"
 import type { RewriteElementInfo } from "./bridge"
 
 /** Only the vendor member the resolver needs, so a stub can stand in for tests. */
@@ -49,16 +51,27 @@ export function isHidden(element: Element): boolean {
 }
 
 /**
- * `EditorContext.select` still takes an `HTMLElement`, so an SVG layer root
- * resolves to its nearest HTML host. Hover, click, marquee and the stack menu
- * all pass through here, so the preview can never promise something a click
- * cannot deliver.
+ * An `<svg>` is a layer; the geometry inside it is not.
+ *
+ * A `<path>` has no independent identity in the authored source — it is one
+ * clause of the icon's shape — so a click on it resolves UP to the `<svg>`,
+ * which is the node the JSX actually names. Everything else climbs to its
+ * nearest HTML host as before.
+ *
+ * This used to stop at the HTML host in every case, which meant an icon could
+ * not be selected at all: clicking one landed on whatever `<span>` or `<button>`
+ * happened to wrap it, and the inspector described the wrapper. Hover, click,
+ * marquee and the stack menu all pass through here, so widening it here is what
+ * makes the preview outline and the click agree on an icon.
  */
-export function toSelectable(element: Element | null): HTMLElement | null {
+export function toSelectable(element: Element | null): LayerElement | null {
+  let svg: SVGSVGElement | null = null
   for (let node: Element | null = element; node; node = node.parentElement) {
-    if (node instanceof HTMLElement && isCanvasElement(node)) return node
+    // Innermost wins: a nested `<svg>` is the layer, not the sheet holding it.
+    if (!svg && node instanceof SVGSVGElement && isCanvasElement(node)) svg = node
+    if (node instanceof HTMLElement && isCanvasElement(node)) return svg ?? node
   }
-  return null
+  return svg
 }
 
 export interface Resolver {
@@ -70,13 +83,13 @@ export interface Resolver {
   /** Candidate DOM children, in document order. */
   children(element: Element): Element[]
   /** The direct selectable children in the one shared layer graph. */
-  layerChildren(container: Element): HTMLElement[]
-  layerParent(element: Element): HTMLElement | null
-  layerSiblings(element: Element): HTMLElement[]
+  layerChildren(container: Element): LayerElement[]
+  layerParent(element: Element): LayerElement | null
+  layerSiblings(element: Element): LayerElement[]
   /** The Figma rule: highest layer under `hit` that lives inside `scope`. */
-  resolve(hit: Element, scope: Element | null, deep?: boolean): HTMLElement | null
+  resolve(hit: Element, scope: Element | null, deep?: boolean): LayerElement | null
   /** Selectable layers under the point, deduped in Layers-panel order. */
-  hitStack(x: number, y: number): HTMLElement[]
+  hitStack(x: number, y: number): LayerElement[]
 }
 
 /**
@@ -103,7 +116,12 @@ function createResolver(bridge: LayerBridge): Resolver {
     const isRoot = Boolean(info?.componentName && ownerPath(info) !== ownerPath(outer))
     const label = element.getAttribute("aria-label")?.trim()
     const text = element.children.length ? "" : element.textContent?.trim().slice(0, NAME_MAX)
-    const name = isRoot && info ? info.componentName : label || text || element.tagName.toLowerCase()
+    // An icon names itself, and that name beats every other candidate: the row
+    // for a glyph should read "Compass", not "svg" and not the name of whatever
+    // component happened to render it.
+    const icon = iconNameOf(element)
+    const name =
+      icon || (isRoot && info ? info.componentName : label || text || element.tagName.toLowerCase())
     const value: LayerMeta = { info, name, isRoot }
     metaCache.set(element, value)
     return value
@@ -116,7 +134,7 @@ function createResolver(bridge: LayerBridge): Resolver {
   const children = (element: Element): Element[] =>
     Array.from(element.children).filter((child): child is Element => isLayerCandidate(child))
 
-  const layerParent = (element: Element): HTMLElement | null => {
+  const layerParent = (element: Element): LayerElement | null => {
     let node = element.parentElement
     while (node) {
       const parent = node.parentElement
@@ -126,18 +144,24 @@ function createResolver(bridge: LayerBridge): Resolver {
     return null
   }
 
-  // SVG geometry stays part of its nearest HTML host. `EditorContext.select`
-  // cannot represent an SVGElement, so listing one would let hover/menu promise
-  // a target that click could not select. Every HTML result here is selectable.
-  const layerChildren = (container: Element): HTMLElement[] =>
-    children(container).filter((child): child is HTMLElement => child instanceof HTMLElement)
+  // Every row here is a node a click can land on, because both go through
+  // `toSelectable`: the tree lists an `<svg>` icon exactly when clicking one
+  // selects it, and never lists the geometry inside it.
+  //
+  // A child that resolves to something OTHER than itself resolves upward — that
+  // is what `<rect>` inside an icon does — so it is not a layer of its own. The
+  // identity test is what keeps that case out: mapping instead of filtering made
+  // `layerChildren(svg)` answer `[svg]`, and the tree walk recursed until the
+  // stack blew.
+  const layerChildren = (container: Element): LayerElement[] =>
+    children(container).filter((child): child is LayerElement => toSelectable(child) === child)
 
-  const layerSiblings = (element: Element): HTMLElement[] => {
+  const layerSiblings = (element: Element): LayerElement[] => {
     const siblings = layerChildren(layerParent(element) ?? scopeRoot())
-    return element instanceof HTMLElement && siblings.includes(element) ? siblings : []
+    return siblings.includes(element as LayerElement) ? siblings : []
   }
 
-  const resolve = (hit: Element, scope: Element | null, deep = false): HTMLElement | null => {
+  const resolve = (hit: Element, scope: Element | null, deep = false): LayerElement | null => {
     if (!isLayerCandidate(hit)) return null
     const target = toSelectable(hit)
     if (!target) return null
@@ -145,13 +169,17 @@ function createResolver(bridge: LayerBridge): Resolver {
 
     // A click outside the scope leaves it: the alternative is a click that
     // selects nothing, with no visible reason why.
+    // `scope` is whatever the last drill landed on, and that can now be an
+    // `<svg>`. Testing it for `HTMLElement` here sent every click inside a
+    // drilled icon back to the scope root, which read as the whole page
+    // selecting itself: containment is the question, not which DOM class.
     const inScope = Boolean(scope && scope.isConnected && scope.contains(target))
-    const container = inScope && scope instanceof HTMLElement ? scope : scopeRoot()
+    const container = inScope && scope ? scope : scopeRoot()
     if (container === target) return target
 
     // Climb the shared graph until `node` is a direct child of the active
     // scope. This is the exact node Enter/Tab/Layers can reach later.
-    let node: HTMLElement | null = target
+    let node: LayerElement | null = target
     while (node) {
       const parent = layerParent(node)
       if (parent === container || (!parent && node.parentElement === container)) return node
@@ -160,9 +188,9 @@ function createResolver(bridge: LayerBridge): Resolver {
     return null
   }
 
-  const hitStack = (x: number, y: number): HTMLElement[] => {
-    const seen = new Set<HTMLElement>()
-    const stack: HTMLElement[] = []
+  const hitStack = (x: number, y: number): LayerElement[] => {
+    const seen = new Set<LayerElement>()
+    const stack: LayerElement[] = []
     for (const raw of document.elementsFromPoint(x, y)) {
       if (!isLayerCandidate(raw) || isHidden(raw)) continue
       const node = toSelectable(raw)

@@ -48,6 +48,9 @@ export const tokenPickerCss = `/* ---------- token field ---------- */
 .de-token-swatch--color { box-shadow: inset 0 0 0 1px ${t.color.border}; }
 .de-token-swatch--radius { box-shadow: inset 0 0 0 1px ${t.color.borderInteractive}; }
 .de-token-swatch--text { font-weight: ${t.type.weightValue}; line-height: 1; }
+/* The mark carries its own weight; the slot only has to not crop it. */
+.de-token-swatch--glyph { color: ${t.color.text}; }
+.de-token-swatch--glyph svg { display: block; }
 
 /* ---------- picker popover ---------- */
 .de-token-popover {

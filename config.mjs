@@ -20,6 +20,7 @@ import {
   DEFAULT_TAILWIND_BREAKPOINTS,
   resolveDesignSystemConfig,
 } from "./server/design-system-config.mjs"
+import { resolveIconSetConfig } from "./server/icon-set.mjs"
 
 export const CONFIG_FILE_NAMES = [
   "design-editor.config.mjs",
@@ -87,6 +88,10 @@ export const DEFAULT_CONFIG = {
       edgeGap: 8,
     },
   },
+  // The host's icon set: the DOM attribute an icon names itself with, and the
+  // JSON of drawings the picker offers as its variants. Absent by default —
+  // a stock app has no such attribute, and the icon section stays hidden.
+  icons: { attribute: "", data: null },
   designSystem: {
     manifest: null,
     cssSources: [],
@@ -240,6 +245,8 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
     tailwind.containerBreakpoints
   )
 
+  const icons = resolveIconSetConfig(merged.icons, projectRoot)
+
   const apiPrefix = merged.apiPrefix.startsWith("/")
     ? merged.apiPrefix.replace(/\/+$/, "")
     : `/${merged.apiPrefix.replace(/\/+$/, "")}`
@@ -261,6 +268,7 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
     }),
     tailwind,
     designSystem,
+    icons,
     controls: Object.freeze({ leva }),
     source: Object.freeze({
       ...merged.source,
@@ -305,6 +313,9 @@ export function browserPrelude(config, runtime = {}) {
     tailwind: config.tailwind,
     // Absolute manifest and stylesheet paths stay in the server-side config.
     designSystem: config.designSystem.catalog,
+    // The attribute, not the drawings: 114KB of path data would be paid for on
+    // every page load. `GET {apiBase}/icons` serves the set when asked.
+    icons: { attribute: config.icons.attribute, available: Boolean(config.icons.data) },
     controls: {
       leva: config.controls.leva
         ? {

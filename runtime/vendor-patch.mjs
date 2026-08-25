@@ -1,7 +1,7 @@
 /**
  * The `react-rewrite-cli@0.1.1` overlay patch.
  *
- * 23 exact-once splices, 40 pinned identifiers, and one injected interaction
+ * 23 exact-once splices, 38 pinned identifiers, and one injected interaction
  * block. All of it is coupling to the pinned VENDOR BUILD, not to any host app,
  * so it ships as-is; only the values that used to encode one particular host —
  * the chrome selectors, the docked-panel geometry, the CSS variable names — are
@@ -105,8 +105,6 @@ const BORROWED_DECLARATIONS = [
     "addPendingPropertyOperation",
     "buildBatchOperations",
     "hasChanges",
-    "canUndo",
-    "canvasUndo",
     "addMove",
     "updateMoveDelta",
     "getMoveForElement",

@@ -125,6 +125,7 @@ function installDom() {
     "Element",
     "HTMLElement",
     "SVGElement",
+    "SVGSVGElement",
     "MouseEvent",
     "PointerEvent",
     "KeyboardEvent",
@@ -186,9 +187,11 @@ async function resolverCases(window) {
     assert.equal(nameOf(resolver.resolve($("title"), null)), "root")
   })
 
-  check("deep click takes the deepest selectable HTML host", () => {
+  check("deep click takes the deepest layer, and an icon is one", () => {
     assert.equal(nameOf(resolver.resolve($("title"), null, true)), "title")
-    assert.equal(nameOf(resolver.resolve($("bar"), null, true)), "more")
+    // Not "more": the `<svg>` is the node the JSX names, so it is where a deep
+    // click lands. Only the geometry inside it still resolves up.
+    assert.equal(nameOf(resolver.resolve($("bar"), null, true)), "icon")
   })
 
   check("drilling the scope moves the click one level at a time", () => {
@@ -206,7 +209,9 @@ async function resolverCases(window) {
     assert.deepEqual(resolver.layerChildren($("root")).map(nameOf), ["wrap"])
     assert.deepEqual(resolver.layerChildren($("wrap")).map(nameOf), ["card", "card2"])
     assert.deepEqual(resolver.layerChildren($("card")).map(nameOf), ["head", "body"])
-    assert.deepEqual(resolver.layerChildren($("more")).map(nameOf), [])
+    assert.deepEqual(resolver.layerChildren($("more")).map(nameOf), ["icon"])
+    // The icon is a leaf: its geometry resolves up to it, so it lists nothing.
+    assert.deepEqual(resolver.layerChildren($("icon")).map(nameOf), [])
   })
 
   check("Enter descends to the first layer child", () => {
@@ -232,10 +237,13 @@ async function resolverCases(window) {
     assert.equal(next($("card"), -1), "card2")
   })
 
-  check("SVG is hit-testable but selection falls back to its HTML host", () => {
+  check("the `<svg>` is the layer; the geometry inside it is not", () => {
     assert.equal(isLayerCandidate($("icon")), true)
-    assert.equal(resolver.resolve($("bar"), null, true), $("more"))
-    assert.equal(nameOf(toSelectable($("bar"))), "more")
+    assert.equal(resolver.resolve($("bar"), null, true), $("icon"))
+    assert.equal(toSelectable($("bar")), $("icon"))
+    assert.equal(toSelectable($("icon")), $("icon"))
+    // The host is still reachable — one level up, exactly as for any parent.
+    assert.equal(resolver.layerParent($("icon")), $("more"))
   })
 
   check("every plain and deep click result is reachable in the layer graph", () => {
@@ -258,7 +266,11 @@ async function resolverCases(window) {
 
   check("overlap stack dedupes SVG hosts and follows Layers order", () => {
     window.__stack = [$("bar"), $("icon"), $("more"), $("head"), $("card"), $("wrap"), $("root")]
-    assert.deepEqual(resolver.hitStack(10, 10).map(nameOf), ["root", "wrap", "card", "head", "more"])
+    // `bar` dedupes into the icon above it; the icon itself is its own row.
+    assert.deepEqual(
+      resolver.hitStack(10, 10).map(nameOf),
+      ["root", "wrap", "card", "head", "more", "icon"]
+    )
   })
 
   console.log("\nLevel 1 — keymap")
@@ -419,17 +431,19 @@ async function canvasCases(window) {
     assert.deepEqual(selection(), ["wrap"])
   })
 
-  check("double-clicking SVG geometry cannot advance past its HTML host", () => {
+  check("double-clicking SVG geometry drills to the icon, then stops", () => {
     reset()
     pointer($("bar"), { metaKey: true })
-    assert.deepEqual(selection(), ["more"])
-    assert.equal(scope(), "head")
+    // Deep click takes the icon itself, and the scope follows its parent.
+    assert.deepEqual(selection(), ["icon"])
+    assert.equal(scope(), "more")
     at($("bar"))
     $("bar").dispatchEvent(
       new window.MouseEvent("dblclick", { bubbles: true, clientX: 10, clientY: 10 })
     )
-    assert.deepEqual(selection(), ["more"])
-    assert.equal(scope(), "head")
+    // The icon is the floor: there is no layer below it to drill into.
+    assert.deepEqual(selection(), ["icon"])
+    assert.equal(scope(), "more")
   })
 
   check("shift+click toggles rather than only appending", () => {
@@ -584,7 +598,10 @@ async function canvasCases(window) {
     assert.equal(menu.style.display, "block")
     assert.equal(menu.style.left, "248px")
     assert.equal(rows[0].textContent, "Page")
-    assert.equal(rows.at(-1).textContent, "IconButton")
+    // The icon is the deepest row now. It has no component boundary of its own
+    // in this fixture, so it reads by tag, the same as any unnamed layer.
+    assert.equal(rows.at(-2).textContent, "IconButton")
+    assert.equal(rows.at(-1).textContent, "svg")
     assert.equal(window.document.activeElement, rows[0])
     window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }))
     assert.equal(window.document.activeElement, rows.at(-1))

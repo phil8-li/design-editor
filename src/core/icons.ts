@@ -12,9 +12,13 @@
  * caller sets colour by setting `color` and size by passing `size`.
  */
 
-type IconNode = [tag: string, attrs: Record<string, string | number>, children?: IconNode[]]
+export type IconNode = [
+  tag: string,
+  attrs: Record<string, string | number>,
+  children?: IconNode[],
+]
 
-interface IconData {
+export interface IconData {
   nodes: IconNode[]
   rootFill: string
   rootStroke?: string
@@ -127,6 +131,35 @@ const ICONS = {
           "strokeWidth": "var(--instagram-icon-stroke-width, 2)",
           "fillRule": "evenodd",
           "d": "M7 8.364 2 8.364 2 3.364"
+        }
+      ]
+    ],
+    "rootFill": "currentColor"
+  },
+  "RotateCw": {
+    "nodes": [
+      [
+        "path",
+        {
+          "fill": "none",
+          "stroke": "currentColor",
+          "strokeLinecap": "round",
+          "strokeLinejoin": "round",
+          "strokeWidth": "var(--instagram-icon-stroke-width, 2)",
+          "fillRule": "evenodd",
+          "d": "M21.318 8.364a10.003 10.003 0 1 0-2.022 10.475"
+        }
+      ],
+      [
+        "path",
+        {
+          "fill": "none",
+          "stroke": "currentColor",
+          "strokeLinecap": "round",
+          "strokeLinejoin": "round",
+          "strokeWidth": "var(--instagram-icon-stroke-width, 2)",
+          "fillRule": "evenodd",
+          "d": "M17 8.364 22 8.364 22 3.364"
         }
       ]
     ],
@@ -358,13 +391,14 @@ function build(node: IconNode): SVGElement {
 }
 
 /**
- * One glyph, sized and decorative.
+ * Draw one glyph from its data.
  *
- * `currentColor` rather than a token: the same mark is drawn on a rest row, a
- * hovered row and a filled selected row, and only the caller knows which.
+ * Split out from `icon` so the host's own icon set — served by the loopback
+ * `/icons` route and offered as variants in the inspector — is drawn by the
+ * same rules as the chrome's vendored glyphs. Two renderers would be two
+ * answers to "how heavy is a stroke", and only one of them would be right.
  */
-export function icon(name: IconName, size = 16): SVGSVGElement {
-  const data = ICONS[name] as IconData
+export function drawIcon(data: IconData, size = 16): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg")
   svg.setAttribute("width", String(size))
   svg.setAttribute("height", String(size))
@@ -381,4 +415,14 @@ export function icon(name: IconName, size = 16): SVGSVGElement {
   svg.setAttribute("aria-hidden", "true")
   for (const node of data.nodes) svg.append(build(node))
   return svg
+}
+
+/**
+ * One glyph, sized and decorative.
+ *
+ * `currentColor` rather than a token: the same mark is drawn on a rest row, a
+ * hovered row and a filled selected row, and only the caller knows which.
+ */
+export function icon(name: IconName, size = 16): SVGSVGElement {
+  return drawIcon(ICONS[name] as IconData, size)
 }

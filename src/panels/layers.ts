@@ -11,6 +11,7 @@ import { el } from "../core/dom"
 import { icon } from "../core/icons"
 import { getResolver } from "../core/resolve"
 import type { EditorContext } from "../core/context"
+import type { LayerElement } from "../core/types"
 
 const INDENT = 12, MAX_DEPTH = 40
 /** Filtering is the only full-tree walk; bound it so typing can never lock up. */
@@ -19,7 +20,7 @@ const FILTER_BUDGET = 6000
 /** Everything the vendor server needs to move a node among its JSX siblings. */
 interface DragRef { filePath: string; fromLine: number; parentPath: string; parentLine: number }
 interface Meta { name: string; promoted: boolean; drag: DragRef | null }
-interface Row { element: HTMLElement; parent: HTMLElement | null; depth: number; meta: Meta
+interface Row { element: LayerElement; parent: LayerElement | null; depth: number; meta: Meta
   open: boolean; hasChildren: boolean; posinset: number; setsize: number }
 
 function setAttr(node: Element, name: string, value: string | null): void {
@@ -29,7 +30,7 @@ function setAttr(node: Element, name: string, value: string | null): void {
 
 export function installLayersPanel(context: EditorContext): void {
   const resolver = getResolver(context.bridge)
-  const childrenOf = (element: Element): HTMLElement[] => resolver.layerChildren(element)
+  const childrenOf = (element: Element): LayerElement[] => resolver.layerChildren(element)
   const search = el("input", { class: "de-ai-input", type: "search", placeholder: "Filter layers",
     "aria-label": "Filter layers", style: "min-height:0;height:24px;resize:none" }) as HTMLInputElement
   const tree = el("div", { role: "tree", "aria-label": "Layers",
@@ -41,12 +42,12 @@ export function installLayersPanel(context: EditorContext): void {
   context.slots.left.append(header, el("div", { style: "padding:0 8px 8px" }, [search]), tree)
 
   /** User expand/collapse only. A filter reveals rows without touching it. */
-  const overrides = new Map<HTMLElement, boolean>()
-  const rowByElement = new Map<HTMLElement, HTMLElement>()
+  const overrides = new Map<LayerElement, boolean>()
+  const rowByElement = new Map<LayerElement, HTMLElement>()
   const rowInfo = new WeakMap<HTMLElement, Row>()
-  const metaCache = new WeakMap<HTMLElement, Meta>()
-  let filter: { query: string; reveal: Set<HTMLElement>; matched: Set<HTMLElement> } | null = null
-  let visible: Row[] = [], focused: HTMLElement | null = null
+  const metaCache = new WeakMap<LayerElement, Meta>()
+  let filter: { query: string; reveal: Set<LayerElement>; matched: Set<LayerElement> } | null = null
+  let visible: Row[] = [], focused: LayerElement | null = null
 
   /**
    * The tree and the canvas must agree on what a layer is, so the instance-root
@@ -54,7 +55,7 @@ export function installLayersPanel(context: EditorContext): void {
    * is the panel's own: a row is reorderable where the engine gave it a JSX
    * line to move, and its host component a line to move it within.
    */
-  function metaOf(element: HTMLElement): Meta {
+  function metaOf(element: LayerElement): Meta {
     const cached = metaCache.get(element)
     if (cached) return cached
     const { info, name, isRoot } = resolver.meta(element)
@@ -69,10 +70,10 @@ export function installLayersPanel(context: EditorContext): void {
   }
 
   function filterFor(query: string) {
-    const reveal = new Set<HTMLElement>()
-    const matched = new Set<HTMLElement>()
+    const reveal = new Set<LayerElement>()
+    const matched = new Set<LayerElement>()
     let budget = FILTER_BUDGET
-    const visit = (element: HTMLElement, depth: number): boolean => {
+    const visit = (element: LayerElement, depth: number): boolean => {
       if (budget-- <= 0 || depth > MAX_DEPTH) return false
       let hit = metaOf(element).name.toLowerCase().includes(query)
       if (hit) matched.add(element)
@@ -89,7 +90,7 @@ export function installLayersPanel(context: EditorContext): void {
     const query = search.value.trim().toLowerCase()
     const found = query ? (filter?.query === query ? filter : (filter = filterFor(query))) : null
     const rows: Row[] = []
-    const walk = (element: HTMLElement, parent: HTMLElement | null, depth: number, posinset: number, setsize: number) => {
+    const walk = (element: LayerElement, parent: LayerElement | null, depth: number, posinset: number, setsize: number) => {
       const kids = childrenOf(element).filter((k) => !found || found.matched.has(element) || found.reveal.has(k))
       const open = overrides.get(element) ?? Boolean(found && kids.some((k) => found.reveal.has(k)))
       rows.push({ element, parent, depth, meta: metaOf(element), open, hasChildren: kids.length > 0, posinset, setsize })
@@ -101,7 +102,7 @@ export function installLayersPanel(context: EditorContext): void {
     return rows
   }
 
-  function buildRow(row: Row, selected: Set<HTMLElement>, focusTarget: HTMLElement | null) {
+  function buildRow(row: Row, selected: Set<LayerElement>, focusTarget: LayerElement | null) {
     let node = rowByElement.get(row.element)
     if (!node) {
       node = el("div", { class: "de-layer", role: "treeitem" }, [
@@ -165,7 +166,7 @@ export function installLayersPanel(context: EditorContext): void {
   }
 
   /** Roving focus, and optionally selection, moves to `element`. */
-  function activate(element: HTMLElement | null, select: boolean): void {
+  function activate(element: LayerElement | null, select: boolean): void {
     if (!element) return
     focused = element
     if (select) {
@@ -181,7 +182,7 @@ export function installLayersPanel(context: EditorContext): void {
   // Drop lines come from the vendor's `getSiblings`, the only thing that knows
   // the real JSX sibling list. `reorder` always inserts *before* `toLine`, so
   // dropping below a row targets the next sibling instead.
-  let drag: { ref: DragRef; parent: HTMLElement | null; lines: Set<number>; to: number } | null = null
+  let drag: { ref: DragRef; parent: LayerElement | null; lines: Set<number>; to: number } | null = null
   let stopSiblings: (() => void) | null = null
 
   function endDrag(): void {

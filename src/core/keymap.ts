@@ -54,6 +54,26 @@ export function ownsCanvasKeys(event: KeyboardEvent): boolean {
 }
 
 /**
+ * Undo and redo on the platform's own pair.
+ *
+ * Cmd+Z and Shift+Cmd+Z on macOS — the system shortcuts, which are also
+ * Figma's. Ctrl and Shift+Ctrl elsewhere. Ctrl+Y, Windows' other redo, is
+ * deliberately not accepted: the editor runs inside a page, and Ctrl+Y is a
+ * browser command there.
+ *
+ * The exclusive `!ctrlKey` / `!metaKey` matters on the Mac, where Ctrl+Cmd+Z is
+ * not this command and should fall through to whoever wants it.
+ */
+export function historyAction(event: KeyboardEvent): "undo" | "redo" | null {
+  if (event.key.toLowerCase() !== "z" || event.altKey) return null
+  const accelerator = isMac()
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey
+  if (!accelerator) return null
+  return event.shiftKey ? "redo" : "undo"
+}
+
+/**
  * Enter selects the child and Shift+Enter the parent. That direction surprises
  * people and is nonetheless what Figma does; Escape only ever deselects.
  */

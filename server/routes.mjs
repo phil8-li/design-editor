@@ -12,6 +12,7 @@
 import { resolveConfig } from "../config.mjs"
 import { createAgent } from "./agent.mjs"
 import { createControlDefaults } from "./control-defaults.mjs"
+import { createIconSet } from "./icon-set.mjs"
 import { createOptionsStore, normalizeOptionSet } from "./options-store.mjs"
 
 const MAX_BODY_BYTES = 1024 * 1024
@@ -107,7 +108,7 @@ function controlTarget(searchParams) {
   return { group, key }
 }
 
-async function route(store, defaults, agent, prefix, req, res, url) {
+async function route(store, defaults, agent, icons, prefix, req, res, url) {
   const { pathname, searchParams } = url
   const rest = pathname.slice(prefix.length)
 
@@ -153,6 +154,11 @@ async function route(store, defaults, agent, prefix, req, res, url) {
     }
   }
 
+  if (rest === "/icons" && req.method === "GET") {
+    sendJson(res, 200, icons.read())
+    return
+  }
+
   if (rest === "/agent" && req.method === "POST") {
     sendJson(res, 200, await agent.runAgent((await readJsonBody(req)) ?? {}))
     return
@@ -167,6 +173,7 @@ export function createDesignEditorRoutes(config = resolveConfig()) {
   const store = createOptionsStore({ stateDir: config.stateDir })
   const defaults = createControlDefaults(config)
   const agent = createAgent(config)
+  const icons = createIconSet(config)
 
   return {
     prefix,
@@ -188,7 +195,7 @@ export function createDesignEditorRoutes(config = resolveConfig()) {
         return true
       }
 
-      route(store, defaults, agent, prefix, req, res, url).catch((error) => {
+      route(store, defaults, agent, icons, prefix, req, res, url).catch((error) => {
         if (res.headersSent) {
           res.end()
           return

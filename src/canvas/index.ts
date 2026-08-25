@@ -14,6 +14,7 @@ import { getResolver, toSelectable } from "../core/resolve"
 import { editorOwnsInput } from "../core/store"
 import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
+import type { LayerElement } from "../core/types"
 import { installSelectionFrame } from "./selection"
 import { installTransform, translateBy } from "./transform"
 import { installSnapping } from "./snapping"
@@ -32,7 +33,7 @@ export function installCanvas(context: EditorContext): void {
   // `select()` early-returns when the element is already the whole selection,
   // so a re-click can never refresh a source ref that a code edit has moved.
   // `selectMany` carries no such guard and a one-element set is the same write.
-  const selectOne = (element: HTMLElement) => context.selectMany([element])
+  const selectOne = (element: LayerElement) => context.selectMany([element])
 
   // The last pointer position, so a modifier press can re-answer the question
   // with the pointer standing still.
@@ -46,7 +47,7 @@ export function installCanvas(context: EditorContext): void {
   }
 
   /** The one answer both the outline and the click use. */
-  const targetFor = (hit: Element | null, deep: boolean): HTMLElement | null => {
+  const targetFor = (hit: Element | null, deep: boolean): LayerElement | null => {
     if (!hit) return null
     return resolver.resolve(hit, context.getState().scope, deep)
   }
@@ -113,8 +114,8 @@ export function installCanvas(context: EditorContext): void {
     const base = primary && primary.contains(hit) ? primary : resolver.resolve(hit, state.scope)
     if (!base) return
     const target = resolver.resolve(hit, base)
-    // SVG geometry normalizes to its HTML host. If that host is already the
-    // selected layer, drilling must not silently advance the scope.
+    // Drilling into the layer you are already on is not a drill: without this
+    // the scope would advance on a press that changed nothing.
     if (!target || target === base) return
     context.setState({ scope: base })
     selectOne(target)

@@ -11,6 +11,7 @@ import {
 } from "../../core/responsive"
 import { isExpanded, miniButton, section, setExpanded, textField } from "./field"
 import type { InspectorSection } from "./index"
+import type { LayerElement } from "../../core/types"
 
 const CONTAINER_EXPANDER = "responsive.container-breakpoints"
 
@@ -19,7 +20,7 @@ function utilities(raw: string): string[] {
 }
 
 /** Any box that already holds a layout can carry a breakpoint utility. */
-function isLayoutBox(element: HTMLElement, computed: CSSStyleDeclaration): boolean {
+function isLayoutBox(element: LayerElement, computed: CSSStyleDeclaration): boolean {
   return (
     element.childElementCount > 0 &&
     ["block", "flex", "grid", "inline-flex", "inline-grid"].includes(computed.display.trim())
@@ -43,8 +44,8 @@ interface ContainerScope {
  * own CSS instead. Walking up matters because a `@md:` utility on the SELECTED
  * element resolves against an ancestor's width, not its own.
  */
-function containerScope(element: HTMLElement): ContainerScope | null {
-  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+function containerScope(element: LayerElement): ContainerScope | null {
+  for (let node: Element | null = element; node; node = node.parentElement) {
     const named = Array.from(node.classList).find(
       (name) => name === "@container" || name.startsWith("@container/")
     )
@@ -65,10 +66,10 @@ function containerScope(element: HTMLElement): ContainerScope | null {
 }
 
 /** Container variants on descendants, so the subtree's own scale is visible from here. */
-function descendantContainerUtilities(element: HTMLElement): string[] {
+function descendantContainerUtilities(element: LayerElement): string[] {
   const found = new Set<string>()
   let visited = 0
-  for (const node of Array.from(element.querySelectorAll<HTMLElement>("*"))) {
+  for (const node of Array.from(element.querySelectorAll("*"))) {
     if (visited++ >= 2000 || found.size >= 12) break
     for (const name of Array.from(node.classList)) {
       if (name.startsWith("@") && name.includes(":")) found.add(name)

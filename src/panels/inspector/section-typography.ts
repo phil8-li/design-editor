@@ -9,6 +9,7 @@ import { el, round } from "../../core/dom"
 import { colorField } from "./color"
 import { iconButton, numberField, section, selectField, textField } from "./field"
 import type { InspectorSection } from "./index"
+import type { LayerElement } from "../../core/types"
 
 const WEIGHTS = ["100", "200", "300", "400", "500", "600", "700", "800", "900"].map((value) => ({
   value,
@@ -22,7 +23,7 @@ const ALIGNMENTS = [
   { value: "justify", label: "Justify text", glyph: "▤" },
 ]
 
-function rendersText(element: HTMLElement): boolean {
+function rendersText(element: LayerElement): boolean {
   for (const node of Array.from(element.childNodes)) {
     if (node.nodeType === Node.TEXT_NODE && (node.textContent ?? "").trim() !== "") return true
   }

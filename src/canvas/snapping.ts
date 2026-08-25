@@ -9,6 +9,7 @@
 
 import { isCanvasElement } from "../core/dom"
 import type { EditorContext } from "../core/context"
+import type { LayerElement } from "../core/types"
 import { createNodePool, placeBadge, placeNode } from "./selection"
 import { isAltDown, onDragEnd, onDragStart, onDragUpdate } from "./transform"
 
@@ -55,7 +56,7 @@ function boxOf(element: Element): Box {
   return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
 }
 
-function collect(element: HTMLElement): Candidates {
+function collect(element: LayerElement): Candidates {
   const x: Guide[] = []
   const y: Guide[] = []
   const siblings: Box[] = []

@@ -7,7 +7,7 @@
 import { config } from "./config"
 import { elementKey, getState, primarySelection, setState, subscribe } from "./store"
 import { toSourceRef, type RewriteBridge } from "./bridge"
-import type { Selection, ToolId } from "./types"
+import type { LayerElement, Selection, ToolId } from "./types"
 
 export interface EditorSlots {
   /** Fixed layer above the app, below the panels — canvas chrome lives here. */
@@ -28,9 +28,9 @@ export interface EditorContext {
   subscribe: typeof subscribe
   primarySelection: typeof primarySelection
   /** Selects an element (or clears selection with `null`). */
-  select(el: HTMLElement | null, options?: { additive?: boolean }): void
+  select(el: LayerElement | null, options?: { additive?: boolean }): void
   /** Replaces the selection in one store write — one repaint, not one per element. */
-  selectMany(els: HTMLElement[]): void
+  selectMany(els: LayerElement[]): void
   setTool(tool: ToolId): void
   /**
    * Enters or leaves pass-through mode. Entering it drops the hover target as
@@ -49,7 +49,7 @@ export interface EditorContext {
 const refreshListeners = new Set<() => void>()
 
 export function createContext(bridge: RewriteBridge, slots: EditorSlots): EditorContext {
-  const describe = (element: HTMLElement): Selection => {
+  const describe = (element: LayerElement): Selection => {
     const info = bridge.elementInfo(element)
     const componentName = info?.componentName || element.tagName.toLowerCase()
     return {
@@ -95,7 +95,7 @@ export function createContext(bridge: RewriteBridge, slots: EditorSlots): Editor
     },
 
     selectMany(elements) {
-      const seen = new Set<HTMLElement>()
+      const seen = new Set<LayerElement>()
       const selection: Selection[] = []
       for (const element of elements) {
         if (seen.has(element)) continue

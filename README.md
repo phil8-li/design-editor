@@ -17,7 +17,7 @@ leaves no trace in your source tree.
   appearance edits currently write Tailwind utilities, so full visual editing
   requires Tailwind. Text edits do not.
 - The package installs `react-rewrite-cli@0.1.1` exactly. The runtime patches
-  that build's minified bundle at serve time against 22 pinned anchors; a
+  that build's minified bundle at serve time against 23 pinned anchors; a
   different version will not patch, and the launcher tells you so instead.
 
 ## Install
@@ -85,6 +85,13 @@ design-editor [appPort] [options]
 `--verify` is worth running in CI. It is the check that fails loudly when a
 dependency bump moves the vendored bundle out from under the patch.
 
+Every edit is undoable with the platform's own pair — `⌘Z` and `⇧⌘Z` on macOS,
+`Ctrl+Z` and `Shift+Ctrl+Z` elsewhere — and with the two toolbar buttons, which
+run the same call. The timeline lives on the writer rather than on the panels,
+so a section added later is undoable without being wired up for it, and it
+covers the preview and the queued source operation together: undoing a change
+also takes back what "Apply to code" would have written.
+
 ## Configure
 
 Optional. With no config file the tool runs against generic defaults for a
@@ -110,6 +117,8 @@ The settings most likely to matter:
 - **`designSystem.manifest`** — the canonical token catalog displayed beside
   the selected element. Add `designSystem.cssSources` to map authored CSS and
   Tailwind aliases back to those tokens.
+- **`icons`** — your icon set, so a selected `<svg>` names itself and the
+  inspector can offer the other drawings as variants.
 - **`source.roots`** — the directories the agent may edit.
 
 ### Design-system catalog
@@ -128,6 +137,37 @@ The manifest contains `Color`, `Spacing`, and `Radius` collections plus
 `textStyles`, `uiTextStyles`, `effectStyles`, `iconScale`, and `motion` arrays.
 The launcher validates those groups and their editable values before serving
 the editor, so a stale generated manifest fails at startup with its field name.
+
+### Host icon set
+
+Separate from `designSystem.iconScale`, which is the icon *size* scale. This is
+the drawing data, and it turns a selected `<svg>` into a layer with a name and a
+list of alternatives:
+
+```js
+icons: {
+  attribute: "data-instagram-icon",
+  data: "src/components/icons/instagram-icon-data.json",
+},
+```
+
+`attribute` is the DOM attribute your icon factory stamps each glyph with — that
+is how a selection names itself. `data` is a JSON map of name to
+`{ nodes: [[tag, attrs, children?]], rootFill, rootStroke? }`, the shape a React
+icon factory already stores, so a host points at the file its components render
+and writes no adapter. Both halves or neither: an attribute with no data names
+icons the picker cannot offer, and data with no attribute cannot be matched to a
+selection. Leave the block out and the inspector's icon section never renders.
+
+The set is served on request by `GET {apiPrefix}/icons` rather than shipped in
+the browser prelude, because it is path data measured in hundreds of kilobytes
+and most sessions never open the panel. Only the attribute and a boolean cross
+into the browser at load.
+
+A swap redraws the glyph in place and says "preview only" every time: the source
+writer speaks in classes and text, and the JSX still names the component it
+always did. Width, height, and class are left alone — size and colour belong to
+the call site that placed the icon, not to the drawing.
 
 ### Responsive metadata
 
@@ -286,8 +326,9 @@ cli.mjs                     argv contract and entry point
 config.mjs                  defaults, discovery, resolution, browser prelude
 build.mjs                   bundles src/ into dist/design-editor.js
 runtime/launcher.mjs        vendor resolution, monkey-patches, route mount
-runtime/vendor-patch.mjs    the 22 splices against react-rewrite-cli 0.1.1
+runtime/vendor-patch.mjs    the 23 splices against react-rewrite-cli 0.1.1
 server/design-system-config.mjs token manifest and authored-alias normalization
+server/icon-set.mjs         the host icon set, read once and served on request
 server/routes.mjs           loopback-guarded HTTP routes
 server/options-store.mjs    saved option sets
 server/control-defaults.mjs configured literal default reader/writer

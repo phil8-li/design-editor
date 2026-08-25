@@ -10,12 +10,13 @@ import { el, isCanvasElement, isChrome } from "../core/dom"
 import { isDeepSelect } from "../core/keymap"
 import { getResolver } from "../core/resolve"
 import type { EditorContext } from "../core/context"
+import type { LayerElement } from "../core/types"
 
 const DRAG_THRESHOLD = 3
 
 export interface MarqueeController {
   /** Claims empty-canvas presses and Shift presses reserved for marquee/toggle. */
-  begin(event: PointerEvent, target: HTMLElement | null): boolean
+  begin(event: PointerEvent, target: LayerElement | null): boolean
 }
 
 export function installMarquee(context: EditorContext): MarqueeController {
@@ -30,8 +31,8 @@ export function installMarquee(context: EditorContext): MarqueeController {
   let additive = false
   let pointerId = -1
   let capture: Element | null = null
-  let toggleTarget: HTMLElement | null = null
-  let baseline: HTMLElement[] = []
+  let toggleTarget: LayerElement | null = null
+  let baseline: LayerElement[] = []
 
   /**
    * Touching an object selects it. Full enclosure is the intuitive rule and the
@@ -48,7 +49,7 @@ export function installMarquee(context: EditorContext): MarqueeController {
    * Candidates come from the one shared layer graph. A normal marquee takes
    * the active scope's direct children; deep marquee recursively takes leaves.
    */
-  const swept = (l: number, t: number, r: number, b: number, deep: boolean): Element[] => {
+  const swept = (l: number, t: number, r: number, b: number, deep: boolean): LayerElement[] => {
     // `isConnected`, as in `resolve()`: React replaces DOM nodes constantly, and
     // a drilled scope that has since been unmounted makes `querySelectorAll`
     // and `layerChildren` both return nothing — a marquee that selects zero
@@ -58,7 +59,7 @@ export function installMarquee(context: EditorContext): MarqueeController {
 
     if (!deep) return resolver.layerChildren(scope).filter((node) => touched(node, l, t, r, b))
 
-    const found: HTMLElement[] = []
+    const found: LayerElement[] = []
     const visit = (container: Element) => {
       for (const node of resolver.layerChildren(container)) {
         const children = resolver.layerChildren(node)
@@ -70,7 +71,7 @@ export function installMarquee(context: EditorContext): MarqueeController {
     return found
   }
 
-  const begin = (event: PointerEvent, target: HTMLElement | null): boolean => {
+  const begin = (event: PointerEvent, target: LayerElement | null): boolean => {
     const { tool } = context.getState()
     if (event.button !== 0 || tool !== "move") return false
     if (isChrome(event.target)) return false
@@ -145,7 +146,7 @@ export function installMarquee(context: EditorContext): MarqueeController {
 
     // Shift is a true toggle against the selection at pointerdown. Appending
     // would make dragging the same marquee twice unable to remove anything.
-    const hits = swept(left, top, right, bottom, isDeepSelect(event)) as HTMLElement[]
+    const hits = swept(left, top, right, bottom, isDeepSelect(event))
     if (!additive) {
       context.selectMany(hits)
       return
