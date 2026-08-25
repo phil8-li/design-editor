@@ -89,6 +89,15 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
 .de-button:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
 
 /*
+ * A button that leads with a glyph pulls its leading padding in by the optical
+ * margin the glyph already carries; 10px on both sides reads as a gap on the
+ * left and a snug fit on the right. The 4px gap is tighter than the 6px between
+ * two words because the arrow and the word are one lockup, not two items.
+ */
+.de-button--mode { gap: 4px; padding-left: 7px; }
+.de-button-glyph { flex: none; display: inline-flex; align-items: center; }
+
+/*
  * Tooltips. Always ABOVE the control: this strip is pinned to the bottom of the
  * viewport, so a tip below it would render off-screen. Delayed on the way in so
  * it never fires while the pointer is only crossing the bar, and instant on the

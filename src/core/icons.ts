@@ -25,27 +25,43 @@ export interface IconData {
 }
 
 const ICONS = {
-  "Move": {
+  /*
+   * The selector arrow, in the two states the mode toggle wears it.
+   *
+   * Not vendored: neither the editor's set nor the host's 152-icon set has a
+   * pointer arrow, so this pair is authored here. Both are the SAME kite —
+   * tip, tail, notch, barb — re-solved twice so that each lands on the 20x20
+   * ink tier every other glyph in the strip occupies: the filled one measures
+   * its own bbox, the outlined one measures its bbox plus half of the 2-unit
+   * stroke on each side, so the filled path runs 2..22 and the outlined one
+   * 3..21. Sizing them identically and letting the stroke spill would have made
+   * the hollow state read a rung larger than the solid one at the same `size`.
+   *
+   * They differ by FILL, never by colour: the toggle they sit in is a mode, and
+   * a mode read only in colour is not read at all.
+   */
+  "Cursor": {
     "nodes": [
       [
         "path",
         {
-          "d": "M22.70703,11.29297l-3-3c-.39062-.39062-1.02344-.39062-1.41406,0s-.39062,1.02344,0,1.41406l1.29297,1.29297h-6.58594v-6.58594l1.29297,1.29297c.19531.19531.45117.29297.70703.29297s.51172-.09766.70703-.29297c.39062-.39062.39062-1.02344,0-1.41406l-3-3c-.39062-.39062-1.02344-.39062-1.41406,0l-3,3c-.39062.39062-.39062,1.02344,0,1.41406s1.02344.39062,1.41406,0l1.29297-1.29297v6.58594h-6.58594l1.29297-1.29297c.39062-.39062.39062-1.02344,0-1.41406s-1.02344-.39062-1.41406,0l-3,3c-.39062.39062-.39062,1.02344,0,1.41406l3,3c.19531.19531.45117.29297.70703.29297s.51172-.09766.70703-.29297c.39062-.39062.39062-1.02344,0-1.41406l-1.29297-1.29297h6.58594v6.58594l-1.29297-1.29297c-.39062-.39062-1.02344-.39062-1.41406,0s-.39062,1.02344,0,1.41406l3,3c.19531.19531.45117.29297.70703.29297s.51172-.09766.70703-.29297l3-3c.39062-.39062.39062-1.02344,0-1.41406s-1.02344-.39062-1.41406,0l-1.29297,1.29297v-6.58594h6.58594l-1.29297,1.29297c-.39062.39062-.39062,1.02344,0,1.41406.19531.19531.45117.29297.70703.29297s.51172-.09766.70703-.29297l3-3c.39062-.39062.39062-1.02344,0-1.41406Z"
+          "d": "M2 2 10.318 22 13.271 13.306 22 10.318Z"
         }
       ]
     ],
     "rootFill": "currentColor"
   },
-  "Hand": {
+  "CursorOutline": {
     "nodes": [
       [
         "path",
         {
-          "d": "M12.877 2.5a1 1 0 0 1 1 1v7.567a.75.75 0 0 0 1.5 0V5a1 1 0 0 1 2 0v6.067a.75.75 0 0 0 1.5 0V8a1 1 0 0 1 2 0v6.5c0 .03-.014.053-.017.082-.174 3.849-3.341 6.918-7.233 6.918a7.199 7.199 0 0 1-4.036-1.243c-.025-.016-.38-.266-.475-.343l-5.597-4.242a1 1 0 1 1 1.208-1.594l2.848 2.158a.5.5 0 0 0 .802-.398V5.5a1 1 0 0 1 2 0v5.567a.75.75 0 0 0 1.5 0V3.5a1 1 0 0 1 1-1m0-2c-1.33 0-2.46.87-2.853 2.07A3.002 3.002 0 0 0 6.377 5.5v7.318l-.442-.334a2.973 2.973 0 0 0-1.81-.61c-.934 0-1.828.444-2.392 1.188a2.98 2.98 0 0 0-.582 2.221 2.98 2.98 0 0 0 1.16 1.983l5.597 4.242c.084.068.416.306.566.407a9.2 9.2 0 0 0 5.153 1.585 9.228 9.228 0 0 0 9.222-8.661 2.12 2.12 0 0 0 .028-.339V8a3.003 3.003 0 0 0-3.5-2.958V5a3.003 3.003 0 0 0-3.838-2.881A3.003 3.003 0 0 0 12.877.5z"
+          "d": "M3 3 10.485 21 13.144 13.175 21 10.485Z"
         }
       ]
     ],
-    "rootFill": "currentColor"
+    "rootFill": "none",
+    "rootStroke": "currentColor"
   },
   "Play": {
     "nodes": [
@@ -63,12 +79,92 @@ const ICONS = {
     ],
     "rootFill": "currentColor"
   },
-  "PanelLeft": {
+  /*
+   * The two panel toggles, in the two states each of them has.
+   *
+   * They replace PanelLeft and PanelRight, which were an outlined frame with a
+   * hairline ruled down it. That mark has one shape and no state: the divider
+   * looked the same whether the panel it named was open or shut, so the button
+   * could only report itself in colour — and a `--sidebar-accent` tint on a
+   * 16px outline at the bottom of the screen is not a state anyone reads.
+   *
+   * These are authored as TWO solids instead of one ruled box: a slab for the
+   * panel and a rounded rect for the canvas beside it, with real air between
+   * them. That buys the state for free and buys it in SHAPE. Open, the slab is
+   * 6 wide and the canvas is pushed over to make room. Collapsed, the slab
+   * narrows to a 2.5 sliver against the edge — the panel seen edge-on, still
+   * present, still nameable — and the canvas grows into the space it gave up.
+   * Which is what actually happens on screen, so the glyph is a small picture
+   * of the result rather than a symbol for it.
+   *
+   * All four land on the same 20x20 ink tier as the rest of the strip: the
+   * slabs are filled and measure their own bbox (2..22), the canvas rects are
+   * stroked and measure their bbox plus half of the 2-unit stroke, so they are
+   * inset by 1 on every side they own. Both halves of a pair therefore span
+   * exactly the same box, and the toggle does not change size when it flips.
+   */
+  "SidebarLeft": {
     "nodes": [
       [
         "rect",
         {
-          "width": "18",
+          "width": "6",
+          "height": "20",
+          "x": "2",
+          "y": "2",
+          "rx": "2",
+          "fill": "currentColor",
+          "stroke": "none"
+        }
+      ],
+      [
+        "rect",
+        {
+          "width": "10",
+          "height": "18",
+          "x": "11",
+          "y": "3",
+          "rx": "2"
+        }
+      ]
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor"
+  },
+  "SidebarLeftCollapsed": {
+    "nodes": [
+      [
+        "rect",
+        {
+          "width": "2.5",
+          "height": "20",
+          "x": "2",
+          "y": "2",
+          "rx": "1.25",
+          "fill": "currentColor",
+          "stroke": "none"
+        }
+      ],
+      [
+        "rect",
+        {
+          "width": "13.5",
+          "height": "18",
+          "x": "7.5",
+          "y": "3",
+          "rx": "2"
+        }
+      ]
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor"
+  },
+  "SidebarRight": {
+    "nodes": [
+      [
+        "rect",
+        {
+          "width": "10",
           "height": "18",
           "x": "3",
           "y": "3",
@@ -76,21 +172,27 @@ const ICONS = {
         }
       ],
       [
-        "path",
+        "rect",
         {
-          "d": "M9 3v18"
+          "width": "6",
+          "height": "20",
+          "x": "16",
+          "y": "2",
+          "rx": "2",
+          "fill": "currentColor",
+          "stroke": "none"
         }
       ]
     ],
     "rootFill": "none",
     "rootStroke": "currentColor"
   },
-  "PanelRight": {
+  "SidebarRightCollapsed": {
     "nodes": [
       [
         "rect",
         {
-          "width": "18",
+          "width": "13.5",
           "height": "18",
           "x": "3",
           "y": "3",
@@ -98,15 +200,36 @@ const ICONS = {
         }
       ],
       [
-        "path",
+        "rect",
         {
-          "d": "M15 3v18"
+          "width": "2.5",
+          "height": "20",
+          "x": "19.5",
+          "y": "2",
+          "rx": "1.25",
+          "fill": "currentColor",
+          "stroke": "none"
         }
       ]
     ],
     "rootFill": "none",
     "rootStroke": "currentColor"
   },
+  /*
+   * Undo and redo, re-solved onto the 20x20 ink tier.
+   *
+   * They used to be drawn on a circle of r=10.003 centred on (12,12), which
+   * with the 2-unit stroke put their ink at 0.997..23.003 — 22x22 of the 24
+   * grid, against 20x20 for the panel toggles beside them in the same strip.
+   * At the toolbar's 16px they read a visible step heavier than every other
+   * glyph in the bar.
+   *
+   * The fix is the PATH, not the call. `icon()` takes a size, not a per-glyph
+   * override, and a smaller `size` shrinks the STROKE with the geometry — which
+   * fixes the extent by breaking the optical weight. So the arc is r=9 on the
+   * same centre (geometry 3..21, ink 2..22) and the tail tick is scaled with
+   * it: corner at x=3, arms of 4.5, sitting on the arc's own endpoint.
+   */
   "RotateCcw": {
     "nodes": [
       [
@@ -118,7 +241,7 @@ const ICONS = {
           "strokeLinejoin": "round",
           "strokeWidth": "var(--instagram-icon-stroke-width, 2)",
           "fillRule": "evenodd",
-          "d": "M2.682 8.364a10.003 10.003 0 1 1 2.023 10.475"
+          "d": "M3.6174 8.7255a9 9 0 1 1 1.8174 9.4306"
         }
       ],
       [
@@ -130,7 +253,7 @@ const ICONS = {
           "strokeLinejoin": "round",
           "strokeWidth": "var(--instagram-icon-stroke-width, 2)",
           "fillRule": "evenodd",
-          "d": "M7 8.364 2 8.364 2 3.364"
+          "d": "M7.5 8.7255 3 8.7255 3 4.2255"
         }
       ]
     ],
@@ -147,7 +270,7 @@ const ICONS = {
           "strokeLinejoin": "round",
           "strokeWidth": "var(--instagram-icon-stroke-width, 2)",
           "fillRule": "evenodd",
-          "d": "M21.318 8.364a10.003 10.003 0 1 0-2.022 10.475"
+          "d": "M20.3826 8.7255a9 9 0 1 0-1.8174 9.4306"
         }
       ],
       [
@@ -159,7 +282,7 @@ const ICONS = {
           "strokeLinejoin": "round",
           "strokeWidth": "var(--instagram-icon-stroke-width, 2)",
           "fillRule": "evenodd",
-          "d": "M17 8.364 22 8.364 22 3.364"
+          "d": "M16.5 8.7255 21 8.7255 21 4.2255"
         }
       ]
     ],
@@ -364,7 +487,7 @@ const SVG_NS = "http://www.w3.org/2000/svg"
  * `setAttribute("strokeWidth", …)` is not an error and not a no-op: it sets an
  * attribute that SVG has never heard of, so the path falls back to the UA's 1px
  * default and every stroke-drawn glyph renders a third as heavy as it should.
- * Nine of the sixteen are stroke-drawn, so this was most of the set, and it is
+ * Most of this set is stroke-drawn, so this was most of the set, and it is
  * invisible to a type check and to any test that only asks whether an <svg>
  * exists.
  */

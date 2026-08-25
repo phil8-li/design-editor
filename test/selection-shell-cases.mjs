@@ -103,11 +103,16 @@ async function check(name, fn) {
 
 const label = (name) => context.slots.toolbar.querySelector(`[aria-label="${name}"]`)
 
-await check("the toolbar draws its two tools and both panel toggles", () => {
-  assert.ok(label("Move"))
-  assert.ok(label("Hand (browser scroll)"))
+await check("the toolbar draws the mode switch, both panel toggles and the commit path", () => {
+  assert.ok(context.slots.toolbar.querySelector(".de-button--mode"))
   assert.ok(label("Toggle layers panel"))
   assert.ok(label("Toggle inspector"))
+  assert.ok(label("Undo"))
+  assert.ok(label("Redo"))
+  assert.ok(label("Apply to code"))
+  for (const gone of ["Move", "Hand (browser scroll)"]) {
+    assert.equal(label(gone), null, `${gone} is still in the bar`)
+  }
 })
 
 // The toolbar no longer dispatches the options event — the inspector's empty
@@ -254,9 +259,9 @@ await check("the options browser still answers the open event and returns focus"
  * `restoreChromeFocus` neuters the guard's methods from `window` capture, which
  * runs first; the mode widens that from our chrome to the app.
  */
-await check("interactive mode hands the gesture to the app, and only then", () => {
-  editorModule.mountShell()
+const shell = editorModule.mountShell()
 
+await check("interactive mode hands the gesture to the app, and only then", () => {
   const appButton = window.document.createElement("button")
   window.document.body.append(appButton)
   let reached = 0
@@ -290,6 +295,54 @@ await check("interactive mode hands the gesture to the app, and only then", () =
   editorModule.setState({ interactive: false })
   press()
   assert.equal(reached, 1, "the app stayed reachable after the mode was switched back off")
+})
+
+/*
+ * The toolbar toggle and the panel it names, joined up.
+ *
+ * The bar and the shell are two modules that never call each other — they meet
+ * at the store — so nothing but a mounted shell proves the button does anything.
+ * Asserting the toggle's `aria-pressed` alone would pass with the panel welded
+ * open, which is exactly the failure a bar-only test cannot see.
+ */
+const panel = (side) => shell.root.querySelector(`.de-panel--${side}`)
+const toggle = (name) => context.slots.toolbar.querySelector(`[aria-label="${name}"]`)
+
+await check("a toolbar toggle actually shows and hides the panel it names", () => {
+  for (const [name, side, inset] of [
+    ["Toggle layers panel", "left", "--de-left"],
+    ["Toggle inspector", "right", "--de-right"],
+  ]) {
+    editorModule.setState({ layersOpen: true, inspectorOpen: true })
+    assert.equal(panel(side).hidden, false, `${side} panel did not start open`)
+    toggle(name).click()
+    assert.equal(panel(side).hidden, true, `${side} panel is still showing after the toggle`)
+    assert.equal(document.documentElement.style.getPropertyValue(inset), "0px")
+    toggle(name).click()
+    assert.equal(panel(side).hidden, false, `${side} panel did not come back`)
+    assert.notEqual(document.documentElement.style.getPropertyValue(inset), "0px")
+  }
+})
+
+await check("the toggle's pressed state and the panel never disagree", () => {
+  for (const [name, side, flag] of [
+    ["Toggle layers panel", "left", "layersOpen"],
+    ["Toggle inspector", "right", "inspectorOpen"],
+  ]) {
+    for (const open of [false, true, false]) {
+      // Driven from the store rather than the button, because the shell writes
+      // these flags too and the button must not be remembering its own clicks.
+      editorModule.setState({ [flag]: open })
+      assert.equal(toggle(name).getAttribute("aria-pressed"), String(open))
+      assert.equal(panel(side).hidden, !open)
+    }
+    editorModule.setState({ [flag]: true })
+  }
+})
+
+await check("no control anywhere in the shell draws the hand tool", () => {
+  assert.equal(shell.root.querySelector('[aria-label*="Hand"]'), null)
+  assert.equal(context.slots.toolbar.querySelector('[aria-label*="Hand"]'), null)
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)
