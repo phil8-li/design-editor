@@ -41,6 +41,21 @@ export interface TokenChoice {
   disabled: boolean
 }
 
+/**
+ * The way out of the list, when the axis has one.
+ *
+ * Optional on purpose. An axis whose token is a bundle of declarations — a text
+ * style, an icon's two sides — has no single raw form to type, and an axis that
+ * refuses some of its own tokens for a reason would have that reason walked
+ * around by a typed value. Those axes leave this out and the footer never
+ * renders, rather than each of them remembering to suppress it.
+ */
+export interface TokenCustomValue {
+  /** The shape the axis wants, shown in the empty field. Never read as prose. */
+  placeholder: string
+  onCommit(raw: string): void
+}
+
 export interface TokenFieldOptions {
   /** Stable identity so focus survives the panel rebuild a commit causes. */
   id: string
@@ -51,6 +66,7 @@ export interface TokenFieldOptions {
   /** The element's own value, in the plain spelling, for when nothing is bound. */
   fallback: { preview: TokenPreview; text: string }
   onCommit(id: string): void
+  custom?: TokenCustomValue
 }
 
 const POPOVER_WIDTH = 264
@@ -177,6 +193,19 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
     { class: "de-mini", type: "button", title: "Close", "aria-label": "Close" },
     [icon("X", 12)]
   )
+  /**
+   * The escape hatch, as a fourth child rather than a second control on the
+   * closed field: the field is one button that thirty call sites drop into a
+   * stack, and the panel hands focus back by that one node's identity.
+   */
+  const customInput = options.custom
+    ? (el("input", {
+        class: "de-token-custom-input",
+        type: "text",
+        placeholder: options.custom.placeholder,
+        "aria-label": `Your own ${options.title}`,
+      }) as HTMLInputElement)
+    : null
   const popover = el("div", { class: "de-token-popover", role: "dialog", "aria-label": options.title }, [
     el("div", { class: "de-token-popover-header" }, [
       el("span", { class: "de-token-popover-title" }, [options.title]),
@@ -184,6 +213,12 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
     ]),
     el("div", { class: "de-token-search" }, [icon("Search", 12), search]),
     list,
+    customInput
+      ? el("div", { class: "de-token-custom" }, [
+          el("span", { class: "de-token-custom-label" }, ["Your own value"]),
+          customInput,
+        ])
+      : null,
   ])
 
   let visible: TokenChoice[] = []
@@ -222,6 +257,18 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
     // a row inside a popover it is about to remove, there is nothing to restore.
     close(true)
     options.onCommit(choice.id)
+  }
+
+  /**
+   * Same order as `commit`, for the same reason: close first, write second. A
+   * value typed here is committed from an input the write is about to remove,
+   * so the field has to have focus back before the panel rebuilds around it.
+   */
+  const commitCustom = () => {
+    const raw = customInput?.value.trim() ?? ""
+    if (!raw || !options.custom) return
+    close(true)
+    options.custom.onCommit(raw)
   }
 
   const rowNode = (choice: TokenChoice, index: number): HTMLElement => {
@@ -292,6 +339,12 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
   // the text a designer is typing, and taking them costs more than the two rows
   // of travel they save in a list the arrows already walk.
   const onKeyDown = (event: KeyboardEvent) => {
+    // The same reasoning as Home and End, one field further down. While the
+    // caret is in the custom field those keys belong to what is being typed:
+    // Enter means "take this", not "take the row the arrows last landed on",
+    // and the arrows walk the caret. Escape is the exception both ways — it is
+    // the only way out of a text field that has taken the keyboard.
+    if (customInput && event.target === customInput && event.key !== "Escape") return
     if (event.key === "Escape") close(true)
     else if (event.key === "ArrowDown") setActive(active + 1)
     else if (event.key === "ArrowUp") setActive(active - 1)
@@ -303,6 +356,11 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
 
   closeButton.addEventListener("click", () => close(true))
   search.addEventListener("input", () => render(search.value))
+  customInput?.addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key !== "Enter") return
+    event.preventDefault()
+    commitCustom()
+  })
 
   document.body.append(popover)
   field.setAttribute("aria-expanded", "true")

@@ -35,14 +35,21 @@ export interface Selection {
 }
 
 /**
- * Two tools, because two is what the toolbar draws.
+ * One tool, because one is what the toolbar draws.
  *
  * "select" (Scale) only ever did what Move already does, "text" mirrored a
  * vendor mode this editor cannot commit, and "comment" was gated in three
  * canvas handlers while never appearing as a control — a mode the user could
- * not reach is a branch nobody can test.
+ * not reach is a branch nobody can test. "hand" went the same way: it suppressed
+ * selection so the page could be scrolled, but the wheel and the trackpad scroll
+ * the live page in every mode, so the only thing it added was a state in which
+ * clicking did nothing — which is what the Interactive toggle now says out loud.
+ *
+ * A one-member union is deliberate, not a leftover. The canvas still asks
+ * `tool === "move"` before it drags, and keeping the question named means the
+ * next tool arrives as a new member rather than as a new flag.
  */
-export type ToolId = "move" | "hand"
+export type ToolId = "move"
 
 export interface Rect {
   x: number

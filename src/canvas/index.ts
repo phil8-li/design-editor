@@ -63,7 +63,6 @@ export function installCanvas(context: EditorContext): void {
     pointerY = event.clientY
     pointerHit = hitFor(event)
     if (!editorOwnsInput()) return
-    if (context.getState().tool === "hand") return
     if (isChrome(event.target)) return
     setHovered(targetFor(pointerHit, isDeepSelect(event)))
   }
@@ -71,7 +70,6 @@ export function installCanvas(context: EditorContext): void {
   const onPointerDown = (event: PointerEvent) => {
     if (isChrome(event.target)) return
     if (!editorOwnsInput()) return
-    if (context.getState().tool === "hand") return
     // Right-click belongs to the layer-stack menu, which selects for itself.
     if (event.button !== 0) return
 
@@ -105,7 +103,6 @@ export function installCanvas(context: EditorContext): void {
   const onDoubleClick = (event: MouseEvent) => {
     if (isChrome(event.target)) return
     if (!editorOwnsInput()) return
-    if (context.getState().tool === "hand") return
     const hit = hitFor(event)
     if (!hit) return
 

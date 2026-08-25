@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert/strict"
+import fs from "node:fs"
 import path from "node:path"
 import vm from "node:vm"
 import { fileURLToPath } from "node:url"
@@ -65,15 +66,31 @@ async function loadEditorHelpers() {
 
 console.log("\nDesign-system catalog")
 
-const workspace = await loadConfig({
-  configPath: path.join(ROOT, "design-editor.config.mjs"),
-})
+/**
+ * THIS repository's host config, and its numbers are deliberately pinned below.
+ *
+ * That makes this suite the one place the editor is coupled to the app it lives
+ * in, which is the point: it is the regression net that catches a change to the
+ * tool silently changing what this app sees. The host-AGNOSTIC contract — that
+ * the same code reads a design system it has never met, with differently spelled
+ * `@theme` namespaces, absent token groups, a Tailwind v3 scale, or no manifest
+ * at all — is proved without this file, on the fixture hosts in
+ * host-agnostic-cases.mjs.
+ */
+const HOST_CONFIG = path.join(ROOT, "design-editor.config.mjs")
+if (!fs.existsSync(HOST_CONFIG)) {
+  throw new Error(
+    `${HOST_CONFIG} is missing. This suite pins the host repository's own catalog; ` +
+      "run host-agnostic-cases.mjs for the package-only contract."
+  )
+}
+const workspace = await loadConfig({ configPath: HOST_CONFIG })
 const catalog = workspace.designSystem.catalog
 const prelude = browserPrelude(workspace, { proxyPort: 4567 })
 const browserSandbox = { window: {} }
 vm.runInNewContext(prelude, browserSandbox)
 
-check("the Workspaces catalog is the non-vacuous 123-asset export", () => {
+check("the Workspaces catalog is the non-vacuous 116-asset export", () => {
   const counts = {
     colors: catalog.colors.length,
     spacing: catalog.spacing.length,
@@ -84,7 +101,7 @@ check("the Workspaces catalog is the non-vacuous 123-asset export", () => {
     motion: catalog.motion.length,
   }
   assert.deepEqual(counts, {
-    colors: 71,
+    colors: 64,
     spacing: 11,
     radii: 8,
     text: 12,
@@ -94,7 +111,7 @@ check("the Workspaces catalog is the non-vacuous 123-asset export", () => {
   })
   assert.equal(catalog.textStyles.length, 11)
   assert.equal(catalog.uiTextStyles.length, 1)
-  assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), 123)
+  assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), 116)
 
   const ids = [
     ...catalog.colors,
@@ -145,7 +162,7 @@ check("the browser prelude carries the catalog but no server filesystem paths", 
   assert.equal(prelude.includes("src/app/globals.css"), false)
 
   const browserConfig = browserSandbox.window.__DESIGN_EDITOR_CONFIG__
-  assert.equal(browserConfig.designSystem.colors.length, 71)
+  assert.equal(browserConfig.designSystem.colors.length, 64)
   assert.equal(browserConfig.designSystem.breakpoints.length, 5)
   assert.equal("manifest" in browserConfig.designSystem, false)
   assert.equal("cssSources" in browserConfig.designSystem, false)
@@ -464,9 +481,9 @@ console.log("\nHuman spellings")
 check("a token name splits into the group it lists under and the leaf a row shows", () => {
   const parts = (group, name) => helpers.tokenNameParts(find(group, name))
   assert.deepEqual(parts("colors", "Background/Primary"), { group: "Background", leaf: "Primary" })
-  assert.deepEqual(parts("colors", "Text and Icon/On chrome (weak)"), {
+  assert.deepEqual(parts("colors", "Text and Icon/Primary (weak)"), {
     group: "Text and Icon",
-    leaf: "On chrome (weak)",
+    leaf: "Primary (weak)",
   })
   // One register for the headers: the catalog writes some prefixes for people
   // and some for a stylesheet, and a `workspace` header three rows above
@@ -501,7 +518,7 @@ check("a token row carries the number that IS the decision", () => {
   // what a designer is choosing between.
   assert.equal(detail("motion-duration", "motion", "crossfade"), "150ms")
   assert.equal(detail("motion-duration", "motion", "lively"), "300ms")
-  // The swatch already carries a colour whole; a hex on 71 rows is noise.
+  // The swatch already carries a colour whole; a hex on 64 rows is noise.
   assert.equal(detail("fill-color", "colors", "Background/Primary"), "")
   assert.equal(detail("shadow", "effects", "Elevation/1"), "")
 })

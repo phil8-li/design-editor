@@ -146,4 +146,32 @@ export const tokenPickerCss = `/* ---------- token field ---------- */
 .de-token-row[aria-disabled="true"] { opacity: 0.4; }
 .de-token-empty { padding: 10px; color: ${t.color.textDim}; font-size: ${t.type.body}; }
 
+/* ---------- the way out of the list ---------- */
+/*
+ * A footer rather than a row in the list: what a designer types here is not one
+ * more choice among the system's, it is the decision to leave it. The rule above
+ * says so — the same hairline the header uses, so the list reads as closed
+ * before this field starts.
+ *
+ * Its geometry copies the search row on purpose. The two are the picker's only
+ * text fields, they sit at its two ends, and giving the escape hatch a heavier
+ * treatment would advertise it over the seventy-one rows it is the exception to.
+ */
+.de-token-custom {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px; height: ${t.size.sectionHeader}px;
+  border-top: 1px solid ${t.color.border};
+  color: ${t.color.textDim};
+}
+.de-token-custom-label { flex: none; font-size: ${t.type.caption}; }
+.de-token-custom-input {
+  flex: 1; min-width: 0;
+  border: none; background: transparent;
+  color: ${t.color.text};
+  font: inherit; font-size: ${t.type.body};
+  text-align: right;
+}
+.de-token-custom-input:focus { outline: none; }
+.de-token-custom-input::placeholder { color: ${t.color.textDim}; }
+
 `

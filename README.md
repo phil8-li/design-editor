@@ -133,10 +133,70 @@ designSystem: {
 },
 ```
 
-The manifest contains `Color`, `Spacing`, and `Radius` collections plus
+The manifest may contain `Color`, `Spacing`, and `Radius` collections plus
 `textStyles`, `uiTextStyles`, `effectStyles`, `iconScale`, and `motion` arrays.
-The launcher validates those groups and their editable values before serving
-the editor, so a stale generated manifest fails at startup with its field name.
+Every one of them is optional. A design system with no motion tokens and no
+text styles simply omits those keys; the axis resolves empty and the inspector
+drops the row rather than drawing a picker with nothing in it. What the launcher
+validates is the groups you did supply — a group that is present and the wrong
+shape fails at startup with its field name, so a stale generated manifest is
+caught, while a smaller design system is not mistaken for a broken one.
+
+`designSystem.trackingUnit` — `"em"` or `"px"` — states the unit your text
+styles express letter-spacing in. It is declared rather than inferred: `-0.5` is
+a plausible em and a plausible px, and guessing by magnitude makes a text style
+stop matching the moment a host writes tracking the other way. A manifest may
+carry its own `trackingUnit`; the config's value wins.
+
+### A design system that is not a manifest
+
+Some hosts keep tokens in a TypeScript module, a Style Dictionary build, or a
+CMS. `designSystem.adapter` is the escape hatch — one function, called with
+`{ projectRoot }`, returning the same token groups the manifest path produces:
+
+```js
+designSystem: {
+  adapter: () => ({
+    name: "Lattice",
+    colors: Object.entries(palette).map(([name, light]) => ({
+      id: `color:${name}`, name, category: "color",
+      cssVar: `--lattice-${name}`, values: { light },
+    })),
+  }),
+  cssSources: ["app/globals.css"],
+},
+```
+
+Everything downstream — alias resolution, the pickers, the inspector rows — is
+identical, because the adapter produces the catalog rather than a second kind of
+catalog. `manifest` and `adapter` are mutually exclusive; supplying both is
+refused at startup instead of silently ranked.
+
+### Tailwind aliases, v4 and v3
+
+On Tailwind v4 the theme lives in the stylesheet, so the editor reads
+`@theme` custom properties and traces them back to tokens.
+`tailwind.themeNamespaces` says which namespaces your app declares; the default
+is Tailwind's own `color`, `radius`, `text`, and `shadow`. Extend it for
+anything else you compile, and note that a longer name wins over a shorter
+prefix — listing `"text-shadow"` keeps `--text-shadow-lift` out of the
+typography axis.
+
+On Tailwind v3 there is no theme block to read, so point the editor at the
+config file, or hand it the scale directly:
+
+```js
+designSystem: {
+  tailwindConfig: "tailwind.config.js",   // or
+  tailwindTheme: { color: { ink: "var(--ink)" }, radius: { card: "6px" } },
+},
+```
+
+`colors`, `borderRadius`, `fontSize`, and `boxShadow` map onto the catalog's
+colour, radius, text, and shadow axes. A scale entry may be a `var()`, which is
+traced like a v4 alias, or a literal, which is matched against the token's own
+value — so `brand: "#0b7285"` still resolves to the token that holds that
+colour. Without either key a v3 host resolves no Tailwind aliases at all.
 
 ### Host icon set
 
@@ -311,7 +371,13 @@ npm run test:standalone-next
 ```
 
 The package suite covers its npm-bin entry point, options, selection, shell,
-hydration readiness, and offline source translation. The standalone test packs
+hydration readiness, and offline source translation.
+`test/host-agnostic-cases.mjs` is the decoupling proof: three synthetic hosts
+under `test/fixtures` — a Tailwind v4 app whose `@theme` namespaces are spelled
+differently from this repo's, a Tailwind v3 app with a classic config scale and
+no motion or text tokens at all, and an adapter-only app with no manifest — each
+resolving a catalog, aliases, and inspector rows. It never reads the repository
+the package sits in. The standalone test packs
 the package, installs it into a throwaway config-free Next app, and verifies the
 isolated proxy and source-write path in both the App and Pages Routers. To
 exercise the live write path against the current app, run
