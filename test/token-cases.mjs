@@ -457,10 +457,54 @@ check("a bouncing spring writes nothing rather than a duration that lies", () =>
       `${token.name} bounces and must not be written as a plain duration`
     )
   }
+})
 
-  // Motion tokens live in TypeScript, so there is no var() to name them by.
-  assert.equal(helpers.tokenSourceSpelling(find("motion", "lively")), "spring 0.3s · bounce 0.2")
-  assert.equal(helpers.tokenSourceSpelling(find("motion", "crossfade")), "spring 0.15s · bounce 0")
+console.log("\nHuman spellings")
+
+check("a token name splits into the group it lists under and the leaf a row shows", () => {
+  const parts = (group, name) => helpers.tokenNameParts(find(group, name))
+  assert.deepEqual(parts("colors", "Background/Primary"), { group: "Background", leaf: "Primary" })
+  assert.deepEqual(parts("colors", "Text and Icon/On chrome (weak)"), {
+    group: "Text and Icon",
+    leaf: "On chrome (weak)",
+  })
+  assert.deepEqual(parts("radii", "radius/xl"), { group: "radius", leaf: "xl" })
+  // A token with no path of its own still needs a header to sit under, or the
+  // list opens with a run of ungrouped rows and the grouping reads like a bug.
+  assert.deepEqual(parts("icons", "action"), { group: "Icon", leaf: "action" })
+  assert.deepEqual(parts("motion", "crossfade"), { group: "Motion", leaf: "crossfade" })
+  assert.deepEqual(parts("textStyles", "Display"), { group: "Text", leaf: "Display" })
+})
+
+check("a text style is spelled as its size and leading, and a swatch paints from the theme", () => {
+  assert.equal(helpers.tokenTextPair(find("textStyles", "Heading/H1")), "36/40")
+  assert.equal(helpers.tokenTextPair(find("textStyles", "Body/Default")), "16/26")
+  assert.equal(helpers.tokenTextPair(find("radii", "radius/xl")), "")
+
+  // The variable, not the literal: the swatch draws in the host document, so it
+  // follows the live theme instead of freezing one theme's value.
+  assert.equal(helpers.tokenSwatchCss(find("colors", "Background/Primary")), "var(--sem-background-primary)")
+  assert.equal(helpers.tokenSwatchCss(find("spacing", "spacing/lg")), null)
+})
+
+check("a rendered value is spelled plainly or not at all", () => {
+  assert.equal(helpers.plainValue("fill-color", "rgb(240, 242, 245)"), "#f0f2f5")
+  assert.equal(helpers.plainValue("fill-color", "rgba(12, 16, 20, 0.5)"), "#0c1014")
+  assert.equal(helpers.plainValue("fill-color", "#FFF"), "#ffffff")
+  assert.equal(helpers.plainValue("text-style", "16|26|400|-0.32"), "16/26")
+  assert.equal(helpers.plainValue("corner-radius", "20px"), "20px")
+  assert.equal(helpers.plainValue("motion-duration", "0.15s"), "150ms")
+
+  // The half that matters: a computed value can still be an unresolved variable
+  // or a colour space no designer reads, and this surface prints neither.
+  for (const value of [
+    "var(--sem-background-primary)",
+    "oklch(0.62 0.15 39)",
+    "color-mix(in srgb, #fff 6%, #363c44)",
+  ]) {
+    assert.equal(helpers.plainValue("fill-color", value), "", `${value} reached the screen`)
+  }
+  assert.equal(helpers.plainValue("shadow", "0 1px 2px #0002"), "")
 })
 
 check("every design-system property has a category and a way into source", () => {
@@ -584,16 +628,29 @@ function expectRows(right, { present = [], absent = [] }) {
   for (const label of absent) assert.equal(labels.includes(label), false, `${label} should not be here`)
 }
 
-/** Picks a token by id in a row and lets the panel rebuild around the write. */
-async function pick({ window, right, paint }, property, tokenId) {
-  const select = right.querySelector(`[data-de-field="design-system.${property}"]`)
-  assert.ok(select, `${property} has no row to pick in`)
-  select.focus()
-  select.value = tokenId
-  select.dispatchEvent(new window.Event("change", { bubbles: true }))
-  await paint()
-  return select
+/** Opens a row's picker and returns the popover the click mounted. */
+function open({ window, right }, property) {
+  const field = right.querySelector(`[data-de-field="design-system.${property}"]`)
+  assert.ok(field, `${property} has no row to pick in`)
+  field.click()
+  const popover = window.document.querySelector(".de-token-popover")
+  assert.ok(popover, `${property} opened no picker`)
+  return { field, popover }
 }
+
+/** Picks a token in a row the way a pointer does, and lets the panel rebuild. */
+async function pick(harness, property, tokenId) {
+  const { field, popover } = open(harness, property)
+  const row = popover.querySelector(`[data-de-choice="${tokenId}"]`)
+  assert.ok(row, `${tokenId} is not offered on the ${property} row`)
+  row.click()
+  await harness.paint()
+  return field
+}
+
+/** What the closed field reads — a token name, or the element's own value. */
+const fieldText = (right, property) =>
+  right.querySelector(`[data-de-field="design-system.${property}"]`)?.textContent ?? ""
 
 const GRID_FIXTURE = `<div id="target" class="grid grid-cols-1 border bg-background gap-4 p-4 md:grid-cols-2 dark:md:hover:gap-6 xl:grid-cols-4" style="display:grid;gap:16px;padding:16px;background-color:var(--color-background);border:1px solid var(--sem-border-primary);border-radius:var(--radius-xl);box-shadow:var(--elev-2)">Hello<span></span></div>`
 
@@ -608,7 +665,7 @@ await checkAsync("token controls are named and keep focus across their write", a
       assert.ok(right.querySelector(`[aria-label="${label}"]`), `${label} is missing`)
     }
     // Picking a token is one gesture, so it must not cost the row you were on:
-    // every commit rebuilds the whole panel, and a select that loses focus makes
+    // every commit rebuilds the whole panel, and a field that loses focus makes
     // walking a column of token rows by keyboard impossible.
     const before = right.querySelector('[data-de-field="design-system.corner-radius"]')
     await pick(harness, "corner-radius", "radius:radius-sm")
@@ -616,7 +673,7 @@ await checkAsync("token controls are named and keep focus across their write", a
     const after = right.querySelector('[data-de-field="design-system.corner-radius"]')
     assert.notEqual(after, before, "the inspector did not rebuild")
     assert.equal(window.document.activeElement, after)
-    assert.equal(after.value, "radius:radius-sm", "the row does not read back as bound")
+    assert.equal(after.textContent, "radius/sm", "the row does not read back as bound")
     assert.match(target.style.borderRadius, /var\(--radius-sm\)/)
     assert.ok(pending.length > 0, "token pick did not queue a source operation")
   })
@@ -698,55 +755,44 @@ await checkAsync("Tailwind's registered ring initial is not mistaken for a ring"
   })
 })
 
-await checkAsync("a spring that CSS cannot carry says so before the click", async () => {
-  await withInspector(PAINTED_FIXTURE, async ({ right }) => {
-    const select = right.querySelector('[data-de-field="design-system.motion-duration"]')
-    const label = (id) => [...select.options].find((option) => option.value === id)?.label ?? ""
-    assert.match(label("motion:crossfade"), /150ms/)
-    assert.match(label("motion:lively"), /not writable/)
+await checkAsync("a spring that cannot arrive intact says so before the click", async () => {
+  await withInspector(PAINTED_FIXTURE, async (harness) => {
+    const { right } = harness
+    const { popover } = open(harness, "motion-duration")
+    const disabled = (id) =>
+      popover.querySelector(`[data-de-choice="${id}"]`)?.getAttribute("aria-disabled") ?? "false"
+    assert.equal(disabled("motion:crossfade"), "false")
+    assert.equal(disabled("motion:lively"), "true", "a bouncing spring reads as pickable")
 
     // The toast fires after the click, which is one spring too late: the row
     // itself has to name the seven that cannot land and why.
-    const hints = [...select.parentElement.querySelectorAll(".de-hint")].map((node) => node.textContent)
-    assert.equal(hints.length, 2, "the motion row lost its unwritable-token hint")
-    assert.match(hints[1], /bounce/)
-    assert.match(hints[1], /lively/)
+    const field = right.querySelector('[data-de-field="design-system.motion-duration"]')
+    const hints = [...field.parentElement.querySelectorAll(".de-hint")].map((node) => node.textContent)
+    assert.equal(hints.length, 1, "the motion row lost its unavailable-token hint")
+    assert.match(hints[0], /bounce/)
+    assert.match(hints[0], /lively/)
   })
 })
 
-await checkAsync("scoped aliases render as uncertain instead of selected bindings", async () => {
-  const cases = [
-    {
-      markup: `<div id="target" class="bg-sidebar"></div>`,
-      candidates: ["Background/Chrome"],
-    },
-    {
-      markup: `<div id="target" style="background-color:var(--workspace-theme-chrome)"></div>`,
-      candidates: ["Background/Chrome"],
-    },
-    {
-      markup: `<div id="target" class="bg-sidebar-accent"></div>`,
-      candidates: ["Background/Canvas", "Background/Primary hover"],
-    },
+await checkAsync("a scoped alias reads as the element's own value, not as a binding", async () => {
+  const markups = [
+    `<div id="target" class="bg-sidebar"></div>`,
+    `<div id="target" style="background-color:var(--workspace-theme-chrome)"></div>`,
+    `<div id="target" class="bg-sidebar-accent"></div>`,
   ]
-  for (const testCase of cases) {
-    await withInspector(testCase.markup, async ({ right }) => {
-      const select = right.querySelector('[data-de-field="design-system.fill-color"]')
-      assert.equal(select.value, "", "an ambiguous alias was selected as a binding")
-      const text = select.closest(".de-stack").textContent
-      assert.match(text, /Uncertain/)
-      assert.match(text, /theme or scope/)
-      for (const candidate of testCase.candidates) assert.match(text, new RegExp(candidate))
-      assert.ok(!text.includes("Bound:"), "an ambiguous alias was labelled Bound")
+  for (const markup of markups) {
+    await withInspector(markup, async ({ right }) => {
+      // An alias whose meaning moves with the theme is not a binding. The old
+      // row said so in a sentence naming its candidates and its source; the
+      // field says it by not claiming a token at all.
+      const text = fieldText(right, "fill-color")
+      assert.ok(!text.includes("Background/"), `an ambiguous alias was named as bound: ${text}`)
+      assert.ok(!text.includes("var("), "the field printed a custom property")
     })
   }
 
   await withInspector(`<div id="target" class="bg-background"></div>`, async ({ right }) => {
-    const select = right.querySelector('[data-de-field="design-system.fill-color"]')
-    assert.equal(select.value, "color:background-primary")
-    const text = select.closest(".de-stack").textContent
-    assert.match(text, /Bound: Background\/Primary/)
-    assert.ok(!text.includes("Uncertain"), "an exact alias was downgraded to uncertain")
+    assert.equal(fieldText(right, "fill-color"), "Background/Primary")
   })
 })
 
