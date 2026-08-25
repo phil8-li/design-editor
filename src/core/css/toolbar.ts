@@ -62,25 +62,31 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
 /*
  * A pressed text button is a MODE, and a mode has to be legible from across the
  * room — the whole point of the interactive switch is that a click no longer
- * does what the editor trained you to expect. A hover-weight wash would not
- * carry that, so it takes the same filled treatment as the primary action.
+ * does what the editor trained you to expect.
+ *
+ * It does NOT get the filled accent above, though, which is the primary
+ * ACTION's treatment: two identical indigo pills a few pixels apart read as two
+ * things to press, not as one state you are standing in. So the mode is drawn
+ * the other way round — the accent as ink and as a hairline over a wash of
+ * itself — a vocabulary no action in this strip uses. The hairline is an inset
+ * shadow rather than a border because .de-button has none, and a real one would
+ * grow the pill by 2px at the moment it turns on.
  */
 .de-button[aria-pressed="true"] {
-  background: ${t.color.accentSurface};
-  color: ${t.color.onAccent};
+  background: ${t.color.accentSoft};
+  color: ${t.color.accent};
+  box-shadow: inset 0 0 0 1px ${t.color.accent};
   font-weight: ${t.type.weightSection};
 }
-.de-button[aria-pressed="true"]:hover { background: ${t.color.accentSurfaceHover}; }
+/*
+ * Hover thickens the ring rather than stepping the wash. The two accent washes
+ * this file has to choose between are 16% and 18% of the same colour, about two
+ * RGB units apart on the chrome — a rule that changes nothing. The ring is what
+ * carries the state, so the ring is what answers the pointer.
+ */
+.de-button[aria-pressed="true"]:hover { box-shadow: inset 0 0 0 2px ${t.color.accent}; }
 .de-button[disabled] { opacity: 0.4; cursor: default; background: ${t.color.bgRaised}; }
 .de-button:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
-
-.de-toolbar-hint {
-  height: 24px;
-  display: inline-flex; align-items: center;
-  padding: 0 6px;
-  color: ${t.color.textDim};
-  font-size: ${t.type.caption};
-}
 
 /*
  * Tooltips. Always ABOVE the control: this strip is pinned to the bottom of the
@@ -89,6 +95,13 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
  * way out so walking the row does not trail a queue of labels. Not the native
  * \`title\` attribute — that waits about a second and then paints OS chrome,
  * which beside this surface reads as a glitch rather than as an answer.
+ *
+ * Deliberately no \`prefers-reduced-motion\` override. The obvious one,
+ * \`transition: none\`, zeroes transition-property and takes the 400ms delay
+ * down with it, so the population most disturbed by flicker is the one that
+ * gets six labels flashing as the pointer crosses the bar. base.ts already
+ * clamps every duration in the chrome to 0.01ms under that query, which removes
+ * the fade and keeps the wait.
  */
 .de-toolbar [data-de-tip] { position: relative; }
 .de-toolbar [data-de-tip]::after {
@@ -114,8 +127,5 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
 .de-toolbar [data-de-tip]:focus-visible::after {
   opacity: 1;
   transition-delay: 400ms;
-}
-@media (prefers-reduced-motion: reduce) {
-  .de-toolbar [data-de-tip]::after { transition: none; }
 }
 `

@@ -37,12 +37,19 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
   animation: none;
 }
 .de-guide { position: absolute; background: ${t.color.guide}; pointer-events: none; }
+/*
+ * Fixed-dark ink, not white. Both grounds a badge paints on are light — the
+ * accent is a light indigo and the snapping pink is lighter still — so white
+ * numerals measure 1.9:1 and 2.6:1 at 9px on a mark that only ever appears
+ * mid-drag, which is the worst moment to have to squint. color.onAccent is the
+ * ink tokens.ts ships for exactly this pairing: 10.1:1 and 7.1:1.
+ */
 .de-badge {
   position: absolute;
   padding: 0 4px;
   border-radius: ${t.radius.sm};
   background: ${t.color.accentSurface};
-  color: ${t.color.text};
+  color: ${t.color.onAccent};
   font-family: ${t.font.ui};
   font-size: 9px;
   font-variant-numeric: tabular-nums;

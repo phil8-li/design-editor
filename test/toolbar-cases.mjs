@@ -231,6 +231,22 @@ check("every icon-only toolbar button has both a tip and an aria-label", () => {
   }
 })
 
+// The tip is a ::after, and CSS generated content joins name-from-content. On a
+// button that shows no text that is harmless because the aria-label pins the
+// name; on a button that DOES show text, an unpinned name becomes "Undo Undo
+// last canvas change". jsdom computes no accessible name, so this asserts the
+// thing that makes the name correct rather than the name itself.
+check("a tip never leaks into a button's accessible name", () => {
+  const tipped = buttons().filter((button) => button.hasAttribute("data-de-tip"))
+  assert.ok(tipped.length >= 7, "every control in the bar carries a tip")
+  for (const button of tipped) {
+    assert.ok(button.getAttribute("aria-label"), `tip without a label: ${button.outerHTML}`)
+  }
+  for (const text of ["Interactive", "Undo", "Apply to code"]) {
+    assert.equal(byText(text).getAttribute("aria-label"), text)
+  }
+})
+
 check("a tip names the shortcut where the control has one", () => {
   assert.equal(byLabel("Move").getAttribute("data-de-tip"), "Move · V")
   assert.equal(byLabel("Hand (browser scroll)").getAttribute("data-de-tip"), "Hand (browser scroll) · H")
@@ -252,6 +268,14 @@ check("the tip paints above the bar, quietly, and out of the pointer's way", () 
   assert.match(editor.toolbarCss, /transition-delay: 400ms/)
 })
 
+// `transition: none` under the reduced-motion query zeroes transition-property,
+// which takes the delay with it and flashes a label at every button the pointer
+// crosses. base.ts clamps the duration for the whole chrome already, so this
+// file must not restate it.
+check("reduced motion drops the fade without dropping the delay", () => {
+  assert.doesNotMatch(editor.toolbarCss, /@media[^{]*prefers-reduced-motion/)
+})
+
 // ── Interactive mode ───────────────────────────────────────────────────────
 
 console.log("\nInteractive mode")
@@ -271,6 +295,40 @@ check("clicking it toggles both the state and aria-pressed", () => {
   interactive().click()
   assert.equal(context.getState().interactive, false)
   assert.equal(interactive().getAttribute("aria-pressed"), "false")
+})
+
+check("the ON state does not borrow the primary action's fill", () => {
+  const rule = (selector) =>
+    editor.toolbarCss.match(new RegExp(`${selector}\\s*\\{[^}]*\\}`, "s"))?.[0] ?? ""
+  const pressed = rule('\\.de-button\\[aria-pressed="true"\\]')
+  const primary = rule("\\.de-button--primary")
+  assert.ok(pressed, "the pressed rule must exist")
+  assert.ok(primary, "the primary rule must exist")
+  const background = (block) => block.match(/background: ([^;]+);/)?.[1]
+  assert.notEqual(
+    background(pressed),
+    background(primary),
+    "a mode and an action cannot wear the same pill"
+  )
+  // Accent as ink and as a hairline over a wash of itself.
+  assert.match(pressed, /background: color-mix/)
+  assert.match(pressed, /box-shadow: inset 0 0 0 1px/)
+})
+
+check("the mode sits next to the tools it switches off", () => {
+  const groups = Array.from(toolbar.querySelectorAll(".de-toolbar-group"))
+  const owner = interactive().closest(".de-toolbar-group")
+  assert.equal(groups.indexOf(owner), 1, "the mode follows the tool group directly")
+  assert.ok(groups[0].contains(byLabel("Move")))
+})
+
+check("turning it on stands the tool cluster down", () => {
+  context.setInteractive(true)
+  assert.equal(byLabel("Move").disabled, true)
+  assert.equal(byLabel("Hand (browser scroll)").disabled, true)
+  context.setInteractive(false)
+  assert.equal(byLabel("Move").disabled, false)
+  assert.equal(byLabel("Hand (browser scroll)").disabled, false)
 })
 
 /** Returns whether the canvas swallowed the app's click. */

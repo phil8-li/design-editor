@@ -54,6 +54,19 @@ function tip(label: string, shortcut?: string): Record<string, string> {
   return { "data-de-tip": shortcut ? `${label} · ${shortcut}` : label, "aria-label": label }
 }
 
+/**
+ * Hover text for a control that already shows its own label.
+ *
+ * The `aria-label` here is not redundant with the visible text — it PINS it.
+ * CSS generated content joins name-from-content, so a `data-de-tip` alone
+ * leaves the button announced as "Apply to code Write pending visual changes
+ * back to source": the sighted user's hint smuggled into everyone else's name.
+ * An explicit label wins over content and shuts that off.
+ */
+function hint(label: string, detail: string): Record<string, string> {
+  return { "data-de-tip": detail, "aria-label": label }
+}
+
 export function installToolbar(context: EditorContext): void {
   const { slots, bridge } = context
 
@@ -100,7 +113,7 @@ export function installToolbar(context: EditorContext): void {
       class: "de-button",
       type: "button",
       "aria-pressed": "false",
-      "data-de-tip": "Click through to the app",
+      ...hint("Interactive", "Click through to the app"),
       onclick: () => context.setInteractive(!context.getState().interactive),
     },
     ["Interactive"]
@@ -111,7 +124,7 @@ export function installToolbar(context: EditorContext): void {
     {
       class: "de-button de-button--primary",
       type: "button",
-      "data-de-tip": "Write pending visual changes back to source",
+      ...hint("Apply to code", "Write pending visual changes back to source"),
       onclick: () => {
         if (!bridge.store.hasChanges()) {
           context.toast("Nothing to apply — make a change first")
@@ -145,7 +158,7 @@ export function installToolbar(context: EditorContext): void {
     {
       class: "de-button",
       type: "button",
-      "data-de-tip": "Undo last canvas change",
+      ...hint("Undo", "Undo last canvas change"),
       onclick: () => {
         const label = bridge.store.canvasUndo()
         context.toast(label ? `Undo: ${label}` : "Nothing to undo")
@@ -179,10 +192,14 @@ export function installToolbar(context: EditorContext): void {
   ])
 
   // UI3 keeps one slim, stable strip at the bottom. Selection never moves it.
+  //
+  // Interactive sits immediately after the tools it switches off, not out by
+  // the commit path: the mode and the controls it makes inert have to be read
+  // in one glance, or the dimmed tools look broken rather than stood down.
   slots.toolbar.append(
     toolGroup,
-    panelToggles,
     el("div", { class: "de-toolbar-group" }, [interactiveButton]),
+    panelToggles,
     el("div", { class: "de-toolbar-group" }, [undoButton, applyButton])
   )
 
@@ -190,6 +207,12 @@ export function installToolbar(context: EditorContext): void {
     const { tool, interactive } = context.getState()
     for (const [id, button] of toolButtons) {
       button.setAttribute("aria-pressed", String(id === tool))
+      // In interactive mode the canvas is not listening, so a tool decides
+      // nothing. Leaving the pair at full strength would advertise a live
+      // cluster that does nothing when clicked — the disabled state is the
+      // honest one, and it is also what stops the click from flipping
+      // `aria-pressed` on a tool that cannot take effect.
+      button.toggleAttribute("disabled", interactive)
     }
     interactiveButton.setAttribute("aria-pressed", String(interactive))
     undoButton.toggleAttribute("disabled", !bridge.store.canUndo())
