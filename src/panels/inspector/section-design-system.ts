@@ -5,11 +5,12 @@ import {
   plainValue,
   textStyleSignature,
   tokenCssProperty,
+  tokenDetail,
+  tokenDisplayName,
   tokenNameParts,
   tokenPreviewKind,
   tokenStyleWrites,
   tokenSwatchCss,
-  tokenTextPair,
   tokensForProperty,
   type DesignSystemMatch,
   type DesignTokenProperty,
@@ -184,21 +185,42 @@ function valuePreview(spec: RowSpec): TokenPreview {
   return { kind: "none" }
 }
 
-function tokenChoice(spec: RowSpec, token: DesignSystemToken): TokenChoice {
+function tokenChoice(spec: RowSpec, token: DesignSystemToken, writable: boolean): TokenChoice {
   const { group, leaf } = tokenNameParts(token)
   return {
     id: token.id,
     group,
     leaf,
-    name: token.name,
+    name: tokenDisplayName(token),
     preview: tokenPreview(spec, token),
-    detail: spec.property === "text-style" ? tokenTextPair(token) : "",
-    disabled: tokenStyleWrites(spec.property, token).length === 0,
+    detail: tokenDetail(spec.property, token),
+    disabled: !writable,
   }
+}
+
+/**
+ * What the field says when it will not name a token.
+ *
+ * Silence here loses the useful half. A theme-scoped alias and a hand-typed
+ * colour look identical once the field falls back to the element's own value,
+ * and the candidates are exactly what a designer needs to decide which one they
+ * are looking at. Said as a design fact — who decides, or that two tokens agree
+ * — rather than as the evidence trail the old row printed.
+ */
+function uncertaintyHint(matches: DesignSystemMatch[]): string {
+  if (matches.length < 2 && !matches.some((match) => match.ambiguous)) return ""
+  const names = matches.map((match) => tokenDisplayName(match.token)).join(" or ")
+  return matches.some((match) => match.ambiguous)
+    ? `Could be ${names} — the theme decides`
+    : `Could be ${names} — they share this value`
 }
 
 function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
   const tokens = tokensForProperty(spec.property)
+  // One derivation of "can this token be written here": the row that offers it,
+  // the hint that explains it and the commit that performs it all read this map,
+  // so a token can never be pickable and unwritable at the same time.
+  const writes = new Map(tokens.map((token) => [token.id, tokenStyleWrites(spec.property, token)]))
   const matches = matchFor(spec)
   // One exact match is a binding. An alias that changes meaning across theme or
   // scope is not, and neither are two candidates, so the field falls back to the
@@ -208,33 +230,31 @@ function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
     id: `design-system.${spec.property}`,
     title: spec.label,
     selectedId: bound,
-    choices: tokens.map((token) => tokenChoice(spec, token)),
+    choices: tokens.map((token) => tokenChoice(spec, token, (writes.get(token.id) ?? []).length > 0)),
     fallback: {
       preview: valuePreview(spec),
       text: spec.computedValue === "mixed" ? "Mixed" : plainValue(spec.property, spec.computedValue) || "—",
     },
     onCommit: (id) => {
       const token = tokens.find((entry) => entry.id === id)
-      if (!token) return
-      const writes = tokenStyleWrites(spec.property, token)
-      if (!writes.length) {
-        context.editor.toast(`${token.name} cannot be applied here`, "error")
-        return
-      }
-      context.writer.applyStyles(spec.target, writes, `Apply ${token.name}`)
+      const styles = writes.get(id)
+      if (!token || !styles?.length) return
+      context.writer.applyStyles(spec.target, styles, `Apply ${tokenDisplayName(token)}`)
       context.invalidate()
     },
   })
 
-  const inert = tokens.filter((token) => !tokenStyleWrites(spec.property, token).length)
+  const inert = tokens.filter((token) => !(writes.get(token.id) ?? []).length)
+  const uncertain = bound ? "" : uncertaintyHint(matches)
 
   return el("div", { class: "de-stack" }, [
     el("div", { class: "de-layout-group-title" }, [spec.label]),
     field,
+    uncertain ? el("div", { class: "de-hint" }, [uncertain]) : null,
     inert.length
       ? el("div", { class: "de-hint" }, [
           `Unavailable — ${UNWRITABLE_REASON[spec.property] ?? "this element has nothing to carry them"}: ${inert
-            .map((token) => token.name)
+            .map((token) => tokenDisplayName(token))
             .join(", ")}`,
         ])
       : null,

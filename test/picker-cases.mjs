@@ -226,6 +226,28 @@ await checkAsync("a text style row pairs its specimen with its size and leading"
   })
 })
 
+await checkAsync("a measured axis shows the measurement, and its chips differ", async () => {
+  await withInspector(FIXTURE, async (harness) => {
+    const { popover } = open(harness, "corner-radius")
+    // Eight rows called sm…pill with eight identical circles is a worse picker
+    // than the one this replaced: the number IS the decision on this axis.
+    const details = rowsOf(popover).map((row) => row.querySelector(".de-token-row-detail")?.textContent)
+    assert.deepEqual(details, ["8px", "12px", "16px", "20px", "24px", "32px", "36px", "999px"])
+
+    // And the chip is a scale model rather than a clamp, so the silhouettes are
+    // eight silhouettes instead of one circle repeated.
+    const chips = rowsOf(popover).map((row) => row.querySelector(".de-token-swatch--radius").style.borderRadius)
+    assert.equal(new Set(chips).size, 8, `the radius chips collapsed: ${chips.join(", ")}`)
+    assert.equal(chips[7], "8px", "the pill has to reach the cap and read as a pill")
+
+    const gap = open(harness, "gap")
+    assert.equal(
+      gap.popover.querySelector('[data-de-choice="spacing:spacing-lg"] .de-token-row-detail').textContent,
+      "16px"
+    )
+  })
+})
+
 await checkAsync("search filters on the name, case-insensitively", async () => {
   await withInspector(FIXTURE, async (harness) => {
     const { window } = harness
@@ -305,7 +327,7 @@ await checkAsync("arrows move the active row and Enter commits it", async () => 
     const after = field(right, "corner-radius")
     assert.notEqual(after, before, "the inspector did not rebuild")
     assert.equal(window.document.activeElement, after)
-    assert.equal(after.textContent, "radius/2xl")
+    assert.equal(after.textContent, "Radius/2xl")
   })
 })
 
@@ -317,6 +339,73 @@ await checkAsync("Escape closes and hands focus back to the field", async () => 
     assert.equal(window.document.querySelector(".de-token-popover"), null)
     assert.equal(window.document.activeElement, node)
     assert.equal(node.getAttribute("aria-expanded"), "false")
+  })
+})
+
+await checkAsync("the active row is announced, and reads apart from the pointer's", async () => {
+  await withInspector(FIXTURE, async (harness) => {
+    const { window } = harness
+    const { popover } = open(harness, "fill-color")
+    const search = popover.querySelector(".de-token-search-input")
+    // Focus never leaves the search field, so the row the arrows are on has to
+    // be announced from here or a screen reader hears nothing move.
+    const active = () => popover.querySelector('[data-active="true"]')
+    assert.equal(search.getAttribute("aria-activedescendant"), active().id)
+    key(window, search, "ArrowDown")
+    assert.equal(search.getAttribute("aria-activedescendant"), active().id)
+    assert.equal(search.getAttribute("aria-controls"), popover.querySelector(".de-token-list").id)
+
+    // A listbox's children are its options; a header announced as one would be
+    // an option that cannot be chosen.
+    for (const header of popover.querySelectorAll(".de-token-group")) {
+      assert.equal(header.getAttribute("role"), "presentation")
+    }
+
+    const rule = helpers.tokenPickerCss
+    assert.match(rule, /\.de-token-row\[data-active="true"\] \{[^}]*inset 0 0 0 1px/)
+  })
+})
+
+await checkAsync("scrolling the list keeps the list", async () => {
+  await withInspector(FIXTURE, async (harness) => {
+    const { window } = harness
+    const { popover } = open(harness, "fill-color")
+    // Seventy-one colour rows in a 320px scroller: a capture-phase scroll
+    // listener sees its own list's scroll, and closing on it made the one
+    // gesture this surface exists for — browsing the colours — impossible.
+    popover.querySelector(".de-token-list").dispatchEvent(new window.Event("scroll"))
+    assert.ok(window.document.querySelector(".de-token-popover"), "the first wheel tick closed the picker")
+
+    // Anything else moved the field the popover is anchored to.
+    window.dispatchEvent(new window.Event("scroll"))
+    assert.ok(!window.document.querySelector(".de-token-popover"), "an outer scroll left it anchored to nothing")
+  })
+})
+
+await checkAsync("the field closes the picker it opened", async () => {
+  await withInspector(FIXTURE, async (harness) => {
+    const { window } = harness
+    const { node } = open(harness, "fill-color")
+    node.click()
+    assert.equal(window.document.querySelector(".de-token-popover"), null, "the field cannot put it away")
+    node.click()
+    assert.ok(window.document.querySelector(".de-token-popover"), "the field cannot open it again")
+  })
+})
+
+await checkAsync("Home and End belong to the text being typed", async () => {
+  await withInspector(FIXTURE, async (harness) => {
+    const { window } = harness
+    const { popover } = open(harness, "fill-color")
+    const search = popover.querySelector(".de-token-search-input")
+    search.value = "backgrnud"
+    for (const name of ["Home", "End"]) {
+      assert.equal(
+        key(window, search, name),
+        true,
+        `${name} was swallowed while the caret was in the search field`
+      )
+    }
   })
 })
 
@@ -353,36 +442,88 @@ console.log("\nNothing code-shaped on the screen")
  * Value matches and Custom value. A row that regrows any of them fails here
  * rather than in a screenshot six weeks later.
  */
+/**
+ * Utility stems are matched at a word boundary rather than as bare substrings:
+ * `p-` inside `Drop-shadow` is a token name, not a Tailwind class, and a sweep
+ * that fails on the design system's own vocabulary gets deleted rather than fixed.
+ */
 const BANNED = [
-  "var(", "--", "oklch(", "lab(", "color-mix(", "rgb(",
-  "bg-", "text-[", "rounded-", "shadow-[", "gap-", "size-",
-  "Bound", "Value matches", "authored", "Custom value", "token id", ".de-",
+  ["var(", /var\(/],
+  ["--", /--/],
+  ["oklch(", /oklch\(/],
+  ["lab(", /lab\(/],
+  ["color-mix(", /color-mix\(/],
+  ["rgb(", /rgb\(/],
+  ["rgba(", /rgba\(/],
+  ["hsl(", /hsl\(/],
+  ["utility stem", /\b(?:bg|text|rounded|shadow|gap|size|p|px|py|m|mx|my|font|border|ring|outline|duration|ease)-(?:\[|[a-z\d])/],
+  ["Bound", /Bound/],
+  ["Value matches", /Value matches/],
+  ["authored", /authored/],
+  ["Custom value", /Custom value/],
+  ["token id", /token id/],
+  [".de-", /\.de-/],
 ]
 
-await checkAsync("no field, list or hint carries a machine spelling", async () => {
-  await withInspector(FIXTURE, async (harness) => {
-    const { right } = harness
-    const properties = [...right.querySelectorAll('[data-de-field^="design-system."]')].map((node) =>
-      node.getAttribute("data-de-field").replace("design-system.", "")
-    )
-    assert.ok(properties.length >= 6, `only ${properties.length} rows to scan`)
+const offenders = (text) => BANNED.filter(([, pattern]) => pattern.test(text)).map(([label]) => label)
 
-    const read = []
-    for (const property of properties) {
-      read.push(field(right, property).closest(".de-stack").textContent)
-      const { popover } = open(harness, property)
-      read.push(popover.textContent)
-    }
-    const offenders = (text) => BANNED.filter((banned) => text.includes(banned))
-    for (const text of read) {
-      assert.deepEqual(offenders(text), [], `a machine spelling is on the screen: ${text.slice(0, 160)}`)
-    }
-    // A sweep that cannot fail is not a sweep: this is the label the old row
-    // shipped, and it has to come back flagged.
-    assert.deepEqual(offenders("Bound: Background/Primary · bg-background · var(--sem-background-primary)"), [
-      "var(", "--", "bg-", "Bound",
-    ])
-  })
+/**
+ * The row types FIXTURE cannot reach.
+ *
+ * Only the motion axis has inert tokens, so the `Unavailable — …` hint — the
+ * one remaining sentence of prose in this section — never entered the sweep
+ * while the fixture declared no transition. A ring and a shadow are here for
+ * the same reason: a row type that is never rendered is never scanned.
+ */
+const PROSE_FIXTURE = `<div id="target" class="ring-1 bg-sidebar" style="display:flex;gap:16px;transition-duration:0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.2);background-color:rgba(0, 0, 0, 0)">Hi<span></span></div>`
+
+await checkAsync("no field, list or hint carries a machine spelling", async () => {
+  for (const markup of [FIXTURE, PROSE_FIXTURE]) {
+    await withInspector(markup, async (harness) => {
+      const { right } = harness
+      const properties = [...right.querySelectorAll('[data-de-field^="design-system."]')].map((node) =>
+        node.getAttribute("data-de-field").replace("design-system.", "")
+      )
+      assert.ok(properties.length >= 6, `only ${properties.length} rows to scan`)
+      if (markup === PROSE_FIXTURE) {
+        // Named, because the hint this fixture exists for hangs off this row.
+        assert.ok(properties.includes("motion-duration"), "the prose row never rendered")
+        assert.ok(properties.includes("shadow") && properties.includes("ring-color"))
+        const hints = [...right.querySelectorAll(".de-hint")].map((node) => node.textContent)
+        assert.ok(
+          hints.some((text) => text.startsWith("Unavailable — ")),
+          "the sweep still misses the section's only prose"
+        )
+        assert.ok(hints.some((text) => text.startsWith("Could be ")), "the alias hint is not in the sweep")
+      }
+
+      const read = []
+      for (const property of properties) {
+        read.push(field(right, property).closest(".de-stack").textContent)
+        const { popover } = open(harness, property)
+        read.push(popover.textContent)
+      }
+      for (const text of read) {
+        assert.deepEqual(offenders(text), [], `a machine spelling is on the screen: ${text.slice(0, 160)}`)
+      }
+    })
+  }
+})
+
+check("the sweep can still fail", () => {
+  // A sweep that cannot fail is not a sweep: these are the labels the old row
+  // and the old option shipped, and they have to come back flagged.
+  assert.deepEqual(offenders("Bound: Background/Primary · bg-background · var(--sem-background-primary)"), [
+    "var(", "--", "utility stem", "Bound",
+  ])
+  // `rgba(` is not a superset of `rgb(` as a string, which is how the alpha
+  // spelling used to walk past a list that only banned the opaque one.
+  assert.deepEqual(offenders("Custom value: rgba(0, 0, 0, 0) · authored · duration-150"), [
+    "rgba(", "utility stem", "authored", "Custom value",
+  ])
+  assert.deepEqual(offenders("rgb(12 16 20) · hsl(210 8% 20%)"), ["rgb(", "hsl("])
+  // And the design system's own words are not machine spellings.
+  assert.deepEqual(offenders("Drop-shadow · Elevation/2 · Text and Icon/On chrome (weak) · 999px"), [])
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

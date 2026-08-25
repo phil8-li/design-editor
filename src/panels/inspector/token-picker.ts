@@ -52,9 +52,22 @@ export interface TokenFieldOptions {
 const POPOVER_WIDTH = 264
 const EDGE = 8
 const SWATCH = 16
+/**
+ * The chip is a scale model of a box this wide, not a box 16px wide.
+ *
+ * Clamping the radius to half the chip made all eight tokens the same circle:
+ * the smallest radius the system ships is already 8px. Drawing the chip as a
+ * shrunken 96px card keeps the eight silhouettes eight different silhouettes,
+ * and the pill still saturates the cap, so it still reads as a pill.
+ */
+const RADIUS_REFERENCE = 96
 
 /** One picker at a time: opening a second closes the first. */
 let dismiss: ((restoreFocus: boolean) => void) | null = null
+/** Which field that picker belongs to, so its own field can close it again. */
+let openFor: HTMLElement | null = null
+/** Row ids have to be unique in the host document for `aria-activedescendant`. */
+let pickerSeq = 0
 
 /**
  * The leading slot.
@@ -81,9 +94,10 @@ function previewNode(preview: TokenPreview): HTMLElement {
     )
   }
   if (preview.kind === "radius") {
+    const scaled = Math.min((preview.px / RADIUS_REFERENCE) * SWATCH, SWATCH / 2)
     return el("span", {
       class: "de-token-swatch de-token-swatch--radius",
-      style: `border-radius:${Math.min(preview.px, SWATCH / 2)}px`,
+      style: `border-radius:${Math.round(scaled * 100) / 100}px`,
     })
   }
   return el("span", { class: "de-token-swatch" })
@@ -121,18 +135,32 @@ export function tokenField(options: TokenFieldOptions): HTMLElement {
       ),
     ]
   )
-  field.addEventListener("click", () => openPicker(field, options))
+  // The gesture that opened it closes it. Without this the field is the one
+  // control on the panel with no way to put away what it put on the screen:
+  // the outside-pointerdown handler exempts its own field on purpose.
+  field.addEventListener("click", () => {
+    if (openFor === field) dismiss?.(true)
+    else openPicker(field, options)
+  })
   return field
 }
 
 function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
   dismiss?.(false)
 
-  const list = el("div", { class: "de-token-list", role: "listbox", "aria-label": options.title })
+  const listId = `de-token-list-${(pickerSeq += 1)}`
+  const list = el("div", { class: "de-token-list", id: listId, role: "listbox", "aria-label": options.title })
+  // A combobox rather than a bare input: focus stays here while the arrows walk
+  // the list, so the active row has to be announced from here or a screen
+  // reader hears nothing move.
   const search = el("input", {
     class: "de-token-search-input",
     type: "text",
     placeholder: "Search",
+    role: "combobox",
+    "aria-expanded": "true",
+    "aria-autocomplete": "list",
+    "aria-controls": listId,
     "aria-label": `Search ${options.title}`,
   }) as HTMLInputElement
   // No `+` beside the close: Figma's picker creates a style there, and this one
@@ -158,10 +186,12 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
   const setActive = (next: number) => {
     if (!rows.length) {
       active = -1
+      search.removeAttribute("aria-activedescendant")
       return
     }
     active = (next + rows.length) % rows.length
     for (const [index, row] of rows.entries()) row.setAttribute("data-active", String(index === active))
+    search.setAttribute("aria-activedescendant", rows[active].id)
     // jsdom has no scroller, and neither does a list short enough to fit.
     rows[active].scrollIntoView?.({ block: "nearest" })
   }
@@ -169,6 +199,7 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
   const close = (restoreFocus: boolean) => {
     if (dismiss !== close) return
     dismiss = null
+    openFor = null
     window.removeEventListener("pointerdown", onPointerDown, true)
     window.removeEventListener("keydown", onKeyDown, true)
     window.removeEventListener("scroll", onScroll, true)
@@ -186,7 +217,7 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
     options.onCommit(choice.id)
   }
 
-  const rowNode = (choice: TokenChoice): HTMLElement => {
+  const rowNode = (choice: TokenChoice, index: number): HTMLElement => {
     const chosen = choice.id === options.selectedId
     const row = el(
       "button",
@@ -194,6 +225,7 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
         class: "de-token-row",
         type: "button",
         role: "option",
+        id: `${listId}-${index}`,
         tabindex: "-1",
         "aria-selected": String(chosen),
         "aria-disabled": choice.disabled ? "true" : undefined,
@@ -219,9 +251,11 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
     clear(list)
     rows = []
     for (const [group, entries] of groups) {
-      list.append(el("div", { class: "de-token-group" }, [group]))
+      // Presentational: a listbox's children are its options, and a header
+      // announced as one would be an option that cannot be chosen.
+      list.append(el("div", { class: "de-token-group", role: "presentation" }, [group]))
       for (const entry of entries) {
-        const row = rowNode(entry)
+        const row = rowNode(entry, rows.length)
         rows.push(row)
         list.append(row)
       }
@@ -234,13 +268,26 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
   const onPointerDown = (event: Event) => {
     if (!popover.contains(event.target as Node) && !field.contains(event.target as Node)) close(false)
   }
-  const onScroll = () => close(false)
+  /**
+   * The popover is anchored to a field that scrolls with the panel, so a scroll
+   * anywhere else leaves it pointing at nothing. Its OWN list is the exception,
+   * and the important one: capture-phase listeners see scrolls targeted at any
+   * descendant, so the unfiltered version closed the picker on the first wheel
+   * tick over seventy-one colour rows — the gesture this surface exists for.
+   */
+  const onScroll = (event: Event) => {
+    // `instanceof Node` because a document- or window-level scroll targets
+    // neither, and `contains` throws rather than answering false for those.
+    if (event.target instanceof Node && popover.contains(event.target)) return
+    close(false)
+  }
+  // No Home/End: while the caret is in the search field those keys belong to
+  // the text a designer is typing, and taking them costs more than the two rows
+  // of travel they save in a list the arrows already walk.
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") close(true)
     else if (event.key === "ArrowDown") setActive(active + 1)
     else if (event.key === "ArrowUp") setActive(active - 1)
-    else if (event.key === "Home") setActive(0)
-    else if (event.key === "End") setActive(rows.length - 1)
     else if (event.key === "Enter" && visible[active]) commit(visible[active])
     else return
     event.preventDefault()
@@ -255,6 +302,7 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
   render("")
   place(field, popover)
   dismiss = close
+  openFor = field
   window.addEventListener("pointerdown", onPointerDown, true)
   window.addEventListener("keydown", onKeyDown, true)
   window.addEventListener("scroll", onScroll, true)

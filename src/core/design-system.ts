@@ -113,6 +113,29 @@ const CATEGORY_GROUP: Record<string, string> = {
 }
 
 /**
+ * One register for the headers.
+ *
+ * The catalog's own paths are mixed: `Background/…` and `Text and Icon/…` are
+ * written for people, while `radius/…`, `spacing/…` and `workspace/…` are
+ * written for a stylesheet. Left alone the fill list opens with a `workspace`
+ * header over a `Page` row, three lines above `Background` — which reads as two
+ * different systems rather than one.
+ */
+function humanGroup(prefix: string): string {
+  return prefix.charAt(0).toUpperCase() + prefix.slice(1)
+}
+
+/**
+ * The motion collection stores its leaves as identifiers — `fullScreen`,
+ * `sinkInRecede` — so the camel humps become spaces. Case is otherwise left
+ * exactly as authored: `2xl` and `sm` are the design system's own spellings,
+ * and title-casing them into `2xl`/`Sm` would be an invention, not a fix.
+ */
+function humanLeaf(leaf: string): string {
+  return leaf.replace(/([a-z\d])([A-Z])/g, (_, before: string, upper: string) => `${before} ${upper.toLowerCase()}`)
+}
+
+/**
  * A token name split into the group it lists under and the leaf a row shows.
  *
  * This split is why the old picker read long: every line repeated the path, so
@@ -122,8 +145,20 @@ const CATEGORY_GROUP: Record<string, string> = {
  */
 export function tokenNameParts(token: DesignSystemToken): { group: string; leaf: string } {
   const cut = token.name.lastIndexOf("/")
-  if (cut < 0) return { group: CATEGORY_GROUP[token.category] ?? "Tokens", leaf: token.name }
-  return { group: token.name.slice(0, cut), leaf: token.name.slice(cut + 1) }
+  if (cut < 0) return { group: CATEGORY_GROUP[token.category] ?? "Tokens", leaf: humanLeaf(token.name) }
+  return { group: humanGroup(token.name.slice(0, cut)), leaf: humanLeaf(token.name.slice(cut + 1)) }
+}
+
+/**
+ * What the closed field calls a token: the same two parts the list shows, back
+ * together, so the row a designer picked and the field it lands in read alike.
+ * A token with no path of its own keeps its bare leaf — the group in that case
+ * is a category label this module invented, and printing `Icon/action` would
+ * put a path on a token the design system never gave one.
+ */
+export function tokenDisplayName(token: DesignSystemToken): string {
+  const { group, leaf } = tokenNameParts(token)
+  return token.name.includes("/") ? `${group}/${leaf}` : leaf
 }
 
 /**
@@ -150,6 +185,33 @@ export function tokenTextPair(token: DesignSystemToken): string {
   return fontSize === null || lineHeight === null ? "" : `${fontSize}/${lineHeight}`
 }
 
+/**
+ * The compact design fact a row carries beside its name, or "" when it has none.
+ *
+ * A picker of eight radii called sm…pill, all previewed as the same chip, tells
+ * a designer nothing the old option labels did not — the number IS the design
+ * decision on every axis that is a measurement, and it is short enough to sit
+ * in a right-aligned column without crowding the name. Colours and effects say
+ * nothing here on purpose: the swatch already carries the whole fact, and a hex
+ * on seventy-one rows is noise rather than information.
+ */
+export function tokenDetail(property: DesignTokenProperty, token: DesignSystemToken): string {
+  if (property === "text-style") return tokenTextPair(token)
+  const category = PROPERTY_CATEGORY[property]
+  if (category === "radii" || category === "spacing" || category === "icons") {
+    const px = scalar(token.values.default)
+    return px === null ? "" : `${px}px`
+  }
+  if (category === "motion") {
+    // The spring's own visual duration, including the seven that bounce: they
+    // cannot be written as a `transition-duration`, but how long they take is
+    // still what a designer is choosing between.
+    const curve = spring(token)
+    return curve ? `${Math.round(curve.visualDuration * 1000)}ms` : ""
+  }
+  return ""
+}
+
 /** Which of the picker's three previews an axis can draw. */
 export function tokenPreviewKind(
   property: DesignTokenProperty
@@ -162,11 +224,32 @@ export function tokenPreviewKind(
 }
 
 const HEX = /^#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i
-const RGB = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i
+const RGB = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+%?))?/i
 const DURATION = /^([\d.]+)(ms|s)$/
 
 function hexChannel(channel: string): string {
   return Math.max(0, Math.min(255, Math.round(Number(channel)))).toString(16).padStart(2, "0")
+}
+
+function alphaValue(raw: string): number {
+  const parsed = Number.parseFloat(raw)
+  if (!Number.isFinite(parsed)) return 1
+  return raw.trim().endsWith("%") ? parsed / 100 : parsed
+}
+
+/**
+ * A colour and, when it is not solid, how much of it there is.
+ *
+ * Dropping the fourth channel is a lie a swatch cannot correct: an element with
+ * no background computes to `rgba(0, 0, 0, 0)`, and printing `#000000` beside
+ * an empty chip states a design fact — this box is black — that is false. Every
+ * scrim, wash and hover overlay had the same problem, reading as its opaque
+ * base. Nothing at all is the honest answer for transparent; a percentage is
+ * the honest answer for the rest, and it is how a designer says it out loud.
+ */
+function withOpacity(hex: string, alpha: number): string {
+  if (alpha <= 0) return ""
+  return alpha >= 1 ? hex : `${hex} ${Math.round(alpha * 100)}%`
 }
 
 /**
@@ -191,12 +274,16 @@ export function plainValue(property: DesignTokenProperty, value: string): string
       // One casing, so the same colour never reads as two different values on
       // two rows just because two authors typed it differently.
       const digits = raw.slice(1).toLowerCase()
-      return digits.length === 3
-        ? `#${[...digits].map((digit) => digit + digit).join("")}`
-        : `#${digits.slice(0, 6)}`
+      const expanded = digits.length === 3 ? [...digits].map((digit) => digit + digit).join("") : digits
+      const alpha = expanded.length === 8 ? Number.parseInt(expanded.slice(6, 8), 16) / 255 : 1
+      return withOpacity(`#${expanded.slice(0, 6)}`, alpha)
     }
     const channels = RGB.exec(raw)
-    return channels ? `#${channels.slice(1, 4).map(hexChannel).join("")}` : ""
+    if (!channels) return ""
+    return withOpacity(
+      `#${channels.slice(1, 4).map(hexChannel).join("")}`,
+      channels[4] === undefined ? 1 : alphaValue(channels[4])
+    )
   }
   if (category === "radii" || category === "spacing" || category === "icons") {
     const px = scalar(raw)
