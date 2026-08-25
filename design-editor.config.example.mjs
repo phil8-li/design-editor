@@ -38,6 +38,38 @@ const config = {
     manifest: null, // e.g. "docs/design-tokens.json"
     cssSources: [], // e.g. ["app/globals.css"]
 
+    // A token group your system does not have is simply omitted from the
+    // manifest — no motion tokens, no text styles, no radius scale. The axis
+    // resolves empty and the inspector drops its row. Only a group that is
+    // PRESENT and the wrong shape is an error.
+
+    // For a system that is not a manifest at all: tokens in a TypeScript
+    // module, a Style Dictionary build, a CMS. Return the same token groups
+    // the manifest path produces — `colors`, `spacing`, `radii`, `textStyles`,
+    // `uiTextStyles`, `effects`, `icons`, `motion` — and everything downstream
+    // is identical. Takes `{ projectRoot }`. Mutually exclusive with `manifest`.
+    adapter: null,
+    // adapter: () => ({
+    //   name: "Lattice",
+    //   colors: Object.entries(palette).map(([name, light]) => ({
+    //     id: `color:${name}`, name, category: "color",
+    //     cssVar: `--lattice-${name}`, values: { light },
+    //   })),
+    // }),
+
+    // Tailwind v3 keeps its scale in a config file rather than in a
+    // stylesheet, so a v3 host has no `@theme` custom property to trace and
+    // would otherwise resolve no Tailwind aliases at all. Either key feeds the
+    // v3 path; a scale entry may be a `var()` or a literal, and a literal is
+    // matched against the token's own value.
+    tailwindConfig: null, // e.g. "tailwind.config.js"
+    tailwindTheme: null, // or declare it: { color: { ink: "var(--ink)" } }
+
+    // "em" or "px" — the unit your text styles state letter-spacing in.
+    // Declared, because the number cannot say: -0.5 is a plausible em and a
+    // plausible px. A manifest may carry its own `trackingUnit`; this wins.
+    trackingUnit: null,
+
     // Optional prose for the breakpoints your design system actually
     // documents. The pixel value stays in `tailwind.breakpoints`, its one
     // owner, and this only says what crossing the step MEANS. A prefix you
@@ -135,6 +167,15 @@ const config = {
     // Container-query names use a separate scale. Leave empty when the host
     // does not compile container variants.
     containerBreakpoints: {}, // e.g. { md: 448, lg: 512, xl: 576 }
+
+    // The `@theme` namespaces a v4 host actually declares, which is how the
+    // editor knows `--color-panel` is a colour and `--radius-panel` a radius.
+    // The default covers Tailwind's own four. Extend it for a namespace your
+    // app compiles — "drop-shadow", "font", "ease" — and note that a longer
+    // name wins over a shorter prefix, so listing "text-shadow" keeps
+    // `--text-shadow-lift` out of the typography axis. Ignored on v3, which
+    // has no theme block; see `designSystem.tailwindConfig`.
+    themeNamespaces: ["color", "radius", "text", "shadow"],
 
     // Your own colour stems, ADDED to Tailwind's palette and the shadcn
     // semantic tokens. A stem listed here is written as `bg-brand-500`; a

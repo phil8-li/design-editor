@@ -76,8 +76,15 @@ export interface ResponsiveMeasure {
   owner: string
 }
 
+/**
+ * The unit a host states letter-spacing in. Declared by the host, because the
+ * number alone cannot say: `-0.5` is a plausible em and a plausible px.
+ */
+export type TrackingUnit = "em" | "px"
+
 export interface DesignSystemCatalog {
   name: string | null
+  trackingUnit: TrackingUnit
   colors: DesignSystemToken[]
   spacing: DesignSystemToken[]
   radii: DesignSystemToken[]
@@ -142,6 +149,7 @@ function emptyDesignSystem(
 ): DesignSystemCatalog {
   return {
     name: null,
+    trackingUnit: "em",
     colors: [],
     spacing: [],
     radii: [],
@@ -217,6 +225,7 @@ function readDesignSystem(
   const aliases = isRecord(value.aliases) ? value.aliases : {}
   return {
     name: typeof value.name === "string" ? value.name : null,
+    trackingUnit: value.trackingUnit === "px" ? "px" : "em",
     colors: configuredList(value.colors, fallback.colors),
     spacing: configuredList(value.spacing, fallback.spacing),
     radii: configuredList(value.radii, fallback.radii),

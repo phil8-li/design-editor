@@ -22,6 +22,21 @@ function expectArray(value, label) {
   return value
 }
 
+/**
+ * An axis a host simply does not have.
+ *
+ * Absence and malformation are different answers and only one of them is an
+ * error. Figma opens a file with no text styles; it refuses a file whose text
+ * styles are a number. An omitted group degrades to an empty axis — the
+ * inspector already drops a row whose category is empty — while a group that is
+ * PRESENT and the wrong shape still throws, because that is a host mistake the
+ * silence would hide.
+ */
+function optionalArray(value, label) {
+  if (value === undefined || value === null) return []
+  return expectArray(value, label)
+}
+
 function expectString(value, label) {
   if (typeof value !== "string" || !value.trim()) manifestError(label, "must be a non-empty string")
   return value
@@ -49,13 +64,22 @@ function tokenScope(value, label) {
 }
 
 function textStyleCssVars(style) {
-  const prefix = expectCustomProperty(style.cssPrefix, `${style.name}.cssPrefix`)
-  const vars = {
-    fontSize: `${prefix}-size`,
-    lineHeight: `${prefix}-leading`,
-    fontWeight: `${prefix}-weight`,
-    letterSpacing: `${prefix}-tracking`,
-  }
+  // A host whose text styles are plain numbers — no custom-property family
+  // behind them — is a design system, not a broken manifest. With no prefix the
+  // style carries no variables and `tokenStyleWrites` falls back to writing the
+  // literal size, leading, weight and tracking it does have.
+  const prefix =
+    style.cssPrefix === undefined || style.cssPrefix === null
+      ? null
+      : expectCustomProperty(style.cssPrefix, `${style.name}.cssPrefix`)
+  const vars = prefix
+    ? {
+        fontSize: `${prefix}-size`,
+        lineHeight: `${prefix}-leading`,
+        fontWeight: `${prefix}-weight`,
+        letterSpacing: `${prefix}-tracking`,
+      }
+    : {}
   if (typeof style.cssUtility === "string" && style.cssUtility.startsWith("text-")) {
     const utility = `--text-${style.cssUtility.slice(5)}`
     Object.assign(vars, {
@@ -69,25 +93,46 @@ function textStyleCssVars(style) {
 }
 
 function uiTextStyleCssVars(style) {
+  // Same tolerance as the authored family above: a UI text style is normally
+  // named by a Tailwind `text-*` utility, but a host that ships bare numbers
+  // gets an empty variable set rather than a refused manifest.
+  if (style.cssUtility === undefined || style.cssUtility === null) return {}
   const utility = expectString(style.cssUtility, `${style.name}.cssUtility`)
-  if (!utility.startsWith("text-")) manifestError(`${style.name}.cssUtility`, "must start with text-")
+  if (!utility.startsWith("text-")) return {}
   const base = `--text-${utility.slice(5)}`
   return { fontSize: base, lineHeight: `${base}--line-height`, letterSpacing: `${base}--letter-spacing` }
 }
 
-export function normalizeDesignSystemManifest(manifest) {
+/**
+ * The unit a manifest states its letter-spacing in.
+ *
+ * Declared, never guessed. `em` and `px` are both ordinary spellings of
+ * tracking, and the numbers overlap — `-0.5px` and `-0.5em` are both plausible
+ * — so any rule that reads the unit off the magnitude is a rule that is right
+ * for one host by accident.
+ */
+export const TRACKING_UNITS = ["em", "px"]
+export const DEFAULT_TRACKING_UNIT = "em"
+
+export function normalizeTrackingUnit(value, label = "designSystem.trackingUnit") {
+  if (value === undefined || value === null) return DEFAULT_TRACKING_UNIT
+  if (!TRACKING_UNITS.includes(value)) manifestError(label, `must be one of ${TRACKING_UNITS.join(", ")}`)
+  return value
+}
+
+export function normalizeDesignSystemManifest(manifest, { trackingUnit } = {}) {
   expectObject(manifest, "root")
   const collections = new Map()
-  for (const [index, raw] of expectArray(manifest.collections, "collections").entries()) {
+  for (const [index, raw] of optionalArray(manifest.collections, "collections").entries()) {
     const collection = expectObject(raw, `collections[${index}]`)
     const name = expectString(collection.name, `collections[${index}].name`)
     if (collections.has(name)) manifestError("collections", `contains duplicate ${name}`)
     collections.set(name, expectArray(collection.tokens, `${name}.tokens`))
   }
-  const collection = (name) => {
-    if (!collections.has(name)) manifestError("collections", `is missing ${name}`)
-    return collections.get(name)
-  }
+  // A collection the host does not ship is an empty axis, not a refusal. The
+  // inspector drops a row whose category has no tokens, so a system with no
+  // radius scale simply has no radius row.
+  const collection = (name) => collections.get(name) ?? []
   const named = (raw, label) => {
     const value = expectObject(raw, label)
     return { value, name: expectString(value.name, `${label}.name`) }
@@ -101,9 +146,14 @@ export function normalizeDesignSystemManifest(manifest) {
       category: "color",
       cssVar: expectCustomProperty(value.cssVar, `Color.tokens[${index}].cssVar`),
       scope: tokenScope(value.scope, `Color.tokens[${index}].scope`),
+      // A single-theme system is a system. `dark` appears only when the host
+      // authored one, so a light-only palette does not have to invent a second
+      // value the designer never chose.
       values: {
         light: expectString(value.light, `Color.tokens[${index}].light`),
-        dark: expectString(value.dark, `Color.tokens[${index}].dark`),
+        ...(value.dark === undefined || value.dark === null
+          ? {}
+          : { dark: expectString(value.dark, `Color.tokens[${index}].dark`) }),
       },
       codeSyntax: isPlainObject(value.$codeSyntax) ? value.$codeSyntax : null,
     }
@@ -141,7 +191,7 @@ export function normalizeDesignSystemManifest(manifest) {
     }
   }
 
-  const effects = expectArray(manifest.effectStyles, "effectStyles").map((raw, index) => {
+  const effects = optionalArray(manifest.effectStyles, "effectStyles").map((raw, index) => {
     const label = `effectStyles[${index}]`
     const { value, name } = named(raw, label)
     const layers = expectArray(value.layers, `${label}.layers`).map((rawLayer, layerIndex) => {
@@ -164,7 +214,7 @@ export function normalizeDesignSystemManifest(manifest) {
     }
   })
 
-  const icons = expectArray(manifest.iconScale, "iconScale").map((raw, index) => {
+  const icons = optionalArray(manifest.iconScale, "iconScale").map((raw, index) => {
     const label = `iconScale[${index}]`
     const { value, name } = named(raw, label)
     return {
@@ -176,7 +226,7 @@ export function normalizeDesignSystemManifest(manifest) {
     }
   })
 
-  const motion = expectArray(manifest.motion, "motion").map((raw, index) => {
+  const motion = optionalArray(manifest.motion, "motion").map((raw, index) => {
     const label = `motion[${index}]`
     const { value, name } = named(raw, label)
     return {
@@ -192,11 +242,14 @@ export function normalizeDesignSystemManifest(manifest) {
 
   const catalog = {
     name: typeof manifest.name === "string" ? manifest.name : "Design system",
+    // Config wins over the manifest so a host can correct a file it does not
+    // own; both are declarations, and neither is inferred from the numbers.
+    trackingUnit: normalizeTrackingUnit(trackingUnit ?? manifest.trackingUnit, "trackingUnit"),
     colors,
     spacing: scalarTokens("Spacing", "spacing"),
     radii: scalarTokens("Radius", "radius"),
-    textStyles: expectArray(manifest.textStyles, "textStyles").map((raw, index) => normalizeTextStyle(raw, index)),
-    uiTextStyles: expectArray(manifest.uiTextStyles, "uiTextStyles").map((raw, index) => normalizeTextStyle(raw, index, true)),
+    textStyles: optionalArray(manifest.textStyles, "textStyles").map((raw, index) => normalizeTextStyle(raw, index)),
+    uiTextStyles: optionalArray(manifest.uiTextStyles, "uiTextStyles").map((raw, index) => normalizeTextStyle(raw, index, true)),
     effects,
     icons,
     motion,
@@ -280,10 +333,11 @@ export function normalizeContainerBreakpoints(breakpoints, annotations = {}) {
 
 export function emptyDesignSystemCatalog(
   breakpoints, annotations = {}, containerBreakpoints = {}, containerAnnotations = {},
-  responsiveMeasures = []
+  responsiveMeasures = [], trackingUnit = DEFAULT_TRACKING_UNIT
 ) {
   return {
     name: null,
+    trackingUnit,
     colors: [],
     spacing: [],
     radii: [],

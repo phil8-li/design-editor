@@ -16,6 +16,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { DEFAULT_THEME_NAMESPACES } from "./server/design-system-aliases.mjs"
 import {
   DEFAULT_TAILWIND_BREAKPOINTS,
   resolveDesignSystemConfig,
@@ -94,10 +95,24 @@ export const DEFAULT_CONFIG = {
   icons: { attribute: "", data: null },
   designSystem: {
     manifest: null,
+    // A host whose tokens are not a Figma-style manifest: a function (or an
+    // object) returning the same normalized token groups. One escape hatch, not
+    // a plugin system — see server/design-system-config.mjs.
+    adapter: null,
     cssSources: [],
     breakpoints: null,
     containerBreakpoints: null,
     responsiveMeasures: null,
+    // Tailwind v3 keeps its scale in `tailwind.config.js` rather than in a
+    // stylesheet, so a v3 host has no `@theme` custom property to trace and
+    // would otherwise resolve no aliases at all. Either key gives the v3 arm
+    // its input; `tailwindTheme` is the declared form, `tailwindConfig` reads
+    // the host's own file so the scale keeps one owner.
+    tailwindTheme: null,
+    tailwindConfig: null,
+    // "em" or "px" — the unit the manifest states letter-spacing in. Declared,
+    // because a magnitude does not say which one it is.
+    trackingUnit: null,
   },
   controls: { leva: null },
   tailwind: {
@@ -110,6 +125,10 @@ export const DEFAULT_CONFIG = {
     breakpoints: DEFAULT_TAILWIND_BREAKPOINTS,
     containerBreakpoints: {},
     spacedStems: null,
+    // The `@theme` namespaces a v4 host spells its scales with. Tailwind's own
+    // four are the default; a host that renames or extends them says so here
+    // rather than being told what its variables are called.
+    themeNamespaces: [...DEFAULT_THEME_NAMESPACES],
   },
   source: { roots: [], extensions: [".tsx", ".jsx", ".ts", ".js", ".mts", ".mjs"] },
   vendor: { package: "react-rewrite-cli" },
@@ -242,7 +261,8 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
     merged.designSystem,
     projectRoot,
     tailwind.breakpoints,
-    tailwind.containerBreakpoints
+    tailwind.containerBreakpoints,
+    tailwind
   )
 
   const icons = resolveIconSetConfig(merged.icons, projectRoot)

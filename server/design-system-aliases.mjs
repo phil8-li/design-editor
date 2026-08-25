@@ -2,6 +2,17 @@ import { DESIGN_SYSTEM_TOKEN_GROUPS } from "./design-system-manifest.mjs"
 
 /** Trace authored CSS variables and Tailwind theme aliases to canonical tokens. */
 
+/**
+ * The `@theme` namespaces a Tailwind v4 host spells its scales with.
+ *
+ * These four are Tailwind's own, so they are the default rather than this app's
+ * choice — but they ARE a spelling, and a host that renames or extends them
+ * (`--brand-*`, `--elevation-*`) sets `tailwind.themeNamespaces` and keeps its
+ * aliases. Only namespaces the editor has a role for produce a utility; see
+ * `aliasUtility` in src/core/design-system.ts.
+ */
+export const DEFAULT_THEME_NAMESPACES = Object.freeze(["color", "radius", "text", "shadow"])
+
 function cssDeclarations(source) {
   const css = source.replace(/\/\*[\s\S]*?\*\//g, "")
   const declarations = []
@@ -63,9 +74,53 @@ function canonicalVariables(catalog) {
   return variables
 }
 
-export function aliasesFromCss(catalog, sources) {
+/**
+ * Every literal a token can be recognised by, mapped back to its id.
+ *
+ * A Tailwind v3 host has no `@theme` block and therefore no custom property to
+ * trace — its scale lives in `tailwind.config.js`, where an entry is as often a
+ * bare `#f0f2f5` or `8px` as a `var()`. Without this, a v3 host resolves ZERO
+ * aliases and the inspector can never say "this is `bg-canvas`".
+ */
+function canonicalLiterals(catalog) {
+  const literals = new Map()
+  const add = (value, id) => {
+    if (value === null || value === undefined || value === "") return
+    const key = String(value).trim().toLowerCase()
+    const ids = literals.get(key) ?? new Set()
+    ids.add(id)
+    literals.set(key, ids)
+  }
+  for (const group of DESIGN_SYSTEM_TOKEN_GROUPS) {
+    for (const token of catalog[group]) {
+      for (const value of Object.values(token.values ?? {})) {
+        if (typeof value === "string") add(value, token.id)
+        if (typeof value === "number") {
+          add(`${value}px`, token.id)
+          add(value, token.id)
+        }
+      }
+    }
+  }
+  return literals
+}
+
+export function aliasesFromCss(
+  catalog,
+  sources,
+  { namespaces = DEFAULT_THEME_NAMESPACES, themeEntries = [] } = {}
+) {
   const declarations = sources.flatMap(cssDeclarations)
   const canonical = canonicalVariables(catalog)
+  // Longest first, so a namespace that contains another as a prefix wins:
+  // `--text-shadow-lift` belongs to `text-shadow`, and reading it as the `text`
+  // scale would file a shadow under the typography axis.
+  const namespacePattern = new RegExp(
+    `^--(${[...namespaces]
+      .sort((a, b) => b.length - a.length || a.localeCompare(b))
+      .map((entry) => entry.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|")})-(.+)$`
+  )
   const definitions = new Map()
   for (const declaration of declarations) {
     const definition = definitions.get(declaration.name) ?? { refs: new Set(), derived: false }
@@ -104,19 +159,45 @@ export function aliasesFromCss(catalog, sources) {
 
   const tailwind = []
   const seen = new Set()
-  for (const declaration of declarations) {
-    if (!declaration.scopes.some((scope) => /^@theme\b/.test(scope))) continue
-    const match = /^--(color|radius|text|shadow)-(.+)$/.exec(declaration.name)
-    if (!match || match[2].includes("--") || seen.has(declaration.name)) continue
-    const result = canonical.has(declaration.name)
-      ? { tokenIds: new Set(canonical.get(declaration.name)), ambiguous: false }
-      : resolve(declaration.name)
+  if (namespaces.length) {
+    for (const declaration of declarations) {
+      if (!declaration.scopes.some((scope) => /^@theme\b/.test(scope))) continue
+      const match = namespacePattern.exec(declaration.name)
+      if (!match || match[2].includes("--") || seen.has(declaration.name)) continue
+      const result = canonical.has(declaration.name)
+        ? { tokenIds: new Set(canonical.get(declaration.name)), ambiguous: false }
+        : resolve(declaration.name)
+      if (result.tokenIds.size === 0) continue
+      seen.add(declaration.name)
+      tailwind.push({
+        namespace: match[1],
+        name: match[2],
+        cssVar: declaration.name,
+        tokenIds: [...result.tokenIds].sort(),
+        ambiguous: result.ambiguous || result.tokenIds.size !== 1,
+      })
+    }
+  }
+
+  // The v3 arm. Same resolver, different door: a theme entry names its
+  // namespace and utility name directly, and its value is either a `var()` this
+  // resolver already follows or a literal the catalog can be recognised by.
+  const literals = themeEntries.length ? canonicalLiterals(catalog) : new Map()
+  for (const entry of themeEntries) {
+    const key = `${entry.namespace}:${entry.name}`
+    if (seen.has(key)) continue
+    const reference = aliasReference(entry.value)
+    const result = reference
+      ? resolve(reference.name)
+      : { tokenIds: literals.get(String(entry.value).trim().toLowerCase()) ?? new Set(), ambiguous: false }
     if (result.tokenIds.size === 0) continue
-    seen.add(declaration.name)
+    seen.add(key)
     tailwind.push({
-      namespace: match[1],
-      name: match[2],
-      cssVar: declaration.name,
+      namespace: entry.namespace,
+      name: entry.name,
+      // v3 has no theme custom property. The variable the entry points at is
+      // the honest answer when there is one, and "" when the entry is a literal.
+      cssVar: reference ? reference.name : "",
       tokenIds: [...result.tokenIds].sort(),
       ambiguous: result.ambiguous || result.tokenIds.size !== 1,
     })
@@ -124,6 +205,13 @@ export function aliasesFromCss(catalog, sources) {
 
   return {
     cssVariables: cssVariables.sort((a, b) => a.name.localeCompare(b.name)),
-    tailwind: tailwind.sort((a, b) => a.cssVar.localeCompare(b.cssVar)),
+    // v3 literal entries share an empty cssVar, so namespace and name break the
+    // tie and the order stays deterministic for a diff and for a test.
+    tailwind: tailwind.sort(
+      (a, b) =>
+        a.cssVar.localeCompare(b.cssVar) ||
+        a.namespace.localeCompare(b.namespace) ||
+        a.name.localeCompare(b.name)
+    ),
   }
 }
