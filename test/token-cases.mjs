@@ -468,12 +468,42 @@ check("a token name splits into the group it lists under and the leaf a row show
     group: "Text and Icon",
     leaf: "On chrome (weak)",
   })
-  assert.deepEqual(parts("radii", "radius/xl"), { group: "radius", leaf: "xl" })
+  // One register for the headers: the catalog writes some prefixes for people
+  // and some for a stylesheet, and a `workspace` header three rows above
+  // `Background` reads as two systems rather than one.
+  assert.deepEqual(parts("radii", "radius/xl"), { group: "Radius", leaf: "xl" })
+  assert.deepEqual(parts("spacing", "spacing/lg"), { group: "Spacing", leaf: "lg" })
+  assert.deepEqual(parts("colors", "workspace/page"), { group: "Workspace", leaf: "page" })
   // A token with no path of its own still needs a header to sit under, or the
   // list opens with a run of ungrouped rows and the grouping reads like a bug.
   assert.deepEqual(parts("icons", "action"), { group: "Icon", leaf: "action" })
   assert.deepEqual(parts("motion", "crossfade"), { group: "Motion", leaf: "crossfade" })
   assert.deepEqual(parts("textStyles", "Display"), { group: "Text", leaf: "Display" })
+  // Identifiers, not names: the motion collection is the one place the catalog
+  // hands over source spellings, and the camel humps are the giveaway.
+  assert.deepEqual(parts("motion", "fullScreen"), { group: "Motion", leaf: "full screen" })
+  assert.deepEqual(parts("motion", "sinkInRecede"), { group: "Motion", leaf: "sink in recede" })
+  // Case is otherwise left as authored: `2xl` is the design system's spelling.
+  assert.equal(helpers.tokenDisplayName(find("radii", "radius/2xl")), "Radius/2xl")
+  assert.equal(helpers.tokenDisplayName(find("motion", "navigationZoom")), "navigation zoom")
+})
+
+check("a token row carries the number that IS the decision", () => {
+  const detail = (property, group, name) => helpers.tokenDetail(property, find(group, name))
+  // Eight radii called sm…pill, previewed as eight chips, are eight rows of no
+  // information without this: the px is the design fact being chosen.
+  assert.equal(detail("corner-radius", "radii", "radius/sm"), "8px")
+  assert.equal(detail("corner-radius", "radii", "radius/pill"), "999px")
+  assert.equal(detail("gap", "spacing", "spacing/lg"), "16px")
+  assert.equal(detail("icon-size", "icons", "action"), "16px")
+  assert.equal(detail("text-style", "textStyles", "Heading/H1"), "36/40")
+  // Including the springs that cannot be written: how long one takes is still
+  // what a designer is choosing between.
+  assert.equal(detail("motion-duration", "motion", "crossfade"), "150ms")
+  assert.equal(detail("motion-duration", "motion", "lively"), "300ms")
+  // The swatch already carries a colour whole; a hex on 71 rows is noise.
+  assert.equal(detail("fill-color", "colors", "Background/Primary"), "")
+  assert.equal(detail("shadow", "effects", "Elevation/1"), "")
 })
 
 check("a text style is spelled as its size and leading, and a swatch paints from the theme", () => {
@@ -489,8 +519,18 @@ check("a text style is spelled as its size and leading, and a swatch paints from
 
 check("a rendered value is spelled plainly or not at all", () => {
   assert.equal(helpers.plainValue("fill-color", "rgb(240, 242, 245)"), "#f0f2f5")
-  assert.equal(helpers.plainValue("fill-color", "rgba(12, 16, 20, 0.5)"), "#0c1014")
   assert.equal(helpers.plainValue("fill-color", "#FFF"), "#ffffff")
+
+  // Alpha is not decoration. An element with no background computes to
+  // `rgba(0, 0, 0, 0)`, and the Fill color row is unconditional — so dropping
+  // the fourth channel put `#000000` beside an empty swatch on nearly every
+  // selection, which is a design fact, and a false one. Same for every scrim
+  // and hover wash, all of which used to read as their opaque base.
+  assert.equal(helpers.plainValue("fill-color", "rgba(0, 0, 0, 0)"), "")
+  assert.equal(helpers.plainValue("fill-color", "rgba(12, 16, 20, 0.5)"), "#0c1014 50%")
+  assert.equal(helpers.plainValue("fill-color", "rgb(12 16 20 / 25%)"), "#0c1014 25%")
+  assert.equal(helpers.plainValue("fill-color", "#0c101480"), "#0c1014 50%")
+  assert.equal(helpers.plainValue("fill-color", "#0c1014ff"), "#0c1014")
   assert.equal(helpers.plainValue("text-style", "16|26|400|-0.32"), "16/26")
   assert.equal(helpers.plainValue("corner-radius", "20px"), "20px")
   assert.equal(helpers.plainValue("motion-duration", "0.15s"), "150ms")
@@ -673,7 +713,7 @@ await checkAsync("token controls are named and keep focus across their write", a
     const after = right.querySelector('[data-de-field="design-system.corner-radius"]')
     assert.notEqual(after, before, "the inspector did not rebuild")
     assert.equal(window.document.activeElement, after)
-    assert.equal(after.textContent, "radius/sm", "the row does not read back as bound")
+    assert.equal(after.textContent, "Radius/sm", "the row does not read back as bound")
     assert.match(target.style.borderRadius, /var\(--radius-sm\)/)
     assert.ok(pending.length > 0, "token pick did not queue a source operation")
   })
@@ -782,17 +822,34 @@ await checkAsync("a scoped alias reads as the element's own value, not as a bind
   ]
   for (const markup of markups) {
     await withInspector(markup, async ({ right }) => {
-      // An alias whose meaning moves with the theme is not a binding. The old
-      // row said so in a sentence naming its candidates and its source; the
-      // field says it by not claiming a token at all.
+      // An alias whose meaning moves with the theme is not a binding. The field
+      // says so by not claiming a token — but silence alone would make a
+      // theme-driven alias and a hand-typed colour look identical, so the
+      // candidates stay, said as a design fact instead of an evidence trail.
       const text = fieldText(right, "fill-color")
       assert.ok(!text.includes("Background/"), `an ambiguous alias was named as bound: ${text}`)
       assert.ok(!text.includes("var("), "the field printed a custom property")
+
+      const field = right.querySelector('[data-de-field="design-system.fill-color"]')
+      const hint = [...field.parentElement.querySelectorAll(".de-hint")].find((node) =>
+        node.textContent.startsWith("Could be ")
+      )
+      assert.ok(hint, `the uncertainty went silent for ${markup}`)
+      assert.match(hint.textContent, /the theme decides$/)
+      assert.match(hint.textContent, /Background\//)
     })
   }
 
   await withInspector(`<div id="target" class="bg-background"></div>`, async ({ right }) => {
     assert.equal(fieldText(right, "fill-color"), "Background/Primary")
+    // A certain binding has nothing to be uncertain about.
+    const field = right.querySelector('[data-de-field="design-system.fill-color"]')
+    assert.equal(
+      [...field.parentElement.querySelectorAll(".de-hint")].filter((node) =>
+        node.textContent.startsWith("Could be ")
+      ).length,
+      0
+    )
   })
 })
 

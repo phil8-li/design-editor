@@ -111,7 +111,16 @@ export const tokenPickerCss = `/* ---------- token field ---------- */
 }
 .de-token-row-detail { flex: none; color: ${t.color.textDim}; font-variant-numeric: tabular-nums; }
 .de-token-row-check { flex: none; display: flex; align-items: center; }
-.de-token-row:hover, .de-token-row[data-active="true"] { background: ${t.color.bgHover}; }
+.de-token-row:hover { background: ${t.color.bgHover}; }
+/*
+ * The keyboard cursor is not the pointer cursor. Given the same wash, the two
+ * are indistinguishable the moment a hand is on each — so the active row keeps
+ * the wash and adds a rule to say which row Enter would actually take.
+ */
+.de-token-row[data-active="true"] {
+  background: ${t.color.bgHover};
+  box-shadow: inset 0 0 0 1px ${t.color.accent};
+}
 /*
  * Full-bleed accent with dark ink. The design system's accent is a LIGHT
  * indigo, so the ink flips instead of the surface darkening — white text here
@@ -119,6 +128,10 @@ export const tokenPickerCss = `/* ---------- token field ---------- */
  */
 .de-token-row[aria-selected="true"] { ${accentFill} }
 .de-token-row[aria-selected="true"] .de-token-row-detail { color: ${t.color.onAccent}; }
+/* An accent rule on the accent is no rule at all, so the ink draws it instead. */
+.de-token-row[aria-selected="true"][data-active="true"] {
+  box-shadow: inset 0 0 0 1px ${t.color.onAccent};
+}
 .de-token-row[aria-disabled="true"] { opacity: 0.4; }
 .de-token-empty { padding: 10px; color: ${t.color.textDim}; font-size: ${t.type.body}; }
 
