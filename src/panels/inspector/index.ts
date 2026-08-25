@@ -22,7 +22,8 @@ import { strokeSection } from "./section-stroke"
 import { effectsSection } from "./section-effects"
 import { typographySection } from "./section-typography"
 import { classesSection } from "./section-classes"
-import { optionsSection } from "../../options/panel"
+import { optionsActionsSection, optionsSection } from "../../options/panel"
+import { openOptionsBrowser } from "../../options/inventory-panel"
 import { aiSection } from "../../ai/panel"
 
 export interface SectionContext {
@@ -56,6 +57,9 @@ const SECTIONS: InspectorSection[] = [
   typographySection,
   classesSection,
   aiSection,
+  // Last, and always drawn: the options actions outlive the options list, which
+  // is absent until the element has one. See `options/panel.ts`.
+  optionsActionsSection,
 ]
 
 interface FocusMemory {
@@ -143,6 +147,12 @@ export function installInspector(editor: EditorContext): void {
     clear(host)
     const selection = editor.primarySelection()
 
+    // Nothing selected is not nothing to do. With no element to scope them to,
+    // the panel cannot show the relevant options — so it offers all of them, in
+    // one press. This calls the browser directly rather than announcing an
+    // intention on `window`: the listener only exists once the browser has been
+    // mounted, and the browser is mounted lazily, so on a cold load the event
+    // went nowhere and the button did nothing.
     if (!selection) {
       host.append(
         el("div", { class: "de-empty" }, [
@@ -153,10 +163,9 @@ export function installInspector(editor: EditorContext): void {
               class: "de-button",
               type: "button",
               style: "margin-top:10px",
-              onclick: () =>
-                window.dispatchEvent(new CustomEvent("design-editor:open-options")),
+              onclick: () => openOptionsBrowser(editor),
             },
-            ["Browse controls and options"]
+            ["Browse all design options"]
           ),
         ])
       )

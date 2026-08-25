@@ -485,7 +485,7 @@ function variantsTab(editor: EditorContext, query: string): HTMLElement {
         needle
           ? `No saved variants match "${query}".`
           : "No saved variants yet. Select an element, restyle it, then press " +
-            "“Save current as option” in the inspector.",
+            "“Save as option” at the foot of the inspector.",
       ]),
     ])
   }
@@ -598,18 +598,12 @@ export function installOptionsBrowser(editor: EditorContext): void {
     body,
   ])
 
-  const launcher = el(
-    "button",
-    {
-      class: "de-opt-launcher",
-      type: "button",
-      "aria-expanded": "false",
-      title: "Browse everything this app can be tuned with",
-    },
-    ["Design options"]
-  )
-
-  const root = el("div", { class: "de-options-root" }, [panel, launcher])
+  // No floating launcher of its own. This surface used to carry a pill pinned to
+  // the corner of the viewport, which made it a second home for a question the
+  // right panel is already the home of — and a permanent scrap of chrome over
+  // the app being edited. It is opened from the inspector now: from the empty
+  // state when nothing is selected, and from the footer when something is.
+  const root = el("div", { class: "de-options-root" }, [panel])
   document.body.append(root)
 
   let returnFocus: HTMLElement | null = null
@@ -619,19 +613,18 @@ export function installOptionsBrowser(editor: EditorContext): void {
       returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     }
     panel.hidden = false
-    launcher.setAttribute("aria-expanded", "true")
     render()
     filter.focus()
   }
   function close(): void {
     panel.hidden = true
-    launcher.setAttribute("aria-expanded", "false")
-    const target = returnFocus?.isConnected ? returnFocus : launcher
+    // Back to whatever opened it. That button is in the inspector and the
+    // inspector does not rebuild on open or close, so it is still there; if a
+    // write moved underneath it, dropping focus beats focusing something else.
+    const target = returnFocus?.isConnected ? returnFocus : null
     returnFocus = null
-    target.focus()
+    target?.focus()
   }
-  launcher.addEventListener("click", () => (panel.hidden ? open() : close()))
-  window.addEventListener("design-editor:open-options", open)
   window.addEventListener(
     "keydown",
     (event) => {

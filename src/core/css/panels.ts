@@ -178,6 +178,19 @@ export const panelsCss = `/* ---------- panels ---------- */
 .de-select:focus { outline: none; border-color: ${t.color.accent}; }
 .de-select option { background: ${t.color.bgRaised}; color: ${t.color.text}; }
 
+/*
+ * The inspector's last row: actions, not properties.
+ *
+ * No border of its own. Every section above closes with a bottom hairline, so
+ * a border-top here would land against that one and read as a 2px rule — the
+ * divider the footer needs is already drawn by whatever sits above it, and the
+ * footer is last, so nothing needs closing below.
+ */
+.de-inspector-footer {
+  padding: 8px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+}
+
 .de-empty {
   padding: 24px 16px;
   color: ${t.color.textDim};

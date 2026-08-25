@@ -21,10 +21,16 @@
  *    finally means something, because there the pointer really does change hands.
  *
  * The two panel toggles STAY here, and this is the one place they live — a
- * disclosure with two homes is a disclosure with two answers. What changed is
- * that they now report themselves: `aria-pressed` tracks the store, and the
- * glyph swaps between an open and a collapsed drawing of the same layout, so the
- * state is legible before the pointer arrives rather than after.
+ * disclosure with two homes is a disclosure with two answers. Each draws ONE
+ * mark, named for what its panel holds rather than for the shape of the panel:
+ * layers on the left, sliders on the right. `aria-pressed` carries the state,
+ * which is all a side panel needs from its button — the panel is on screen or it
+ * is not, and that is a louder report than any 16px drawing.
+ *
+ * Every glyph in the strip is drawn at ONE size, `GLYPH`, and inks the same
+ * share of its grid (see `inkViewBox` in `core/icons.ts`). Two glyphs at the
+ * same nominal size still read a step apart when one of them fills more of its
+ * box, so the size alone was never the whole of "consistent".
  *
  * The remaining tool state is still mirrored into the vendor engine so its
  * selection mode stays in sync with ours — two sources of truth for "what does a
@@ -38,6 +44,15 @@ import { historyAction, isMac, isTextEntry } from "../core/keymap"
 import { copyChangePrompt, previewOnlyChanges } from "../core/change-prompt"
 import { untranslatedProperties } from "../core/writer"
 import type { EditorContext } from "../core/context"
+
+/**
+ * The one size every glyph in this strip is drawn at.
+ *
+ * The mode switch used to draw its arrow at 14 while everything else drew at
+ * 16, on the theory that a glyph beside a word should sit back. Beside a row of
+ * 16s it does not read as deferential, it reads as a different icon set.
+ */
+const GLYPH = 16
 
 /**
  * Hover text for an icon-only control, plus the label everyone else reads.
@@ -77,9 +92,9 @@ function hint(label: string, detail: string): Record<string, string> {
  * sentences and they were being asked to share one string.
  *
  * The glyph is the same arrow twice, filled while the editor holds the pointer
- * and hollow once it has handed it over. Shape, not colour: this pair is read at
- * 14px in the corner of the eye, and a mode told apart by hue alone is not told
- * apart at all.
+ * and hollow once it has handed it over. Shape, not colour: this pair is read
+ * in the corner of the eye at `GLYPH`, and a mode told apart by hue alone is not
+ * told apart at all.
  */
 const MODES = {
   inspecting: {
@@ -116,10 +131,10 @@ export function installToolbar(context: EditorContext): void {
    * one control that spells itself out — and it sits at the far LEFT, first in
    * the strip, because it is the question every other control's answer depends
    * on. An icon alone would have to say "the editor is not intercepting you
-   * now", and no 14px glyph says that; a word alone would drop the arrow this
-   * editor's pointer has always been drawn as. It carries both.
+   * now", and no glyph at this size says that; a word alone would drop the arrow
+   * this editor's pointer has always been drawn as. It carries both.
    */
-  const modeGlyph = el("span", { class: "de-button-glyph" }, [icon(MODES.inspecting.glyph, 14)])
+  const modeGlyph = el("span", { class: "de-button-glyph" }, [icon(MODES.inspecting.glyph, GLYPH)])
   const modeLabel = el("span", {}, [MODES.inspecting.label])
   const interactiveButton = el(
     "button",
@@ -144,7 +159,7 @@ export function installToolbar(context: EditorContext): void {
     interactiveButton.setAttribute("aria-label", mode.label)
     interactiveButton.setAttribute("data-de-tip", mode.detail)
     if (modeLabel.textContent !== mode.label) modeLabel.textContent = mode.label
-    modeGlyph.replaceChildren(icon(mode.glyph, 14))
+    modeGlyph.replaceChildren(icon(mode.glyph, GLYPH))
   }
 
   const applyButton = el(
@@ -242,7 +257,7 @@ export function installToolbar(context: EditorContext): void {
       ...tip("Undo", isMac() ? "⌘Z" : "Ctrl+Z"),
       onclick: () => travel("undo"),
     },
-    [icon("RotateCcw")]
+    [icon("RotateCcw", GLYPH)]
   )
 
   const redoButton = el(
@@ -253,27 +268,31 @@ export function installToolbar(context: EditorContext): void {
       ...tip("Redo", isMac() ? "⇧⌘Z" : "Shift+Ctrl+Z"),
       onclick: () => travel("redo"),
     },
-    [icon("RotateCw")]
+    [icon("RotateCw", GLYPH)]
   )
 
   /**
-   * A panel toggle that draws the state it is in.
+   * A panel toggle that NAMES its panel and lets the panel report itself.
    *
-   * The old pair drew one glyph in both states and left the answer to a pressed
-   * tint, which is a colour-only distinction on a 16px outline — the least
-   * legible signal this strip has. Each toggle now owns two glyphs, an open
-   * layout and a collapsed one, and swaps between them, so the shape carries the
-   * state and the tint is only reinforcement.
+   * It used to own two drawings — an open layout and a collapsed one — and swap
+   * between them, on the reasoning that a pressed tint is a colour-only signal.
+   * True, but the conclusion was wrong: the thing being reported is a whole side
+   * of the screen, and it is either there or it is not. Nobody consults a 16px
+   * rectangle to find out whether the panel they are looking at is open. What
+   * they cannot get from the screen is which panel a button opens, and a picture
+   * of a sliding rectangle does not answer that either — so the mark names the
+   * CONTENTS instead: the layer tree, and the controls.
    *
-   * `aria-pressed` is set from the store here rather than assumed from the last
-   * click: `layersOpen` and `inspectorOpen` are written by the shell too, and a
-   * button that remembered its own clicks would drift the first time anything
-   * else moved the flag.
+   * The name stays put through both states — "Toggle …" is true either way, and
+   * a name that rewrote itself under the pointer would be the second report of a
+   * state `aria-pressed` already carries. `aria-pressed` is read from the store
+   * rather than remembered from the last click, since the shell writes
+   * `layersOpen` and `inspectorOpen` too and a button counting its own clicks
+   * would drift the first time anything else moved the flag.
    */
   const panelToggle = (
     label: string,
-    open: IconName,
-    collapsed: IconName,
+    glyph: IconName,
     read: () => boolean,
     write: (next: boolean) => void
   ) => {
@@ -285,27 +304,21 @@ export function installToolbar(context: EditorContext): void {
         ...tip(label),
         onclick: () => write(!read()),
       },
-      [icon(collapsed)]
+      [icon(glyph, GLYPH)]
     )
-    const paint = () => {
-      const showing = read()
-      button.setAttribute("aria-pressed", String(showing))
-      button.replaceChildren(icon(showing ? open : collapsed))
-    }
+    const paint = () => button.setAttribute("aria-pressed", String(read()))
     return { button, paint }
   }
 
   const layersToggle = panelToggle(
     "Toggle layers panel",
-    "SidebarLeft",
-    "SidebarLeftCollapsed",
+    "Layers",
     () => context.getState().layersOpen,
     (next) => context.setState({ layersOpen: next })
   )
   const inspectorToggle = panelToggle(
     "Toggle inspector",
-    "SidebarRight",
-    "SidebarRightCollapsed",
+    "SlidersHorizontal",
     () => context.getState().inspectorOpen,
     (next) => context.setState({ inspectorOpen: next })
   )

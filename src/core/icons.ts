@@ -22,6 +22,15 @@ export interface IconData {
   nodes: IconNode[]
   rootFill: string
   rootStroke?: string
+  /**
+   * How much of the 24 grid this drawing actually INKS, measured.
+   *
+   * `viewBox` does not answer that and neither does the `size` argument: two
+   * glyphs drawn at 16px read a step apart when one of them fills more of its
+   * box. The host's set is authored to 22 of 24; the geometric glyphs authored
+   * here are 20; side by side in one strip that is a visible step.
+   */
+  ink?: number
 }
 
 const ICONS = {
@@ -49,7 +58,8 @@ const ICONS = {
         }
       ]
     ],
-    "rootFill": "currentColor"
+    "rootFill": "currentColor",
+    "ink": 20
   },
   "CursorOutline": {
     "nodes": [
@@ -61,7 +71,8 @@ const ICONS = {
       ]
     ],
     "rootFill": "none",
-    "rootStroke": "currentColor"
+    "rootStroke": "currentColor",
+    "ink": 20
   },
   "Play": {
     "nodes": [
@@ -78,142 +89,6 @@ const ICONS = {
       ]
     ],
     "rootFill": "currentColor"
-  },
-  /*
-   * The two panel toggles, in the two states each of them has.
-   *
-   * They replace PanelLeft and PanelRight, which were an outlined frame with a
-   * hairline ruled down it. That mark has one shape and no state: the divider
-   * looked the same whether the panel it named was open or shut, so the button
-   * could only report itself in colour — and a `--sidebar-accent` tint on a
-   * 16px outline at the bottom of the screen is not a state anyone reads.
-   *
-   * These are authored as TWO solids instead of one ruled box: a slab for the
-   * panel and a rounded rect for the canvas beside it, with real air between
-   * them. That buys the state for free and buys it in SHAPE. Open, the slab is
-   * 6 wide and the canvas is pushed over to make room. Collapsed, the slab
-   * narrows to a 2.5 sliver against the edge — the panel seen edge-on, still
-   * present, still nameable — and the canvas grows into the space it gave up.
-   * Which is what actually happens on screen, so the glyph is a small picture
-   * of the result rather than a symbol for it.
-   *
-   * All four land on the same 20x20 ink tier as the rest of the strip: the
-   * slabs are filled and measure their own bbox (2..22), the canvas rects are
-   * stroked and measure their bbox plus half of the 2-unit stroke, so they are
-   * inset by 1 on every side they own. Both halves of a pair therefore span
-   * exactly the same box, and the toggle does not change size when it flips.
-   */
-  "SidebarLeft": {
-    "nodes": [
-      [
-        "rect",
-        {
-          "width": "6",
-          "height": "20",
-          "x": "2",
-          "y": "2",
-          "rx": "2",
-          "fill": "currentColor",
-          "stroke": "none"
-        }
-      ],
-      [
-        "rect",
-        {
-          "width": "10",
-          "height": "18",
-          "x": "11",
-          "y": "3",
-          "rx": "2"
-        }
-      ]
-    ],
-    "rootFill": "none",
-    "rootStroke": "currentColor"
-  },
-  "SidebarLeftCollapsed": {
-    "nodes": [
-      [
-        "rect",
-        {
-          "width": "2.5",
-          "height": "20",
-          "x": "2",
-          "y": "2",
-          "rx": "1.25",
-          "fill": "currentColor",
-          "stroke": "none"
-        }
-      ],
-      [
-        "rect",
-        {
-          "width": "13.5",
-          "height": "18",
-          "x": "7.5",
-          "y": "3",
-          "rx": "2"
-        }
-      ]
-    ],
-    "rootFill": "none",
-    "rootStroke": "currentColor"
-  },
-  "SidebarRight": {
-    "nodes": [
-      [
-        "rect",
-        {
-          "width": "10",
-          "height": "18",
-          "x": "3",
-          "y": "3",
-          "rx": "2"
-        }
-      ],
-      [
-        "rect",
-        {
-          "width": "6",
-          "height": "20",
-          "x": "16",
-          "y": "2",
-          "rx": "2",
-          "fill": "currentColor",
-          "stroke": "none"
-        }
-      ]
-    ],
-    "rootFill": "none",
-    "rootStroke": "currentColor"
-  },
-  "SidebarRightCollapsed": {
-    "nodes": [
-      [
-        "rect",
-        {
-          "width": "13.5",
-          "height": "18",
-          "x": "3",
-          "y": "3",
-          "rx": "2"
-        }
-      ],
-      [
-        "rect",
-        {
-          "width": "2.5",
-          "height": "20",
-          "x": "19.5",
-          "y": "2",
-          "rx": "1.25",
-          "fill": "currentColor",
-          "stroke": "none"
-        }
-      ]
-    ],
-    "rootFill": "none",
-    "rootStroke": "currentColor"
   },
   /*
    * Undo and redo, re-solved onto the 20x20 ink tier.
@@ -257,7 +132,8 @@ const ICONS = {
         }
       ]
     ],
-    "rootFill": "currentColor"
+    "rootFill": "currentColor",
+    "ink": 20
   },
   "RotateCw": {
     "nodes": [
@@ -286,7 +162,8 @@ const ICONS = {
         }
       ]
     ],
-    "rootFill": "currentColor"
+    "rootFill": "currentColor",
+    "ink": 20
   },
   "Search": {
     "nodes": [
@@ -369,16 +246,41 @@ const ICONS = {
     ],
     "rootFill": "currentColor"
   },
+  /*
+   * The two panel toggles: layers on the left, sliders on the right.
+   *
+   * They name the panel's CONTENTS rather than its geometry — the left panel is
+   * the layer tree and the right one is the controls — so the mark says what
+   * you get instead of picturing a rectangle sliding in.
+   *
+   * One glyph each, no open/collapsed pair. A side panel reports its own state
+   * by being there; the button carries `aria-pressed` and nothing else.
+   *
+   * `Layers` below is the host's drawing, vendored unaltered, because the
+   * toolbar should read as the same hand as the app. Sliders could not be:
+   * the host's set has no sliders drawing. The glyph its facade exports as
+   * `SlidersHorizontal` is a left-right swap arrow between two rails — measured
+   * from `src/components/icons/instagram-icon-data.json`, and it renders as a
+   * transfer mark, which on a button that opens the property panel says the
+   * wrong thing loudly. So this one is authored here, in the host's idiom:
+   * pure fills, 2-unit bars with fully rounded ends, knobs cut out of the rail
+   * rather than laid over it, and the same 22-of-24 ink the vendored marks use
+   * so all three go through one reduction and land on the family's 20.
+   */
   "SlidersHorizontal": {
     "nodes": [
-      [
-        "path",
-        {
-          "d": "M16.793 16.207a.997.997 0 0 0 1.414 0l3.5-3.5a.999.999 0 0 0 .216-1.089.999.999 0 0 0-.216-.326l-3.5-3.499a1 1 0 1 0-1.414 1.414L18.586 11H5.414l1.793-1.793a1 1 0 1 0-1.414-1.414l-3.5 3.5a1 1 0 0 0-.216 1.089 1 1 0 0 0 .217.326l3.5 3.499a.997.997 0 0 0 1.413 0 1 1 0 0 0 0-1.414L5.414 13h13.172l-1.793 1.793a1 1 0 0 0 0 1.414zM22 18a1 1 0 0 0-1 1c0 1.103-.897 2-2 2H5c-1.102 0-2-.897-2-2a1 1 0 1 0-2 0c0 2.206 1.794 4 4 4h14c2.206 0 4-1.794 4-4a1 1 0 0 0-1-1zM2 6a1 1 0 0 0 1-1c0-1.103.898-2 2-2h14c1.103 0 2 .897 2 2a1 1 0 1 0 2 0c0-2.206-1.794-4-4-4H5C2.794 1 1 2.794 1 5a1 1 0 0 0 1 1z"
-        }
-      ]
+      ["rect", { "x": "1", "y": "2.5", "width": "11", "height": "2", "rx": "1" }],
+      ["rect", { "x": "20", "y": "2.5", "width": "3", "height": "2", "rx": "1" }],
+      ["circle", { "cx": "16", "cy": "3.5", "r": "2.5" }],
+      ["rect", { "x": "1", "y": "11", "width": "3", "height": "2", "rx": "1" }],
+      ["rect", { "x": "12", "y": "11", "width": "11", "height": "2", "rx": "1" }],
+      ["circle", { "cx": "8", "cy": "12", "r": "2.5" }],
+      ["rect", { "x": "1", "y": "19.5", "width": "9.5", "height": "2", "rx": "1" }],
+      ["rect", { "x": "18.5", "y": "19.5", "width": "4.5", "height": "2", "rx": "1" }],
+      ["circle", { "cx": "14.5", "cy": "20.5", "r": "2.5" }]
     ],
-    "rootFill": "currentColor"
+    "rootFill": "currentColor",
+    "ink": 22
   },
   "Plus": {
     "nodes": [
@@ -463,7 +365,8 @@ const ICONS = {
         }
       ]
     ],
-    "rootFill": "currentColor"
+    "rootFill": "currentColor",
+    "ink": 22
   }
 }
 
@@ -514,6 +417,34 @@ function build(node: IconNode): SVGElement {
 }
 
 /**
+ * The chrome's ink tier: 20 of the 24 grid, edge to edge.
+ *
+ * One budget, declared where the glyphs are DRAWN. A family that reads uneven
+ * is never fixed at the call site — `icon(name, 14)` for the heavy one shrinks
+ * its stroke along with its extent, which trades a size error for a weight
+ * error. The drawer knows how much of the grid each glyph inks, so it is the
+ * only place that can spend the same amount on all of them.
+ */
+const INK_BUDGET = 20
+
+/**
+ * Fit a glyph's declared ink to the budget by resizing its WINDOW.
+ *
+ * Widening the viewBox around the grid's centre scales the drawing down inside
+ * a box of unchanged pixel size, which is exactly what a heavier glyph needs
+ * and costs nothing at the call site. It is only sound for a FILLED glyph: a
+ * stroked one would have its stroke scaled too and come back lighter than the
+ * family, so a stroked glyph declares no ink and is re-solved in its path data
+ * instead — see the note above `RotateCcw`. `icon-cases.mjs` holds that line.
+ */
+function inkViewBox(data: IconData): string {
+  if (!data.ink || data.ink === INK_BUDGET) return "0 0 24 24"
+  const side = (24 * data.ink) / INK_BUDGET
+  const origin = 12 - side / 2
+  return `${origin} ${origin} ${side} ${side}`
+}
+
+/**
  * Draw one glyph from its data.
  *
  * Split out from `icon` so the host's own icon set — served by the loopback
@@ -525,7 +456,7 @@ export function drawIcon(data: IconData, size = 16): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg")
   svg.setAttribute("width", String(size))
   svg.setAttribute("height", String(size))
-  svg.setAttribute("viewBox", "0 0 24 24")
+  svg.setAttribute("viewBox", inkViewBox(data))
   svg.setAttribute("fill", data.rootFill === "none" ? "none" : "currentColor")
   if (data.rootStroke) {
     svg.setAttribute("stroke", "currentColor")

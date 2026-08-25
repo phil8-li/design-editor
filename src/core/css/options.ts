@@ -37,22 +37,7 @@ export const optionsCss = `/* ---------- options / variants ---------- */
 }
 .de-options-root > * { pointer-events: auto; }
 
-.de-options-root .de-opt-launcher {
-  order: 2;
-  height: 28px; padding: 0 12px;
-  border: 1px solid ${t.color.borderInteractive}; border-radius: ${t.radius.xl};
-  background: ${t.color.bgRaised}; color: ${t.color.text};
-  font-family: inherit; font-size: ${t.type.body}; font-weight: ${t.type.weightSection};
-  box-shadow: ${t.shadow.panel};
-  cursor: pointer;
-  transition: background ${t.duration.fast} ${t.ease};
-}
-.de-options-root .de-opt-launcher:hover { background: ${t.color.bgHover}; }
-.de-options-root .de-opt-launcher[aria-expanded="true"] { ${accentFill} border-color: ${t.color.accent}; }
-.de-options-root .de-opt-launcher:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 2px; }
-
 .de-options-root .de-opt-window {
-  order: 1;
   width: 460px;
   max-width: calc(100vw - var(--de-left) - var(--de-right) - 20px);
   max-height: min(72vh, 720px);

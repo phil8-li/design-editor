@@ -228,7 +228,7 @@ check("the options subsystem still opens from the inspector, not the toolbar", (
   editor.installOptionsBrowser(context)
   editor.installInspector(context)
   const launcher = Array.from(context.slots.right.querySelectorAll("button")).find(
-    (button) => button.textContent.trim() === "Browse controls and options"
+    (button) => button.textContent.trim() === "Browse all design options"
   )
   assert.ok(launcher, "inspector empty state must still offer the options entry point")
   launcher.click()
@@ -262,14 +262,17 @@ const TOGGLES = [
   ["Toggle inspector", "inspectorOpen"],
 ]
 
-check("each toggle draws a different glyph for open than for collapsed", () => {
+// Each toggle draws ONE mark now. The state it is in belongs to `aria-pressed`
+// and to the panel itself, which is on screen or is not; what the drawing has to
+// say is which panel the button opens, and that does not change when it opens.
+check("each toggle keeps one glyph through both states", () => {
   for (const [label, flag] of TOGGLES) {
     editor.setState({ [flag]: true })
     const open = drawing(byLabel(label))
     editor.setState({ [flag]: false })
     const collapsed = drawing(byLabel(label))
-    assert.notEqual(open, collapsed, `${label} draws the same glyph in both states`)
-    assert.ok(open.length > 0 && collapsed.length > 0, `${label} drew nothing`)
+    assert.ok(open.length > 0, `${label} drew nothing`)
+    assert.equal(open, collapsed, `${label} still swaps its glyph`)
   }
 })
 
@@ -282,6 +285,19 @@ check("the two toggles are told apart from each other, in both states", () => {
       `the pair is indistinguishable while ${open ? "open" : "collapsed"}`
     )
   }
+})
+
+// The whole strip draws at one size. Two glyphs at different sizes in one bar
+// read as two icon sets, and the mode switch used to draw its arrow at 14.
+check("every glyph in the bar is drawn at the same size", () => {
+  const sizes = new Set()
+  for (const button of buttons()) {
+    for (const svg of button.querySelectorAll("svg")) {
+      sizes.add(`${svg.getAttribute("width")}x${svg.getAttribute("height")}`)
+    }
+  }
+  assert.ok(sizes.size > 0, "the bar drew no glyphs at all")
+  assert.deepEqual([...sizes], ["16x16"], `the bar draws at ${[...sizes].join(", ")}`)
 })
 
 // The shell writes these flags too, so the button cannot infer its state from

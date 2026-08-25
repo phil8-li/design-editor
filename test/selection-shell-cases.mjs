@@ -38,7 +38,7 @@ const bundled = await build({
       export { createContext } from "./src/core/context"
       export { installSelectionFrame } from "./src/canvas/selection"
       export { installToolbar } from "./src/shell/toolbar"
-      export { controlRow, installOptionsBrowser } from "./src/options/inventory-panel"
+      export { controlRow, installOptionsBrowser, openOptionsBrowser } from "./src/options/inventory-panel"
       export { shellCss } from "./src/core/css"
       export { mountShell } from "./src/shell/shell"
       export { setState } from "./src/core/store"
@@ -232,14 +232,16 @@ await check("a disabled control disables every input it draws", () => {
   assert.equal(disabledNumber.querySelector(".de-opt-input").disabled, true)
 })
 
-await check("the options browser still answers the open event and returns focus", () => {
+// Called directly rather than announced on `window`. The event wire is gone:
+// its listener only existed once the browser had been mounted, and the browser
+// mounts lazily, so on a cold load the announcement went nowhere.
+await check("opening the options browser focuses its filter and returns focus on close", () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => ({ ok: true, json: async () => ({}) })
-  editorModule.installOptionsBrowser(context)
   const returnTarget = window.document.createElement("button")
   window.document.body.append(returnTarget)
   returnTarget.focus()
-  window.dispatchEvent(new window.CustomEvent("design-editor:open-options"))
+  editorModule.openOptionsBrowser(context)
   const optionsPanel = window.document.querySelector(".de-opt-window")
   assert.equal(optionsPanel.hidden, false)
   assert.equal(window.document.activeElement?.className, "de-opt-filter")

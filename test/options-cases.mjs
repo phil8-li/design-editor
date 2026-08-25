@@ -611,11 +611,125 @@ async function baselineCases() {
   })
 }
 
+/**
+ * The two inspector sections the options subsystem contributes.
+ *
+ * They are bundled together with `setState` so the store they read is the one
+ * these cases write; loading each entry point on its own would give every
+ * module its own copy of `core/store` and the writes would land nowhere.
+ */
+async function panelSectionCases() {
+  console.log("\nInspector sections")
+
+  const { build } = await import("esbuild")
+  const bundled = await build({
+    stdin: {
+      contents: `
+        export { optionsSection, optionsActionsSection } from "./src/options/panel"
+        export { setState } from "./src/core/store"
+      `,
+      resolveDir: path.join(ROOT, "design-editor"),
+      loader: "ts",
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+    logLevel: "silent",
+  })
+  const panel = await import(
+    `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString("base64")}`
+  )
+
+  // No leva store on this window, so nothing is bound to the element and the
+  // only thing that can populate the list is a saved option.
+  delete globalThis.window.__STORE
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) })
+
+  const element = globalThis.document.createElement("div")
+  globalThis.document.body.append(element)
+  const KEY = "panel-cases:1"
+  const context = {
+    editor: { apiBase: "http://127.0.0.1:0/api", toast() {} },
+    writer: { setStyle() {}, setClassName() {} },
+    selection: { key: KEY, element, componentName: "Card", tagName: "div", source: null },
+    computed: globalThis.window.getComputedStyle(element),
+    invalidate() {},
+  }
+  const heading = (node) => node?.querySelector(".de-section-toggle")?.textContent.trim()
+
+  check("nothing bound and nothing saved means no section at all", () => {
+    panel.setState({ optionSets: {} })
+    assert.equal(panel.optionsSection(context), null)
+  })
+
+  check("the actions are drawn even with no options to act on", () => {
+    panel.setState({ optionSets: {} })
+    const footer = panel.optionsActionsSection(context)
+    assert.ok(footer, "the footer must outlive the list")
+    const labels = Array.from(footer.querySelectorAll("button")).map((button) =>
+      button.textContent.trim()
+    )
+    assert.deepEqual(labels, ["Save as option", "Update", "Revert", "All design options"])
+    // Save is how the first option is ever created, so it is the one button
+    // that must never be disabled by the absence of options.
+    const [save, update, revert] = footer.querySelectorAll("button")
+    assert.equal(save.disabled, false)
+    assert.equal(update.disabled, true)
+    assert.equal(revert.disabled, true)
+  })
+
+  check("one saved option brings the section back, counted in its heading", () => {
+    panel.setState({
+      optionSets: {
+        [KEY]: {
+          key: KEY,
+          activeOptionId: "opt-1",
+          options: [
+            { id: "opt-1", name: "Compact", className: "p-2", style: {}, createdAt: 1 },
+          ],
+        },
+      },
+    })
+    const node = panel.optionsSection(context)
+    assert.ok(node, "a saved option must be shown")
+    assert.equal(heading(node), "Design options (1)")
+    assert.equal(node.querySelectorAll(".de-option-row").length, 1)
+    // Still no leva store, so the relevant-controls fold has nothing to draw.
+    assert.equal(node.querySelector(".de-opt-folder"), null)
+  })
+
+  check("a baseline-only set is still no section", () => {
+    panel.setState({
+      optionSets: {
+        [KEY]: {
+          key: KEY,
+          activeOptionId: null,
+          options: [
+            {
+              id: "baseline:pre-option-state",
+              name: "Baseline",
+              className: "",
+              style: {},
+              createdAt: 1,
+            },
+          ],
+        },
+      },
+    })
+    assert.equal(panel.optionsSection(context), null)
+  })
+
+  globalThis.fetch = originalFetch
+  element.remove()
+}
+
 const inventory = await inventoryCases()
 prototypeCases(inventory)
 await sourceDefaultCases()
 await writerCases()
 await baselineCases()
+await panelSectionCases()
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

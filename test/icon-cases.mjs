@@ -56,7 +56,7 @@ console.log("\nVendored glyph set")
 // Guard the sweep before the sweep: every assertion below is a loop, and a loop
 // over an empty list passes while asserting nothing.
 check("the set is non-empty and every name resolves", () => {
-  assert.ok(ICON_NAMES.length >= 16, `expected at least 16 glyphs, saw ${ICON_NAMES.length}`)
+  assert.ok(ICON_NAMES.length >= 12, `expected at least 12 glyphs, saw ${ICON_NAMES.length}`)
   for (const name of ICON_NAMES) assert.ok(icon(name), `${name} produced nothing`)
 })
 
@@ -96,9 +96,9 @@ check("every stroke-drawn glyph carries the design system's 2-unit weight", () =
     assert.equal(width, "2", `${name} strokes at ${width ?? "the UA default"}, not 2`)
   }
   // The bug was in this population specifically, so prove the population exists.
-  // Most of the set is stroke-drawn — Play, the four panel toggles, RotateCcw,
-  // Search, Check, ChevronRight, Plus and CursorOutline among them. The rest are
-  // filled paths and never had the defect.
+  // Half the set is stroke-drawn — Play, RotateCcw, RotateCw, Search, Check,
+  // ChevronRight, Plus and CursorOutline. The rest are filled paths, including
+  // both panel toggles, and never had the defect.
   assert.ok(stroked.length >= 8, `expected at least 8 stroke-drawn glyphs, saw ${stroked.length}`)
 })
 
@@ -109,7 +109,9 @@ check("every stroke-drawn glyph carries the design system's 2-unit weight", () =
  * argument: two glyphs drawn at the same size read a step apart if one of them
  * fills more of the box. Undo and redo did exactly that — an arc of r=10.003
  * plus a 2-unit stroke put their ink at 0.997..23.003, 22x22, against 20x20 for
- * the panel toggles sitting beside them in the same strip.
+ * everything else in the same strip. Both panel toggles carry the same 22 from
+ * the other direction — Layers because it is vendored as the host authored it,
+ * SlidersHorizontal because it is drawn to match that one.
  *
  * Nothing else catches it. It type-checks, it renders, it passes every
  * assertion above, and the only symptom is that two buttons in a row of six
@@ -165,6 +167,46 @@ function arcPoints(x1, y1, rx, ry, largeArc, sweep, x2, y2, push) {
   }
 }
 
+/**
+ * Where a Bézier turns around, solved rather than sampled.
+ *
+ * A curve's bounding box is set by its endpoints and by the points where the
+ * derivative crosses zero, and sampling walks past those by however fine the
+ * step is. The derivative of a cubic is a quadratic, so the roots are exact and
+ * the box is exact — which matters here, because the assertions below compare
+ * two ink boxes to a thousandth.
+ */
+function derivativeRoots(p0, p1, p2, p3) {
+  const a = -p0 + 3 * p1 - 3 * p2 + p3
+  const b = 2 * (p0 - 2 * p1 + p2)
+  const c = p1 - p0
+  const roots = []
+  if (Math.abs(a) < 1e-12) {
+    if (Math.abs(b) > 1e-12) roots.push(-c / b)
+  } else {
+    const discriminant = b * b - 4 * a * c
+    if (discriminant >= 0) {
+      const root = Math.sqrt(discriminant)
+      roots.push((-b + root) / (2 * a), (-b - root) / (2 * a))
+    }
+  }
+  return roots.filter((t) => t > 0 && t < 1)
+}
+
+function cubicPoints(x0, y0, x1, y1, x2, y2, x3, y3, push) {
+  const at = (p0, p1, p2, p3, t) => {
+    const u = 1 - t
+    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3
+  }
+  for (const t of [
+    ...derivativeRoots(x0, x1, x2, x3),
+    ...derivativeRoots(y0, y1, y2, y3),
+  ]) {
+    push(at(x0, x1, x2, x3, t), at(y0, y1, y2, y3, t))
+  }
+  push(x3, y3)
+}
+
 function walkPath(d, push) {
   const tokens = d.match(/[a-zA-Z]|-?\d*\.?\d+(?:e[-+]?\d+)?/g) ?? []
   let index = 0
@@ -173,12 +215,21 @@ function walkPath(d, push) {
   let y = 0
   let startX = 0
   let startY = 0
+  // The control point a smooth curve mirrors. Reset by every command that is not
+  // itself a curve, per the grammar — otherwise an `s` after a line would
+  // reflect a control point from three commands ago.
+  let controlX = 0
+  let controlY = 0
   const next = () => Number(tokens[index++])
   while (index < tokens.length) {
     if (/[a-zA-Z]/.test(tokens[index])) command = tokens[index++]
     // An implicit repeat after a moveto is a lineto, per the grammar.
     else if (command === "M") command = "L"
     else if (command === "m") command = "l"
+    if (!"CcSsQqTt".includes(command)) {
+      controlX = x
+      controlY = y
+    }
     switch (command) {
       case "M": x = next(); y = next(); startX = x; startY = y; push(x, y); break
       case "m": x += next(); y += next(); startX = x; startY = y; push(x, y); break
@@ -198,6 +249,53 @@ function walkPath(d, push) {
         const endX = command === "A" ? next() : x + next()
         const endY = command === "A" ? next() : y + next()
         arcPoints(x, y, rx, ry, largeArc, sweep, endX, endY, push)
+        x = endX
+        y = endY
+        break
+      }
+      case "C":
+      case "c":
+      case "S":
+      case "s": {
+        const relative = command === "c" || command === "s"
+        const smooth = command === "S" || command === "s"
+        const originX = relative ? x : 0
+        const originY = relative ? y : 0
+        const c1x = smooth ? 2 * x - controlX : originX + next()
+        const c1y = smooth ? 2 * y - controlY : originY + next()
+        const c2x = originX + next()
+        const c2y = originY + next()
+        const endX = originX + next()
+        const endY = originY + next()
+        cubicPoints(x, y, c1x, c1y, c2x, c2y, endX, endY, push)
+        controlX = c2x
+        controlY = c2y
+        x = endX
+        y = endY
+        break
+      }
+      case "Q":
+      case "q":
+      case "T":
+      case "t": {
+        const relative = command === "q" || command === "t"
+        const smooth = command === "T" || command === "t"
+        const originX = relative ? x : 0
+        const originY = relative ? y : 0
+        const qx = smooth ? 2 * x - controlX : originX + next()
+        const qy = smooth ? 2 * y - controlY : originY + next()
+        const endX = originX + next()
+        const endY = originY + next()
+        // Degree-elevated to a cubic so one solver answers for both.
+        cubicPoints(
+          x, y,
+          x + (2 / 3) * (qx - x), y + (2 / 3) * (qy - y),
+          endX + (2 / 3) * (qx - endX), endY + (2 / 3) * (qy - endY),
+          endX, endY,
+          push
+        )
+        controlX = qx
+        controlY = qy
         x = endX
         y = endY
         break
@@ -260,14 +358,32 @@ function inkBox(name) {
   return { width: maxX - minX, height: maxY - minY }
 }
 
-// Every glyph the bottom strip can draw, including the states it swaps between.
-// A toggle whose two glyphs ink differently changes SIZE when it flips, which
-// is the one motion this motionless strip must not have.
+/**
+ * The window the glyph is drawn through, in grid units.
+ *
+ * `inkBox` measures the AUTHORED geometry, which is not what reaches the eye:
+ * `drawIcon` widens the viewBox around (12,12) for a glyph whose data inks more
+ * of the grid than the budget, so the same path lands smaller in the same box of
+ * pixels. Rendered ink is therefore the authored box scaled by 24/side, and that
+ * — not the path data — is the number the family has to agree on.
+ */
+function window24(name) {
+  const [minX, minY, side] = icon(name, 24).getAttribute("viewBox").split(/\s+/).map(Number)
+  return { minX, minY, side }
+}
+
+function drawnInk(name) {
+  const box = inkBox(name)
+  const { side } = window24(name)
+  return { width: (box.width * 24) / side, height: (box.height * 24) / side }
+}
+
+// Every glyph the bottom strip draws. Two of them — the panel toggles — sit on
+// 22 of the grid where the rest are on 20; the strip is where that difference
+// would show, so the strip is what this measures.
 const TOOLBAR_GLYPHS = [
-  "SidebarLeft",
-  "SidebarLeftCollapsed",
-  "SidebarRight",
-  "SidebarRightCollapsed",
+  "Layers",
+  "SlidersHorizontal",
   "RotateCcw",
   "RotateCw",
   "Cursor",
@@ -279,50 +395,86 @@ check("the toolbar's glyphs all draw to one ink tier", () => {
   // number once, and every other glyph is then measured against that glyph
   // rather than against a second typed number that could drift from it.
   const [first, ...rest] = TOOLBAR_GLYPHS
-  const reference = inkBox(first)
+  const reference = drawnInk(first)
   assert.ok(
     Math.abs(reference.width - 20) < 0.001 && Math.abs(reference.height - 20) < 0.001,
-    `the reference glyph moved: ${first} now measures ${reference.width}x${reference.height}`
+    `the reference glyph moved: ${first} now draws ${reference.width.toFixed(3)}x${reference.height.toFixed(3)}`
   )
   for (const name of rest) {
-    const box = inkBox(name)
+    const box = drawnInk(name)
     assert.ok(
       Math.abs(box.width - reference.width) < 0.001 &&
         Math.abs(box.height - reference.height) < 0.001,
-      `${name} inks ${box.width.toFixed(3)}x${box.height.toFixed(3)}, not ${reference.width}x${reference.height}`
+      `${name} draws ${box.width.toFixed(3)}x${box.height.toFixed(3)}, not ${reference.width}x${reference.height}`
     )
   }
 })
 
 /*
- * The panel toggles' two states have to be told apart with the colour turned
- * off, because the strip's pressed treatment is a tint and a tint is the whole
- * thing this pair replaced. So compare the DRAWING: same ink box, different
- * geometry, on both sides.
+ * The two toggles sit next to each other and open opposite sides of the screen,
+ * and each now draws ONE mark rather than swapping between an open and a
+ * collapsed one. So the thing that has to be legible is not a state — the panel
+ * itself reports that by being on screen — but which button is which.
  */
-check("each panel toggle's open and collapsed states differ in shape", () => {
-  for (const [open, collapsed] of [
-    ["SidebarLeft", "SidebarLeftCollapsed"],
-    ["SidebarRight", "SidebarRightCollapsed"],
-  ]) {
-    const shape = (name) =>
-      Array.from(icon(name, 24).querySelectorAll("*"))
-        .map((node) => Array.from(node.attributes).map((a) => `${a.name}=${a.value}`).join(" "))
-        .join(" | ")
-    assert.notEqual(shape(open), shape(collapsed), `${open} and ${collapsed} draw the same thing`)
+check("the two panel toggles are told apart from each other", () => {
+  const shape = (name) =>
+    Array.from(icon(name, 24).querySelectorAll("*"))
+      .map((node) => Array.from(node.attributes).map((a) => `${a.name}=${a.value}`).join(" "))
+      .join(" | ")
+  assert.notEqual(shape("Layers"), shape("SlidersHorizontal"), "both toggles draw the same thing")
+})
+
+/*
+ * Re-windowing is only sound for a FILLED glyph.
+ *
+ * Widening the viewBox scales the drawing down inside an unchanged box, which
+ * fixes an extent. On a stroked glyph it scales the STROKE too, so the glyph
+ * arrives the right size and a third too light — trading a size error for a
+ * weight error, which is the exact move the comment above `RotateCcw` refuses.
+ * A stroked glyph that inks over budget has to be re-solved in its path data.
+ */
+check("only a filled glyph is fitted by its window", () => {
+  for (const name of ICON_NAMES) {
+    if (window24(name).side === 24) continue
+    const svg = icon(name, 24)
+    for (const node of [svg, ...svg.querySelectorAll("*")]) {
+      const stroke = node.getAttribute("stroke")
+      assert.ok(
+        !stroke || stroke === "none",
+        `${name} is re-windowed but strokes, so it will arrive under weight`
+      )
+    }
   }
 })
 
 check("the retired panel glyphs are gone, not left drawing nothing", () => {
-  for (const name of ["PanelLeft", "PanelRight", "Move", "Hand"]) {
+  const retired = [
+    "PanelLeft",
+    "PanelRight",
+    "Move",
+    "Hand",
+    // The four-glyph open/collapsed pair the two toggles above replaced.
+    "SidebarLeft",
+    "SidebarLeftCollapsed",
+    "SidebarRight",
+    "SidebarRightCollapsed",
+  ]
+  for (const name of retired) {
     assert.ok(!ICON_NAMES.includes(name), `${name} is still in the set with nothing drawing it`)
   }
 })
 
-check("every glyph is decorative and sized on the 24 grid", () => {
+check("every glyph is decorative and drawn on a grid centred on the 24 box", () => {
   for (const name of ICON_NAMES) {
     const svg = icon(name, 12)
-    assert.equal(svg.getAttribute("viewBox"), "0 0 24 24", `${name} is not on the 24 grid`)
+    const [minX, minY, width, height] = svg.getAttribute("viewBox").split(/\s+/).map(Number)
+    assert.equal(width, height, `${name} is not on a square grid`)
+    // Off-centre and the glyph is not just resized, it is nudged — which is a
+    // different edit from the one `inkViewBox` is allowed to make.
+    assert.ok(
+      Math.abs(minX + width / 2 - 12) < 1e-9 && Math.abs(minY + height / 2 - 12) < 1e-9,
+      `${name}'s window is not centred on the 24 grid: ${svg.getAttribute("viewBox")}`
+    )
     assert.equal(svg.getAttribute("aria-hidden"), "true", `${name} is exposed to a screen reader`)
     assert.equal(svg.getAttribute("width"), "12", `${name} ignored its size argument`)
     assert.equal(svg.getAttribute("height"), "12", `${name} ignored its size argument`)
