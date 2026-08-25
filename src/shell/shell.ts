@@ -12,7 +12,7 @@ import { shellCss, vendorChromeCss } from "../core/css"
 import { CHROME_ATTR, el } from "../core/dom"
 import { tokens } from "../core/tokens"
 import type { EditorSlots } from "../core/context"
-import { getState, subscribe } from "../core/store"
+import { editorOwnsInput, getState, subscribe } from "../core/store"
 
 const STYLE_ID = "design-editor-shell-style"
 const VENDOR_STYLE_ID = "design-editor-vendor-suppression"
@@ -84,17 +84,31 @@ function restoreChromeFocus(): () => void {
    * `window` capture is the first stop in the propagation path, so by the time
    * the vendor's `document`-capture listener calls these, they do nothing: the
    * event keeps descending to our controls and its default action survives.
-   * Only events aimed at our chrome are touched, so the vendor keeps its guard
-   * everywhere it actually means it — over the app being edited.
+   * While the editor owns input, only events aimed at our chrome are touched,
+   * so the vendor keeps its guard everywhere it actually means it — over the
+   * app being edited. Interactive mode widens that to the app; see below.
    */
   const declaw = (event: Event) => {
     const target = event.target
-    if (!(target instanceof Element) || !target.closest(`[${CHROME_ATTR}]`)) return
+    const ours = target instanceof Element && target.closest(`[${CHROME_ATTR}]`) !== null
+    /*
+     * Interactive mode has to be honoured by the VENDOR too, not just by us.
+     *
+     * Gating our own handlers on `editorOwnsInput()` is only half the mode: the
+     * vendor's guard is still on `document` (capture) and still stops every
+     * gesture aimed at the app, so with the mode ON the app stayed exactly as
+     * dead as with it off — an app button received neither pointerdown nor
+     * click. Declawing over the app is therefore the mode's second half, and
+     * the one that actually makes the claim true.
+     */
+    if (!ours && editorOwnsInput()) return
     event.stopPropagation = () => {}
     event.stopImmediatePropagation = () => {}
     event.preventDefault = () => {}
 
-    if (event.type !== "pointerdown") return
+    // Focus is forced only for our own fields. Over the app the native default
+    // action is enough, now that nothing is suppressing it.
+    if (event.type !== "pointerdown" || !ours) return
     // Belt and braces for focus, which is the one default action that has to
     // survive even if a guard we have not seen yet calls the native methods
     // off a retained reference.

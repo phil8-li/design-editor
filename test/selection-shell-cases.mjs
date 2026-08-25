@@ -39,6 +39,8 @@ const bundled = await build({
       export { installToolbar } from "./src/shell/toolbar"
       export { controlRow, installOptionsBrowser } from "./src/options/inventory-panel"
       export { shellCss } from "./src/core/css"
+      export { mountShell } from "./src/shell/shell"
+      export { setState } from "./src/core/store"
     `,
     resolveDir: path.join(ROOT, "design-editor"),
     loader: "ts",
@@ -241,6 +243,54 @@ await check("the options browser still answers the open event and returns focus"
   assert.equal(optionsPanel.hidden, true)
   assert.equal(window.document.activeElement, returnTarget)
   globalThis.fetch = originalFetch
+})
+
+/*
+ * Interactive mode has two halves, and only one of them was ever ours.
+ *
+ * The vendor registers a `document`-capture guard that stops every gesture not
+ * aimed at its own shadow chrome. Gating the editor's handlers on
+ * `editorOwnsInput()` left that guard standing, so with the mode ON an app
+ * button received neither pointerdown nor click — measured live before the fix.
+ * `restoreChromeFocus` neuters the guard's methods from `window` capture, which
+ * runs first; the mode widens that from our chrome to the app.
+ */
+await check("interactive mode hands the gesture to the app, and only then", () => {
+  editorModule.mountShell()
+
+  const appButton = window.document.createElement("button")
+  window.document.body.append(appButton)
+  let reached = 0
+  appButton.addEventListener("pointerdown", () => {
+    reached += 1
+  })
+
+  // Stands in for the vendor's guard: same node, same phase, same method. It is
+  // registered after the shell so the shell's window-capture listener runs first,
+  // which is the ordering the real page has.
+  window.document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (event.target instanceof window.Element && event.target.closest("[data-design-editor]")) return
+      event.stopPropagation()
+    },
+    true
+  )
+
+  const press = () =>
+    appButton.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true, cancelable: true }))
+
+  editorModule.setState({ interactive: false })
+  press()
+  assert.equal(reached, 0, "the app answered a click while the editor owned input")
+
+  editorModule.setState({ interactive: true })
+  press()
+  assert.equal(reached, 1, "interactive mode did not reach the app — the vendor guard is still standing")
+
+  editorModule.setState({ interactive: false })
+  press()
+  assert.equal(reached, 1, "the app stayed reachable after the mode was switched back off")
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)
