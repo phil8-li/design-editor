@@ -29,7 +29,7 @@
     "build": "node build.mjs",
     "prepare": "node build.mjs",
     "verify": "node build.mjs --check && node cli.mjs --verify",
-    "test": "node test/cli-cases.mjs && node test/host-readiness-cases.mjs && node test/options-cases.mjs && node test/token-cases.mjs && node test/icon-cases.mjs && node test/icon-set-cases.mjs && node test/picker-cases.mjs && node test/toolbar-cases.mjs && node test/history-cases.mjs && node test/responsive-cases.mjs && node test/selection-cases.mjs && node test/selection-shell-cases.mjs && node test/ui-change-cases.mjs --offline",
+    "test": "node test/cli-cases.mjs && node test/host-readiness-cases.mjs && node test/options-cases.mjs && node test/token-cases.mjs && node test/icon-cases.mjs && node test/icon-set-cases.mjs && node test/picker-cases.mjs && node test/toolbar-cases.mjs && node test/history-cases.mjs && node test/responsive-cases.mjs && node test/selection-cases.mjs && node test/selection-shell-cases.mjs && node test/apply-source-cases.mjs && node test/ui-change-cases.mjs --offline",
     "test:standalone-next": "node test/standalone-next-cases.mjs"
   },
   "dependencies": {

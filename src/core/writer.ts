@@ -7,12 +7,13 @@
  * untrustworthy is a preview that the code write silently drops.
  */
 
-import type { RewriteBridge, UpdateClassOperation } from "./bridge"
+import { resolveElementSource, type RewriteBridge, type UpdateClassOperation } from "./bridge"
+import { previewOnlyChanges, recordPreviewOnly } from "./change-prompt"
 import { record } from "./history"
 import { iconAttribute, type IconVariant } from "./icon-set"
 import { drawIcon } from "./icons"
 import { propertyKey, toClassUpdate, type ClassUpdate } from "./tailwind"
-import type { LayerElement, Selection } from "./types"
+import type { LayerElement, Selection, SourceRef } from "./types"
 
 export interface StyleWrite {
   /** CSS property in kebab-case, e.g. `padding-left`. */
@@ -50,17 +51,26 @@ function nthOfType(element: LayerElement): number {
 }
 
 /**
- * Module-scoped, not per-writer. The canvas, the inspector and the options
- * panel each build their own writer, so a per-instance list could only ever
- * report the drops made through one of them — and the drop the user most needs
- * warned about (drag/nudge writing `transform`) happens in the canvas while the
- * button that must warn about it lives in the toolbar.
+ * CSS properties this session previewed but could not express as utilities,
+ * newest first.
+ *
+ * Derived rather than kept: the full record of what could not be written lives
+ * in `change-prompt.ts`, because the toolbar needs the property names for its
+ * toast and the copy button needs the file, the element and the values. Two
+ * lists would let the warning and the prompt disagree about what was lost.
+ *
+ * Filtered to CSS properties on purpose. An icon swap is in the ledger — it is
+ * exactly the kind of change that needs an agent — but it announces itself as
+ * preview-only at the moment it happens, and repeating it in the Apply toast
+ * would report the same loss twice.
  */
-const skipped: string[] = []
-
-/** CSS properties this session previewed but could not express as utilities. */
 export function untranslatedProperties(): string[] {
-  return [...skipped]
+  const seen = new Set<string>()
+  for (const change of previewOnlyChanges()) {
+    if (change.property === "icon") continue
+    seen.add(change.property)
+  }
+  return [...seen]
 }
 
 /**
@@ -115,13 +125,33 @@ function iconStateOf(variant: IconVariant): IconState {
 
 export function createWriter(bridge: RewriteBridge): Writer {
 
+  /**
+   * The source ref for a selection, resolving it if selection time could not.
+   *
+   * Under React 19 selection time never can: `bridge.elementInfo` is a walk over
+   * `fiber._debugSource`, which React 19.2 removed, so every `Selection` this
+   * editor builds arrives with `source: null`. That is what made "Apply to code"
+   * a permanently disabled button — the operation was dropped here, quietly, and
+   * `hasChanges()` stayed false, so nothing downstream could report it.
+   *
+   * The answer is written back onto the selection so the inspector and the
+   * layers panel see the same file the queue used, and so a second edit to the
+   * same element does not pay for the round trip again.
+   */
+  const ensureSource = async (selection: Selection) => {
+    if (selection.source?.filePath) return selection.source
+    const resolved = await resolveElementSource(bridge, selection.element)
+    if (resolved) selection.source = resolved
+    return resolved
+  }
+
   const operationFor = (
     selection: Selection,
+    source: SourceRef,
     updates: ClassUpdate[],
     identity?: { className: string; parentClassName: string | undefined }
   ): UpdateClassOperation | null => {
-    const source = selection.source
-    if (!source?.filePath) return null
+    if (!source.filePath) return null
     const element = selection.element
     const parent = element.parentElement
 
@@ -143,13 +173,14 @@ export function createWriter(bridge: RewriteBridge): Writer {
     }
   }
 
-  const queue = (
+  const dispatch = (
     selection: Selection,
+    source: SourceRef,
     updates: ClassUpdate[],
     keys: string[],
     identity?: { className: string; parentClassName: string | undefined }
   ) => {
-    const operation = operationFor(selection, updates, identity)
+    const operation = operationFor(selection, source, updates, identity)
     if (!operation) return
     try {
       bridge.store.addPendingPropertyOperation(selection.key, operation, keys)
@@ -157,6 +188,32 @@ export function createWriter(bridge: RewriteBridge): Writer {
       // The engine rejects operations it cannot locate in source; the live
       // preview still stands, and "Apply to code" reports the shortfall.
     }
+  }
+
+  /**
+   * Synchronous when the file is known, deferred only when it is not.
+   *
+   * The wait is not free — it is a sourcemap fetch and sometimes a `grep` — so
+   * it is paid once per element and never on a path that already has an answer.
+   * When it is paid, nothing awaits it: the preview is already on screen, and
+   * the engine's `addPendingPropertyOperation` fires its own state-change
+   * listeners when the entry lands, which is what takes the toolbar's Apply
+   * button out of its disabled state. Awaiting here would stall a drag instead.
+   */
+  const queue = (
+    selection: Selection,
+    updates: ClassUpdate[],
+    keys: string[],
+    identity?: { className: string; parentClassName: string | undefined }
+  ) => {
+    const known = selection.source
+    if (known?.filePath) {
+      dispatch(selection, known, updates, keys, identity)
+      return
+    }
+    void ensureSource(selection).then((source) => {
+      if (source) dispatch(selection, source, updates, keys, identity)
+    })
   }
 
   /**
@@ -172,13 +229,33 @@ export function createWriter(bridge: RewriteBridge): Writer {
     const dropped: string[] = []
 
     for (const write of writes) {
+      // Read before the write: a preview-only change is only actionable as
+      // "from this, to that", and after `setProperty` the "from" is gone.
+      const before = currentValue(selection.element, write.property)
       selection.element.style.setProperty(write.property, write.value)
 
       const update = toClassUpdate(write.property, write.value)
       if (!update) {
-        // Preview-only. Surfaced rather than swallowed so the toolbar can say
-        // which properties will not survive "Apply to code".
-        if (!skipped.includes(write.property)) skipped.unshift(write.property)
+        // Preview-only. Recorded rather than swallowed so the toolbar can say
+        // which properties will not survive "Apply to code", and so the change
+        // prompt can hand the agent the one edit this editor cannot make.
+        //
+        // Recorded synchronously with whatever file is known now, because the
+        // toast reads the list on the very next line. The path is patched in
+        // when resolution lands, which is usually a few hundred milliseconds
+        // after that and always long before anyone presses copy.
+        const entry = recordPreviewOnly({
+          filePath: selection.source?.filePath ?? null,
+          componentName: selection.componentName,
+          tagName: selection.element.tagName.toLowerCase(),
+          className: selection.element.getAttribute("class") ?? "",
+          property: write.property,
+          from: before,
+          to: write.value,
+        })
+        void ensureSource(selection).then((source) => {
+          if (source && !entry.filePath) entry.filePath = source.filePath
+        })
         dropped.push(write.property)
         continue
       }
@@ -241,20 +318,34 @@ export function createWriter(bridge: RewriteBridge): Writer {
     const element = selection.element
     const originalText = element.textContent ?? ""
     element.textContent = text
-    if (!selection.source?.filePath) return
-    bridge.send({
-      type: "updateText",
-      filePath: selection.source.filePath,
-      lineNumber: selection.source.lineNumber,
-      columnNumber: selection.source.columnNumber ?? 0,
-      componentName: selection.source.componentName,
-      tagName: element.tagName.toLowerCase(),
-      className: element.className || undefined,
-      parentTagName: element.parentElement?.tagName.toLowerCase(),
-      parentClassName: element.parentElement?.className || undefined,
-      nthOfType: nthOfType(element),
-      originalText,
-      newText: text,
+    // The identity the AST matcher needs is read here, before the await: by the
+    // time source resolves, a re-render may have replaced the classes we would
+    // otherwise send, and the matcher scores JSX against them.
+    const className = element.getAttribute("class") || undefined
+    const parentClassName = element.parentElement?.getAttribute("class") || undefined
+    const post = (source: SourceRef) => {
+      bridge.send({
+        type: "updateText",
+        filePath: source.filePath,
+        lineNumber: source.lineNumber,
+        columnNumber: source.columnNumber ?? 0,
+        componentName: source.componentName,
+        tagName: element.tagName.toLowerCase(),
+        className,
+        parentTagName: element.parentElement?.tagName.toLowerCase(),
+        parentClassName,
+        nthOfType: nthOfType(element),
+        originalText,
+        newText: text,
+      })
+    }
+    // Same split as `queue`: immediate when the file is known, and only then.
+    if (selection.source?.filePath) {
+      post(selection.source)
+      return
+    }
+    void ensureSource(selection).then((source) => {
+      if (source) post(source)
     })
   }
 
@@ -360,11 +451,27 @@ export function createWriter(bridge: RewriteBridge): Writer {
       // Preview only, and said so every time rather than once in a hint the
       // user scrolled past: the source writer speaks in classes and text, and
       // an icon is neither — the JSX still names the component it always did.
+      //
+      // Which makes it the clearest case for the change prompt: the only way
+      // this reaches source is an agent editing the import and the tag, so the
+      // swap is recorded with both names for it to act on.
+      const entry = recordPreviewOnly({
+        filePath: selection.source?.filePath ?? null,
+        componentName: selection.componentName,
+        tagName: element.tagName.toLowerCase(),
+        className: element.getAttribute("class") ?? "",
+        property: "icon",
+        from: before.name ?? "",
+        to: variant.name,
+      })
+      void ensureSource(selection).then((source) => {
+        if (source && !entry.filePath) entry.filePath = source.filePath
+      })
       bridge.toast(`Swapped to ${variant.name} — preview only`, "info")
     },
 
     untranslated() {
-      return [...skipped]
+      return untranslatedProperties()
     },
   }
 }
