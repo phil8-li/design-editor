@@ -11,12 +11,14 @@ import { panelsCss } from "./css/panels"
 import { layersCss } from "./css/layers"
 import { optionsCss } from "./css/options"
 import { canvasCss } from "./css/canvas"
+import { tokenPickerCss } from "./css/token-picker"
 
 /**
  * Concatenated in source order so the cascade is unchanged. Each module is
  * owned by the lane that owns the surface it styles; joining here keeps the
  * single `shellCss` export the shell already imports.
  */
-export const shellCss = baseCss + toolbarCss + panelsCss + layersCss + optionsCss + canvasCss
+export const shellCss =
+  baseCss + toolbarCss + panelsCss + layersCss + optionsCss + canvasCss + tokenPickerCss
 
 export { vendorChromeCss }
