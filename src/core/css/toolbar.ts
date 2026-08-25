@@ -1,6 +1,6 @@
 /** Figma UI3-style floating bottom toolbar, its controls, and their tooltips. */
 
-import { tokens as t } from "../tokens"
+import { tokens as t, accentFill, accentFillHover } from "../tokens"
 
 export const toolbarCss = `/* ---------- toolbar ---------- */
 .de-toolbar {
@@ -56,8 +56,8 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
  * darkening its surface. White on this fill measures 1.9:1; the fixed-dark ink
  * measures 10.1:1, which is why tokens.ts pairs the two.
  */
-.de-button--primary { background: ${t.color.accentSurface}; color: ${t.color.onAccent}; }
-.de-button--primary:hover { background: ${t.color.accentSurfaceHover}; }
+.de-button--primary { ${accentFill} }
+.de-button--primary:hover { ${accentFillHover} }
 .de-button--danger:hover { background: ${t.color.danger}; }
 /*
  * A pressed text button is a MODE, and a mode has to be legible from across the
@@ -66,11 +66,10 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
  * carry that, so it takes the same filled treatment as the primary action.
  */
 .de-button[aria-pressed="true"] {
-  background: ${t.color.accentSurface};
-  color: ${t.color.onAccent};
+  ${accentFill}
   font-weight: ${t.type.weightSection};
 }
-.de-button[aria-pressed="true"]:hover { background: ${t.color.accentSurfaceHover}; }
+.de-button[aria-pressed="true"]:hover { ${accentFillHover} }
 .de-button[disabled] { opacity: 0.4; cursor: default; background: ${t.color.bgRaised}; }
 .de-button:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
 

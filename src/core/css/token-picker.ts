@@ -5,7 +5,7 @@
  * other lane owns the stylesheet for the surface it draws.
  */
 
-import { tokens as t } from "../tokens"
+import { tokens as t, accentFill } from "../tokens"
 
 export const tokenPickerCss = `/* ---------- token field ---------- */
 /*
@@ -117,7 +117,7 @@ export const tokenPickerCss = `/* ---------- token field ---------- */
  * indigo, so the ink flips instead of the surface darkening — white text here
  * would land at 1.7:1 and vanish.
  */
-.de-token-row[aria-selected="true"] { background: ${t.color.accentSurface}; color: ${t.color.onAccent}; }
+.de-token-row[aria-selected="true"] { ${accentFill} }
 .de-token-row[aria-selected="true"] .de-token-row-detail { color: ${t.color.onAccent}; }
 .de-token-row[aria-disabled="true"] { opacity: 0.4; }
 .de-token-empty { padding: 10px; color: ${t.color.textDim}; font-size: ${t.type.body}; }

@@ -1,6 +1,6 @@
 /** Canvas chrome: outlines, handles, guides, badges, marquee. */
 
-import { tokens as t } from "../tokens"
+import { tokens as t, accentFill } from "../tokens"
 
 export const canvasCss = `/* ---------- canvas chrome ---------- */
 /*
@@ -41,10 +41,9 @@ export const canvasCss = `/* ---------- canvas chrome ---------- */
   position: absolute;
   padding: 0 4px;
   border-radius: ${t.radius.sm};
-  background: ${t.color.accentSurface};
-  color: ${t.color.text};
+  ${accentFill}
   font-family: ${t.font.ui};
-  font-size: 9px;
+  font-size: ${t.type.micro};
   font-variant-numeric: tabular-nums;
   line-height: 13px;
   max-width: 96px;
