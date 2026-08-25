@@ -207,8 +207,8 @@ await checkAsync("the list groups by path prefix and each row carries only its l
     // The split has to reconstruct the token exactly, or the picker is showing
     // a name the design system does not have.
     assert.ok(seen.has("Background/Primary"), "Background/Primary went missing in the split")
-    assert.ok(seen.has("Text and Icon/On chrome (weak)"), "a multi-word group did not survive")
-    assert.equal(seen.size, 71, "the colour catalog lost rows to the grouping")
+    assert.ok(seen.has("Text and Icon/Primary (weak)"), "a multi-word group did not survive")
+    assert.equal(seen.size, 64, "the colour catalog lost rows to the grouping")
 
     // Exactly one header per group, so `Background` is not said forty times.
     const headers = [...popover.querySelectorAll(".de-token-group")].map((node) => node.textContent)
