@@ -1,44 +1,86 @@
 /**
  * Chrome tokens for the editor UI.
  *
- * Deliberately its own scale rather than the app's design system: this chrome
- * sits *around* the product and must read as tooling, never as product surface.
+ * This chrome sits *around* the product and must read as tooling, never as
+ * product surface — but "not product surface" is not the same as "not the
+ * design system". The design system already owns a theme-invariant CHROME rung
+ * for exactly this: the surfaces the workspace paints around its content
+ * canvas. That rung is what the editor wears now, in place of the Figma greys
+ * it was born with.
+ *
+ * Values are vendored as literals rather than read from the app. The package
+ * contract is that nothing here imports the app and nothing in the app imports
+ * this, so the coupling is the comment naming each source role, not a module
+ * edge. Regenerate against `src/app/globals.css` if the rung moves.
+ *
+ *   --sem-background-chrome   --base-gray-1200   #363c44
+ *   --sem-text-icon-on-chrome --base-gray-white  #ffffff
+ *   --sem-decorative-on-chrome --base-indigos-indigo-01  #a1bbff
+ *   --sem-text-icon-fixed-dark --base-gray-1600  #0c1014
  */
+
+/** `--sem-background-chrome`. Every surface below is a step off this ground. */
+const CHROME = "#363c44"
+/** `--sem-text-icon-on-chrome`. Also the substance every quiet step is cut from. */
+const ON_CHROME = "#ffffff"
+/**
+ * `--sem-decorative-on-chrome`. The workspace's rail colour, and the editor's
+ * accent. It is a LIGHT indigo, so it can carry a stroke on the dark chrome and
+ * a fill under dark ink, but it must never sit behind white text.
+ */
+const RAIL = "#a1bbff"
+/** `--sem-text-icon-fixed-dark`. The ink that rides on a filled `RAIL`. */
+const ON_RAIL = "#0c1014"
+
+/** A quiet step off the chrome, expressed the way the app expresses it. */
+const lift = (percent: number) => `color-mix(in srgb, ${ON_CHROME} ${percent}%, ${CHROME})`
+/** A hairline cut from the chrome ink, so it survives on any ground. */
+const rule = (percent: number) => `color-mix(in srgb, ${ON_CHROME} ${percent}%, transparent)`
 
 export const tokens = {
   color: {
-    bg: "#1e1e1e",
-    bgRaised: "#2c2c2c",
-    bgSunken: "#181818",
-    bgHover: "#383838",
-    bgHoverQuiet: "#292929",
-    bgActive: "#0d99ff",
+    bg: CHROME,
+    /** Panels and popovers. 6% is the app's `--sidebar-shelf` step. */
+    bgRaised: lift(6),
+    /** `--base-gray-1400`, the rung below chrome — wells and inset tracks. */
+    bgSunken: "#25292e",
+    bgHover: lift(12),
+    bgHoverQuiet: lift(6),
+    bgActive: RAIL,
     /** Dividers and rests — decorative, so the 3:1 rule does not apply. */
-    border: "#383838",
-    borderStrong: "#4d4d4d",
-    /** Boundary of a control you can act on: 3.1:1 on `bg`, per WCAG 1.4.11. */
-    borderInteractive: "#6b6b6b",
-    text: "#ffffff",
-    textMuted: "#b3b3b3",
-    /** 4.8:1 on `bg`. The obvious #7a7a7a lands at 3.9:1 and fails. */
-    textDim: "#8a8a8a",
-    /** Strokes, handles, and focus rings — Figma blue, never behind text. */
-    accent: "#0d99ff",
+    border: rule(14),
+    borderStrong: rule(22),
     /**
-     * Accent *behind white text*. The bright accent is only 3:1 against white,
-     * so filled buttons, pressed tools, and selected rows use this instead
-     * (5:1) and keep `accent` for the 1px stroke that pairs with them.
+     * Boundary of a control you can act on. 32% is the app's `--sidebar-border`
+     * step and lands at 3.2:1 on the chrome, per WCAG 1.4.11.
      */
-    accentSurface: "#0b6fd1",
-    accentSurfaceHover: "#1a82e2",
-    accentSoft: "rgba(13,153,255,0.16)",
-    selectionSurface: "rgba(13,153,255,0.18)",
-    /** Component (as opposed to plain element) names, Figma's purple. */
-    component: "#a78bfa",
-    danger: "#f24822",
-    guide: "#ff2d55",
-    measure: "#ff2d55",
-    autoLayout: "#8b5cf6",
+    borderInteractive: rule(32),
+    text: ON_CHROME,
+    /** `--sem-text-icon-on-chrome-weak` — Prism's 75% step. 6.9:1 on chrome. */
+    textMuted: "rgba(255,255,255,0.75)",
+    /** 4.7:1 on chrome. The obvious 55% lands at 4.4:1 and fails. */
+    textDim: "rgba(255,255,255,0.58)",
+    /** Strokes, handles, and focus rings. 5.8:1 on chrome. */
+    accent: RAIL,
+    /**
+     * Accent as a FILL. Unlike the Figma blue this replaced, the design system's
+     * accent is light, so the ink flips instead of the surface darkening — the
+     * same pairing the app ships as `--workspace-theme-drop-surface` over
+     * `--workspace-theme-drop-foreground`. 10.1:1.
+     */
+    accentSurface: RAIL,
+    accentSurfaceHover: `color-mix(in srgb, ${ON_CHROME} 22%, ${RAIL})`,
+    /** Ink for anything sitting on `accentSurface`. */
+    onAccent: ON_RAIL,
+    accentSoft: `color-mix(in srgb, ${RAIL} 16%, transparent)`,
+    selectionSurface: `color-mix(in srgb, ${RAIL} 18%, transparent)`,
+    /** Component (as opposed to plain element) names. */
+    component: "#c9b8ff",
+    /** `--sem-text-icon-alert`, lifted to carry on the dark chrome. */
+    danger: "#ff8a65",
+    guide: "#ff6b9a",
+    measure: "#ff6b9a",
+    autoLayout: "#c9b8ff",
   },
   radius: { sm: "2px", md: "4px", lg: "6px", xl: "10px" },
   shadow: {
@@ -46,8 +88,23 @@ export const tokens = {
     popover: "0 6px 22px rgba(0,0,0,0.5), 0 0 0 0.5px rgba(0,0,0,0.6)",
   },
   font: {
-    ui: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    /** `--font-sans`. The face the product ships, not next/font Inter. */
+    ui: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "SF Pro", ui-sans-serif, system-ui, sans-serif',
     mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
+  },
+  /**
+   * One type scale for the whole shell. Editor chrome is denser than the
+   * product's 14px body on purpose — but the density lives here, once, so a
+   * surface picks a role rather than a number.
+   */
+  type: {
+    /** Panel rows, field labels, tool labels. The editor's body. */
+    body: "11px",
+    /** Group headers and hints. Density, not tone — use sparingly. */
+    caption: "10px",
+    weightBody: 400,
+    weightValue: 500,
+    weightSection: 600,
   },
   size: {
     toolbarHeight: 36,
