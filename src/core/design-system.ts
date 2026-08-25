@@ -403,7 +403,19 @@ export function authoredTokenMatches(
     if (alias) add(alias.tokenIds, `var(${variable})`, !alias.ambiguous)
   }
 
-  const utilities = directUtilities(classNames)
+  // An inline declaration beats every utility class in the cascade, so the
+  // moment the element carries one, no class can still be the authority for
+  // what this axis paints. That is what lets a designer break out of the system
+  // the way Figma does: type `#ff0066` into the picker's own-value field and the
+  // closed field has to read `#ff0066`, not the `bg-secondary` the element still
+  // carries and no longer obeys — which is exactly what it read before, because
+  // the class scan ran regardless and its evidence was the only evidence.
+  //
+  // Nothing is lost for tokens: a token picked from the list writes
+  // `var(--sem-…)` inline, so it is matched above by its own variable, and the
+  // handful of tokens with no custom property write a literal that
+  // `computedTokenMatches` recognises by value.
+  const utilities = inlineValue.trim() ? [] : directUtilities(classNames)
   for (const utility of utilities) {
     for (const variable of extractCssVarNames(utility)) {
       add(

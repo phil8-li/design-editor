@@ -340,6 +340,29 @@ await check("the toggle's pressed state and the panel never disagree", () => {
   }
 })
 
+/*
+ * The app is allowed to make its own glyphs unclickable; the editor still has
+ * to be able to select them. jsdom does not cascade `pointer-events`, so this
+ * holds the two halves the editor owns — the rule and the mode class that arms
+ * it — and the live proof is the CFT pass over a real icon.
+ */
+await check("inspecting mode makes the app's unclickable glyphs hit-testable", () => {
+  const rule = editorModule.shellCss.match(/html\.design-editor-inspecting svg \{[^}]*\}/)
+  assert.notEqual(rule, null, "no rule re-arms `<svg>` hit-testing while inspecting")
+  assert.match(rule[0], /pointer-events:\s*all/)
+
+  editorModule.setState({ interactive: false })
+  assert.equal(document.documentElement.classList.contains("design-editor-inspecting"), true)
+  editorModule.setState({ interactive: true })
+  assert.equal(
+    document.documentElement.classList.contains("design-editor-inspecting"),
+    false,
+    "interactive mode did not hand the app back its own hit behaviour"
+  )
+  editorModule.setState({ interactive: false })
+  assert.equal(document.documentElement.classList.contains("design-editor-inspecting"), true)
+})
+
 await check("no control anywhere in the shell draws the hand tool", () => {
   assert.equal(shell.root.querySelector('[aria-label*="Hand"]'), null)
   assert.equal(context.slots.toolbar.querySelector('[aria-label*="Hand"]'), null)

@@ -241,6 +241,7 @@ const bundled = await build({
       export { iconNameOf, loadIconSet, loadedIconSet } from "./src/core/icon-set"
       export { installInspector } from "./src/panels/inspector"
       export * as history from "./src/core/history"
+      export { clearPreviewOnly, previewOnlyChanges } from "./src/core/change-prompt"
     `,
     resolveDir: PACKAGE_DIR,
     loader: "ts",
@@ -394,6 +395,29 @@ check("the swap says it is preview-only, every time", () => {
   writer.applyIcon(selection, variant("Compass"))
   assert.equal(toasts.length, 2)
   assert.ok(toasts.every((toast) => /preview only/.test(toast.message)))
+})
+
+check("the swap is in the change ledger BEFORE the history event fires", () => {
+  // The toolbar repaints on the history event and decides there whether "Copy
+  // change prompts" is live, by reading this ledger. Recorded after `record`,
+  // an icon swap — the one change that can ONLY reach source through an agent —
+  // left that button disabled: the swap painted, Undo lit up, and the button
+  // holding the prompt for it stayed grey until some later, unrelated repaint.
+  editorModule.clearPreviewOnly()
+  resetGlyph()
+  let atEvent = null
+  const stop = history.onHistoryChange(() => {
+    atEvent = editorModule.previewOnlyChanges()
+  })
+  writer.applyIcon(selection, variant("Heart"))
+  stop()
+
+  assert.notEqual(atEvent, null, "the swap pushed no history step at all")
+  assert.equal(atEvent.length, 1, "the ledger was empty when the toolbar read it")
+  assert.equal(atEvent[0].property, "icon")
+  assert.equal(atEvent[0].from, "Compass")
+  assert.equal(atEvent[0].to, "Heart")
+  editorModule.clearPreviewOnly()
 })
 
 check("re-picking the icon already drawn is not a step", () => {

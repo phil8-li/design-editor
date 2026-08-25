@@ -268,6 +268,33 @@ check("scoped aliases stay uncertain while exact evidence wins", () => {
   ])
 })
 
+check("a hand-typed value outranks the class the element still carries", () => {
+  // Breaking out of the system, in the shape the picker's own-value field
+  // produces it: the inline declaration lands, the utility class stays on the
+  // element, and the cascade already decided which of the two is painting.
+  const custom = helpers.authoredTokenMatches("fill-color", "#ff0066", ["bg-background"], catalog)
+  assert.deepEqual(custom, [], "the overridden class was still read as the binding")
+  assert.deepEqual(
+    helpers.computedTokenMatches("fill-color", "#ff0066", catalog),
+    [],
+    "no token claims this colour either, so the field shows the value itself"
+  )
+
+  // And the two things this must not cost: a token picked from the list writes
+  // its own variable inline and still reads back, and an element with no inline
+  // declaration is still described by its class.
+  assert.deepEqual(
+    helpers
+      .authoredTokenMatches("fill-color", "var(--sem-background-primary)", ["bg-background"], catalog)
+      .map((match) => match.token.id),
+    ["color:background-primary"]
+  )
+  assert.deepEqual(
+    helpers.authoredTokenMatches("fill-color", "", ["bg-background"], catalog).map((match) => match.token.id),
+    ["color:background-primary"]
+  )
+})
+
 check("radius, text, spacing, effect, and icon tokens match their authored forms", () => {
   const cases = [
     ["corner-radius", "", ["rounded-[var(--radius-xl)]"], "radius:radius-xl"],
@@ -865,6 +892,57 @@ await checkAsync("a scoped alias reads as the element's own value, not as a bind
       ).length,
       0
     )
+  })
+})
+
+await checkAsync("a value typed in the picker is the value the field reads back", async () => {
+  // Breaking out of the system, end to end and through the real gesture: the
+  // element keeps the class that used to bind it, so both halves of the bug are
+  // in the fixture at once.
+  await withInspector(`<div id="target" class="bg-background"></div>`, async (harness) => {
+    const { window, right, target, paint } = harness
+    assert.equal(fieldText(right, "fill-color"), "Background/Primary")
+
+    const { popover } = open(harness, "fill-color")
+    const input = popover.querySelector(".de-token-custom-input")
+    assert.ok(input, "the fill row offers no way out of the system")
+    input.value = "#ff0066"
+
+    // The other half, and the one no class explains: a colour axis is almost
+    // always transitioned, so the render that follows the write still computes
+    // the colour the element is LEAVING. Frozen here rather than animated,
+    // because a frozen readback is the same lie a transition tells for 150ms
+    // and it is the lie the field used to believe — measured in the browser as
+    // `rgb(37, 41, 46)` on a button whose inline style already said `#ff0066`.
+    const STALE = "rgb(255, 255, 255)"
+    const real = globalThis.getComputedStyle
+    globalThis.getComputedStyle = (element, pseudo) => {
+      const style = real(element, pseudo)
+      if (element !== target) return style
+      return new Proxy(style, {
+        get(base, key) {
+          if (key === "backgroundColor") return STALE
+          if (key === "getPropertyValue") {
+            return (name) => (name === "background-color" ? STALE : base.getPropertyValue(name))
+          }
+          const value = base[key]
+          return typeof value === "function" ? value.bind(base) : value
+        },
+      })
+    }
+    try {
+      input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+      await paint()
+
+      assert.equal(target.style.backgroundColor, "rgb(255, 0, 102)", "the value never painted")
+      assert.equal(
+        fieldText(right, "fill-color"),
+        "#ff0066",
+        "the field read back a token the element no longer obeys"
+      )
+    } finally {
+      globalThis.getComputedStyle = real
+    }
   })
 })
 

@@ -652,8 +652,13 @@ const offenders = (text) => BANNED.filter(([, pattern]) => pattern.test(text)).m
  * one remaining sentence of prose in this section — never entered the sweep
  * while the fixture declared no transition. A ring and a shadow are here for
  * the same reason: a row type that is never rendered is never scanned.
+ *
+ * The fill is left to `bg-sidebar` alone. An inline `background-color` here
+ * would override that class in the cascade, and the row reports what the
+ * element obeys — so the ambiguous-alias hint, the second sentence this fixture
+ * exists to sweep, would silently stop rendering.
  */
-const PROSE_FIXTURE = `<div id="target" class="ring-1 bg-sidebar" style="display:flex;gap:16px;transition-duration:0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.2);background-color:rgba(0, 0, 0, 0)">Hi<span></span></div>`
+const PROSE_FIXTURE = `<div id="target" class="ring-1 bg-sidebar" style="display:flex;gap:16px;transition-duration:0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.2)">Hi<span></span></div>`
 
 await checkAsync("no field, list or hint carries a machine spelling", async () => {
   for (const markup of [FIXTURE, PROSE_FIXTURE]) {

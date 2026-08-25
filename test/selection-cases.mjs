@@ -45,7 +45,7 @@ const MARKUP = `
     <section id="card">
       <div id="head">
         <span id="title">Homecoming</span>
-        <button id="more"><svg id="icon"><rect id="bar"></rect></svg></button>
+        <button id="more"><svg id="icon" aria-hidden="true"><rect id="bar"></rect></svg></button>
       </div>
       <div id="body"><p id="text">Body copy</p></div>
     </section>
@@ -165,8 +165,8 @@ const nameOf = (element) => element?.id ?? (element === null ? "null" : element.
 
 async function resolverCases(window) {
   console.log("\nLevel 1 — resolver")
-  const { getResolver, isLayerCandidate, toSelectable } = await load(
-    `export { getResolver, isLayerCandidate, toSelectable } from "./src/core/resolve"`
+  const { getResolver, isHidden, isLayerCandidate, toSelectable } = await load(
+    `export { getResolver, isHidden, isLayerCandidate, toSelectable } from "./src/core/resolve"`
   )
   const resolver = getResolver({ elementInfo })
   const $ = (name) => id(window, name)
@@ -262,6 +262,18 @@ async function resolverCases(window) {
       if (plain) assert.equal(graph.has(plain), true, `plain ${name}`)
       if (deep) assert.equal(graph.has(deep), true, `deep ${name}`)
     }
+  })
+
+  check("a decorative glyph is painted, so `aria-hidden` does not hide it", () => {
+    // Every icon this app ships is `aria-hidden="true"` — correct a11y for a
+    // glyph a label already names. Reading that as hidden dropped all of them
+    // out of the stack menu while the layers tree went on listing them.
+    assert.equal($("icon").getAttribute("aria-hidden"), "true")
+    assert.equal(isHidden($("icon")), false)
+    assert.equal(isHidden($("more")), false)
+    $("more").setAttribute("hidden", "")
+    assert.equal(isHidden($("more")), true, "the `hidden` attribute still hides")
+    $("more").removeAttribute("hidden")
   })
 
   check("overlap stack dedupes SVG hosts and follows Layers order", () => {

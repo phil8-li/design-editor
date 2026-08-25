@@ -58,6 +58,29 @@ html.design-editor-active {
   padding: var(--de-top) var(--de-right) 0 var(--de-left);
 }
 
+/*
+ * A design tool hit-tests what is PAINTED. \`pointer-events\` is a statement
+ * about the app's own behaviour — it is not a statement about the drawing.
+ *
+ * shadcn's button ships \`[&_svg]:pointer-events-none\` so that a click on a
+ * glyph counts as a click on the button. 58 of the 70 icons live on this app's
+ * home screen inherit it, and an element the pointer cannot see never reaches
+ * \`elementsFromPoint\`, so \`toSelectable\` was never handed an \`<svg>\` and no
+ * icon in the app could be selected at all — which is why the inspector's Icon
+ * section never rendered. The 12 icons that happened to keep \`auto\` selected
+ * correctly all along; that split is what named hit-testing, not the resolver,
+ * as the defect.
+ *
+ * \`all\` rather than \`auto\`: \`auto\` on an \`<svg>\` answers only where the glyph
+ * is actually inked, and the centre of an outline icon — the point you aim at —
+ * is a hole. Scoped to inspecting mode, so interactive mode hands the app back
+ * its own hit behaviour unchanged. The chrome's own glyphs are swept up too and
+ * do not care: a click on one still bubbles to the button that owns it.
+ */
+html.design-editor-inspecting svg {
+  pointer-events: all;
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-design-editor] *, [data-design-editor] *::before, [data-design-editor] *::after {
     transition-duration: 0.01ms !important;

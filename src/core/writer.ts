@@ -443,11 +443,6 @@ export function createWriter(bridge: RewriteBridge): Writer {
       const after = iconStateOf(variant)
 
       writeIcon(element, attribute, after)
-      record({
-        label: `Swap icon to ${variant.name}`,
-        undo: () => writeIcon(element, attribute, before),
-        redo: () => writeIcon(element, attribute, after),
-      })
       // Preview only, and said so every time rather than once in a hint the
       // user scrolled past: the source writer speaks in classes and text, and
       // an icon is neither — the JSX still names the component it always did.
@@ -455,6 +450,12 @@ export function createWriter(bridge: RewriteBridge): Writer {
       // Which makes it the clearest case for the change prompt: the only way
       // this reaches source is an agent editing the import and the tag, so the
       // swap is recorded with both names for it to act on.
+      //
+      // BEFORE `record`, which is the ordering `writeStyles` already has and
+      // this had backwards: pushing the history entry repaints the toolbar, and
+      // the toolbar decides whether "Copy change prompts" is live by reading
+      // this ledger. Recorded after, the swap left the one button that could
+      // act on it disabled until some later, unrelated repaint.
       const entry = recordPreviewOnly({
         filePath: selection.source?.filePath ?? null,
         componentName: selection.componentName,
@@ -466,6 +467,11 @@ export function createWriter(bridge: RewriteBridge): Writer {
       })
       void ensureSource(selection).then((source) => {
         if (source && !entry.filePath) entry.filePath = source.filePath
+      })
+      record({
+        label: `Swap icon to ${variant.name}`,
+        undo: () => writeIcon(element, attribute, before),
+        redo: () => writeIcon(element, attribute, after),
       })
       bridge.toast(`Swapped to ${variant.name} — preview only`, "info")
     },

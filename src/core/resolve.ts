@@ -43,9 +43,16 @@ export function isLayerCandidate(node: Node | null): node is Element {
  * Hidden layers are excluded from hit-testing *and* from the stack menu, which
  * is what separates them from locked ones. Zero area covers `display:none`
  * without paying a `getComputedStyle` per candidate per gesture.
+ *
+ * `aria-hidden` is deliberately NOT part of this test. It says "do not announce
+ * this", not "do not paint this", and a decorative glyph is the canonical thing
+ * that is correctly both: every one of this app's 70 live icons carries
+ * `aria-hidden="true"`, and reading that as hidden dropped all of them out of
+ * the stack menu while the layers tree — which does not consult this — went on
+ * listing them. Two surfaces, one question, two answers.
  */
 export function isHidden(element: Element): boolean {
-  if (element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") return true
+  if (element.hasAttribute("hidden")) return true
   const rect = element.getBoundingClientRect()
   return rect.width <= 0 || rect.height <= 0
 }

@@ -174,13 +174,37 @@ function row(
   }
 }
 
+/**
+ * The value this row reports the element to have.
+ *
+ * The element's own inline declaration first; the computed value only when
+ * there is none. Computed is a race this row loses. `transition-colors` sits on
+ * nearly every interactive component in a Tailwind app, so the render that
+ * follows a write still computes the colour the element is transitioning FROM —
+ * measured `rgb(37, 41, 46)` in the very render whose inline style already read
+ * `rgb(255, 0, 102)` — and a value one step stale matches the token that was
+ * bound before the edit. That is how a hand-typed colour went on reading back as
+ * `Background/Secondary` while the button in front of it was already pink.
+ *
+ * An inline declaration is also the truer answer once it exists: it is not
+ * interpolated, and it is what the cascade settles on.
+ *
+ * `text-style` is exempt. Its `inlineValue` is four declarations joined for the
+ * authored matcher, not a value, and its computed form is a signature built on
+ * purpose.
+ */
+function reportedValue(spec: RowSpec): string {
+  if (spec.property === "text-style") return spec.computedValue
+  return spec.inlineValue.trim() || spec.computedValue
+}
+
 function matchFor(spec: RowSpec): DesignSystemMatch[] {
   const classes = Array.from(spec.target.element.classList)
   const authored = authoredTokenMatches(spec.property, spec.inlineValue, classes)
   if (authored.length) return authored
   return computedTokenMatches(
     spec.property,
-    spec.computedValue,
+    reportedValue(spec),
     config.designSystem,
     (variable) => resolvedCssValue(spec.target.element, tokenCssProperty(spec.property), variable)
   )
@@ -203,13 +227,14 @@ function tokenPreview(spec: RowSpec, token: DesignSystemToken): TokenPreview {
 /** The element's own value in the same shape, for a field with nothing bound. */
 function valuePreview(spec: RowSpec): TokenPreview {
   const kind = tokenPreviewKind(spec.property)
+  const value = reportedValue(spec)
   if (kind === "color") {
-    // The computed value, not a resolved literal: a `var()` here still paints,
+    // The reported value, not a resolved literal: a `var()` here still paints,
     // because the swatch lives in the same document the app is themed in.
-    return spec.computedValue === "mixed" ? { kind: "none" } : { kind: "color", css: spec.computedValue }
+    return value === "mixed" ? { kind: "none" } : { kind: "color", css: value }
   }
-  if (kind === "text") return { kind: "text", fontSize: number(spec.computedValue.split("|")[0]) || 12 }
-  if (kind === "radius") return { kind: "radius", px: number(spec.computedValue) }
+  if (kind === "text") return { kind: "text", fontSize: number(value.split("|")[0]) || 12 }
+  if (kind === "radius") return { kind: "radius", px: number(value) }
   return { kind: "none" }
 }
 
@@ -261,7 +286,10 @@ function tokenRow(context: SectionContext, spec: RowSpec): HTMLElement {
     choices: tokens.map((token) => tokenChoice(spec, token, (writes.get(token.id) ?? []).length > 0)),
     fallback: {
       preview: valuePreview(spec),
-      text: spec.computedValue === "mixed" ? "Mixed" : plainValue(spec.property, spec.computedValue) || "—",
+      text:
+        reportedValue(spec) === "mixed"
+          ? "Mixed"
+          : plainValue(spec.property, reportedValue(spec)) || "—",
     },
     onCommit: (id) => {
       const token = tokens.find((entry) => entry.id === id)

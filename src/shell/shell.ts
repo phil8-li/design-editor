@@ -174,11 +174,20 @@ export function mountShell(): Shell {
     )
   }
 
+  // The mode as a class, because one thing about it is CSS's to answer: whether
+  // the app's `pointer-events: none` glyphs are hit-testable (see base.ts).
+  const syncMode = () => {
+    document.documentElement.classList.toggle("design-editor-inspecting", !getState().interactive)
+  }
+
   syncInsets()
-  // Only the two panel toggles move the insets. `hovered` changes on every
-  // pointermove, so an unguarded subscription would write inline custom
-  // properties — and force a style recalc of the whole app — on mouse motion.
+  syncMode()
+  // Only the two panel toggles move the insets, and only the mode switch moves
+  // the mode. `hovered` changes on every pointermove, so an unguarded
+  // subscription would write inline custom properties — and force a style
+  // recalc of the whole app — on mouse motion.
   const unsubscribe = subscribe((next, previous) => {
+    if (next.interactive !== previous.interactive) syncMode()
     if (
       next.layersOpen === previous.layersOpen &&
       next.inspectorOpen === previous.inspectorOpen
@@ -197,6 +206,7 @@ export function mountShell(): Shell {
       releaseChromeFocus()
       root.remove()
       document.documentElement.classList.remove("design-editor-active")
+      document.documentElement.classList.remove("design-editor-inspecting")
       document.documentElement.style.removeProperty("--de-left")
       document.documentElement.style.removeProperty("--de-right")
       document.documentElement.style.removeProperty("--de-top")
