@@ -54,7 +54,8 @@ export const panelsCss = `/* ---------- panels ---------- */
 .de-section-toggle:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -2px; }
 .de-section-actions { display: inline-flex; align-items: center; gap: 2px; }
 .de-chevron {
-  display: inline-block; width: 10px;
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
   color: ${t.color.textDim};
   transform: rotate(90deg);
 }

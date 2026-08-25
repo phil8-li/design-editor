@@ -74,7 +74,8 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   width: 22px; height: 22px;
   border: none; border-radius: ${t.radius.sm};
   background: transparent; color: ${t.color.textDim};
-  font-size: 14px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  line-height: 1; cursor: pointer;
 }
 .de-opt-close:hover { background: ${t.color.bgHover}; color: ${t.color.text}; }
 
@@ -124,12 +125,16 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   font-size: ${t.type.body}; font-weight: ${t.type.weightSection};
 }
 .de-opt-summary::-webkit-details-marker { display: none; }
-.de-opt-summary::before {
-  content: "▸";
-  color: ${t.color.textDim}; font-size: ${t.type.micro};
+/* A real glyph from the vendored set rather than a \`content\` character, so the
+   disclosure marks in this panel, the inspector and the layer tree are one
+   drawing at one weight instead of three fonts' idea of a triangle. */
+.de-opt-twisty {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: ${t.color.textDim};
   transition: transform ${t.duration.fast} ${t.ease};
 }
-.de-opt-folder[open] > .de-opt-summary::before { transform: rotate(90deg); }
+.de-opt-folder[open] > .de-opt-summary > .de-opt-twisty { transform: rotate(90deg); }
 .de-opt-summary:hover { background: ${t.color.bgHover}; }
 .de-opt-folder-name { flex: none; }
 .de-opt-count { flex: 1; color: ${t.color.textDim}; font-size: ${t.type.caption}; font-weight: ${t.type.weightBody}; }

@@ -6,6 +6,7 @@
  */
 
 import { el } from "../../core/dom"
+import { icon } from "../../core/icons"
 import { tokens as t } from "../../core/tokens"
 import { section, textField } from "./field"
 import type { InspectorSection } from "./index"
@@ -69,7 +70,7 @@ export const classesSection: InspectorSection = ({ editor, selection, writer, in
           "aria-label": `Remove class ${name}`,
           onclick: () => remove(name),
         },
-        ["×"]
+        [icon("X", 12)]
       ),
     ])
   )

@@ -6,6 +6,7 @@
  */
 
 import { el, round } from "../../core/dom"
+import { icon } from "../../core/icons"
 
 /**
  * Panel-level memory. Collapse and expander state belong to the *panel*, not to
@@ -378,7 +379,7 @@ export function section(title: string, body: HTMLElement, actions?: HTMLElement)
       "aria-expanded": String(!collapsed),
       title: `${collapsed ? "Expand" : "Collapse"} ${title}`,
     },
-    [el("span", { class: "de-chevron", "aria-hidden": "true" }, ["▸"]), title]
+    [el("span", { class: "de-chevron", "aria-hidden": "true" }, [icon("ChevronRight", 10)]), title]
   )
 
   toggle.addEventListener("click", () => {

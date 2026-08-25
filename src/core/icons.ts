@@ -309,16 +309,50 @@ const ICONS = {
     ],
     "rootFill": "currentColor"
   }
-} as unknown as Record<string, IconData>
+}
 
-export type IconName = keyof typeof ICONS & string
+/**
+ * Narrowed from the literal, not from `Record<string, IconData>`.
+ *
+ * The object used to be cast to a string-keyed record, which collapsed this
+ * union to plain `string` and let `icon("Chevronright")` compile and then throw
+ * at runtime. Casting at the point of USE instead keeps the key union.
+ */
+export type IconName = keyof typeof ICONS
+
+/** The set, for a caller that needs to walk it — the icon test does. */
+export const ICON_NAMES = Object.keys(ICONS) as IconName[]
 
 const SVG_NS = "http://www.w3.org/2000/svg"
+
+/**
+ * The source data is authored for React, where `strokeWidth` is a prop.
+ *
+ * `setAttribute("strokeWidth", …)` is not an error and not a no-op: it sets an
+ * attribute that SVG has never heard of, so the path falls back to the UA's 1px
+ * default and every stroke-drawn glyph renders a third as heavy as it should.
+ * Nine of the sixteen are stroke-drawn, so this was most of the set, and it is
+ * invisible to a type check and to any test that only asks whether an <svg>
+ * exists.
+ */
+const kebab = (name: string) => name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)
+
+/**
+ * The host resolves `var(--instagram-icon-stroke-width, 2)` because it writes
+ * that value into CSS. Here it lands in a presentation ATTRIBUTE, where custom
+ * properties do not resolve at all, so take the fallback the author already
+ * declared rather than inventing a second source for the weight.
+ */
+const CSS_VAR_FALLBACK = /^var\(\s*--[^,)]+,\s*([^)]+)\)$/
 
 function build(node: IconNode): SVGElement {
   const [tag, attrs, children = []] = node
   const element = document.createElementNS(SVG_NS, tag)
-  for (const [name, value] of Object.entries(attrs)) element.setAttribute(name, String(value))
+  for (const [name, value] of Object.entries(attrs)) {
+    const literal = String(value)
+    const fallback = CSS_VAR_FALLBACK.exec(literal)
+    element.setAttribute(kebab(name), fallback ? fallback[1].trim() : literal)
+  }
   for (const child of children) element.append(build(child))
   return element
 }
@@ -330,7 +364,7 @@ function build(node: IconNode): SVGElement {
  * hovered row and a filled selected row, and only the caller knows which.
  */
 export function icon(name: IconName, size = 16): SVGSVGElement {
-  const data = ICONS[name]
+  const data = ICONS[name] as IconData
   const svg = document.createElementNS(SVG_NS, "svg")
   svg.setAttribute("width", String(size))
   svg.setAttribute("height", String(size))

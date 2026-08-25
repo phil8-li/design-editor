@@ -8,6 +8,7 @@
  */
 
 import { el } from "../core/dom"
+import { icon } from "../core/icons"
 import { getResolver } from "../core/resolve"
 import type { EditorContext } from "../core/context"
 
@@ -111,9 +112,11 @@ export function installLayersPanel(context: EditorContext): void {
     }
     rowInfo.set(node, row)
     const [twisty, label] = Array.from(node.children) as HTMLElement[]
-    const glyph = row.hasChildren ? "▸" : ""
     const openState = row.hasChildren ? String(row.open) : null
-    if (twisty.textContent !== glyph) twisty.textContent = glyph
+    // Rows are recycled across renders, so the twisty is toggled by presence
+    // rather than rebuilt — a fresh <svg> per frame would churn the whole tree.
+    if (row.hasChildren && twisty.childElementCount === 0) twisty.append(icon("ChevronRight", 10))
+    else if (!row.hasChildren && twisty.childElementCount > 0) twisty.replaceChildren()
     if (label.textContent !== row.meta.name) label.textContent = row.meta.name
     // The stylesheet rotates the twisty off its own aria-expanded; the row
     // carries the state a screen reader actually reads.

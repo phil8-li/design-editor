@@ -16,6 +16,7 @@
  */
 
 import { clear, el } from "../core/dom"
+import { icon } from "../core/icons"
 import { elementKey, getState } from "../core/store"
 import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
@@ -276,6 +277,7 @@ function folderNode(
   expand: boolean
 ): HTMLElement {
   const summary = el("summary", { class: "de-opt-summary" }, [
+    el("span", { class: "de-opt-twisty", "aria-hidden": "true" }, [icon("ChevronRight", 10)]),
     el("span", { class: "de-opt-folder-name" }, [folder.name]),
     el("span", { class: "de-opt-count" }, [
       `${folder.controlCount} control${folder.controlCount === 1 ? "" : "s"}` +
@@ -507,6 +509,7 @@ function variantsTab(editor: EditorContext, query: string): HTMLElement {
 
       return el("details", { class: "de-opt-folder", open: true }, [
         el("summary", { class: "de-opt-summary" }, [
+          el("span", { class: "de-opt-twisty", "aria-hidden": "true" }, [icon("ChevronRight", 10)]),
           el("span", { class: "de-opt-folder-name" }, [set.label]),
           el("span", { class: "de-opt-count" }, [`${visibleOptions(set).length} saved`]),
           store.hasBaseline(set.key)
@@ -584,7 +587,7 @@ export function installOptionsBrowser(editor: EditorContext): void {
       el(
         "button",
         { class: "de-opt-close", type: "button", "aria-label": "Close", onclick: () => close() },
-        ["×"]
+        [icon("X", 12)]
       ),
     ]),
     el("div", { class: "de-opt-tabs", role: "group", "aria-label": "Option kind" }, [

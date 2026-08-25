@@ -1,6 +1,7 @@
 /** Saved options/variants for the selected element. Lane C owns this. */
 
 import { el } from "../core/dom"
+import { icon } from "../core/icons"
 import { section } from "../panels/inspector/field"
 import { controlRow, installOptionsBrowser, openOptionsBrowser } from "./inventory-panel"
 import { isControlRelevantToElement, readInventory } from "./inventory"
@@ -101,7 +102,7 @@ function optionRow(context: SectionContext, option: ElementOption, active: boole
       "aria-label": `Delete ${option.name}`,
       onclick: () => store.remove(selection, writer, option.id),
     },
-    ["×"]
+    [icon("X", 12)]
   )
 
   name.addEventListener("dblclick", (event) => {

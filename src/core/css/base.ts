@@ -76,6 +76,10 @@ html.design-editor-active {
 [data-design-editor] *, [data-design-editor] *::before, [data-design-editor] *::after {
   box-sizing: border-box;
 }
+/* Glyphs are decorative and live inside buttons. Leaving them hit-testable
+   makes \`event.target\` an <svg> on half the clicks in the chrome, and every
+   handler that reads a dataset off the target then reads undefined. */
+[data-design-editor] svg { pointer-events: none; display: block; }
 
 .de-root {
   position: fixed;
