@@ -12,11 +12,9 @@
  */
 
 import assert from "node:assert/strict"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 
 let passed = 0
 let failed = 0
@@ -85,7 +83,7 @@ const bundled = await build({
       export * as history from "./src/core/history"
       export { historyAction } from "./src/core/keymap"
     `,
-    resolveDir: path.join(ROOT, "design-editor"),
+    resolveDir: PACKAGE_DIR,
     loader: "ts",
   },
   bundle: true,

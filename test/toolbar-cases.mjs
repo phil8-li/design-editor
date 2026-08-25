@@ -12,11 +12,9 @@
  */
 
 import assert from "node:assert/strict"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 
 let passed = 0
 let failed = 0
@@ -84,7 +82,7 @@ const bundled = await build({
       export { toolbarCss } from "./src/core/css/toolbar"
       export { recordPreviewOnly, previewOnlyChanges, clearPreviewOnly } from "./src/core/change-prompt"
     `,
-    resolveDir: path.join(ROOT, "design-editor"),
+    resolveDir: PACKAGE_DIR,
     loader: "ts",
   },
   bundle: true,
@@ -619,7 +617,7 @@ check("the clipboard write happens inside the click, not a task later", () => {
 
 check("the copied brief carries no absolute path and no Source attribution", () => {
   assert.doesNotMatch(clipboardText, /\*\*Source:\*\*/)
-  assert.doesNotMatch(clipboardText, new RegExp(ROOT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+  assert.doesNotMatch(clipboardText, new RegExp(PACKAGE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
   assert.doesNotMatch(clipboardText, /\/Users\//)
 })
 

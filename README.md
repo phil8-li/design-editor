@@ -366,9 +366,19 @@ only while Option/Alt measurement is active.
 ## Testing
 
 ```sh
-npm test
-npm run test:standalone-next
+npm test                                        # no host needed
+DESIGN_EDITOR_HOST=../Workspaces npm test       # plus the host-pinned suites
+npm run test:standalone-next                    # needs a host
 ```
+
+Most of the suite runs against this repository alone. Four suites —
+`token-cases`, `responsive-cases`, `picker-cases`, `icon-set-cases` — pin a real
+app's own catalog, breakpoints and icon set, deliberately: they are the net that
+catches a change to the tool silently changing what a real app sees. They find
+that app through `test/host.mjs`, which is the single owner of "where is the
+host": `DESIGN_EDITOR_HOST` if set, otherwise a `Workspaces` checkout beside
+this one. With neither present they print a skip and exit 0, so a bare clone is
+green and a skip never reads as a pass.
 
 The package suite covers its npm-bin entry point, options, selection, shell,
 hydration readiness, and offline source translation.
@@ -400,6 +410,7 @@ server/options-store.mjs    saved option sets
 server/control-defaults.mjs configured literal default reader/writer
 server/agent.mjs            AI edit transport
 src/                        the editor UI, bundled to an IIFE
+test/host.mjs               where this package is, and where a host app is
 test/ui-change-cases.mjs    the harness
 ```
 

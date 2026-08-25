@@ -10,10 +10,7 @@
  */
 
 import assert from "node:assert/strict"
-import fs from "node:fs"
-import path from "node:path"
 import vm from "node:vm"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
 import { browserPrelude, loadConfig } from "../config.mjs"
@@ -22,8 +19,7 @@ import {
   normalizeDesignSystemBreakpoints,
 } from "../server/design-system-manifest.mjs"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
-const ROOT = path.dirname(PACKAGE_DIR)
+import { PACKAGE_DIR, requireHostConfig } from "./host.mjs"
 
 let passed = 0
 let failed = 0
@@ -94,21 +90,16 @@ async function loadEditorHelpers() {
 }
 
 /**
- * THIS repository's host config, and its numbers are deliberately pinned below.
+ * A REAL host app's config, and its numbers are deliberately pinned below.
  *
- * That makes this suite the one place the editor is coupled to the app it lives
- * in, which is the point: it is the regression net that catches a change to the
- * tool silently changing what this app sees. The host-AGNOSTIC contract — that
+ * That makes this suite one of the four places the editor is coupled to a real
+ * app rather than a fixture, which is the point: it is the regression net that
+ * catches a change to the tool silently changing what a real app sees, and the
+ * numbers below are the Workspaces app's. The host-AGNOSTIC contract — that
  * the same code reads a design system it has never met — is proved without this
  * file, on the fixture hosts in host-agnostic-cases.mjs.
  */
-const HOST_CONFIG = path.join(ROOT, "design-editor.config.mjs")
-if (!fs.existsSync(HOST_CONFIG)) {
-  throw new Error(
-    `${HOST_CONFIG} is missing. This suite pins the host repository's own breakpoints; ` +
-      "run host-agnostic-cases.mjs for the package-only contract."
-  )
-}
+const { configPath: HOST_CONFIG } = requireHostConfig("responsive-cases")
 const workspace = await loadConfig({ configPath: HOST_CONFIG })
 const catalog = workspace.designSystem.catalog
 

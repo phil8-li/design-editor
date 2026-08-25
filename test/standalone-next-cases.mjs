@@ -6,11 +6,11 @@ import fs from "node:fs"
 import net from "node:net"
 import os from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { WebSocket } from "ws"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
-const REPO_ROOT = path.dirname(PACKAGE_DIR)
+import { PACKAGE_DIR, requireHostConfig } from "./host.mjs"
+
+const { root: HOST_ROOT } = requireHostConfig("standalone-next-cases")
 const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "design-editor-next-")))
 const processes = new Set()
 
@@ -21,7 +21,7 @@ function write(relativePath, contents) {
 }
 
 function packageVersion(name) {
-  return JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "node_modules", name, "package.json"))).version
+  return JSON.parse(fs.readFileSync(path.join(HOST_ROOT, "node_modules", name, "package.json"))).version
 }
 
 function run(command, args) {
@@ -169,7 +169,7 @@ try {
     name: "standalone-next-design-editor-fixture",
     private: true,
     dependencies: {
-      "@workspace/design-editor": `file:${tarball}`,
+      "design-editor": `file:${tarball}`,
       "@tailwindcss/postcss": packageVersion("@tailwindcss/postcss"),
       "@types/node": packageVersion("@types/node"),
       "@types/react": packageVersion("@types/react"),

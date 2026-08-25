@@ -19,12 +19,11 @@
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { WebSocket } from "ws"
 
 import { loadConfig } from "../config.mjs"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 const FIXTURE_DIR = path.join(PACKAGE_DIR, "test/.fixtures")
 const KEEP = process.argv.includes("--keep")
 const OFFLINE = process.argv.includes("--offline")

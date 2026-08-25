@@ -3,10 +3,9 @@
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url))
+import { PACKAGE_DIR, vendorOverlayPath } from "./host.mjs"
 const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
   pretendToBeVisual: true,
   url: "http://localhost/",
@@ -43,7 +42,7 @@ const bundled = await build({
       export { mountShell } from "./src/shell/shell"
       export { setState } from "./src/core/store"
     `,
-    resolveDir: path.join(ROOT, "design-editor"),
+    resolveDir: PACKAGE_DIR,
     loader: "ts",
   },
   bundle: true,
@@ -183,13 +182,13 @@ context.select(null)
 context.setState({ hovered: null })
 selectedTarget.remove()
 
-const { resolveConfig } = await import(path.join(ROOT, "design-editor/config.mjs"))
-const { patchOverlay } = await import(path.join(ROOT, "design-editor/runtime/vendor-patch.mjs"))
+const { resolveConfig } = await import(path.join(PACKAGE_DIR, "config.mjs"))
+const { patchOverlay } = await import(path.join(PACKAGE_DIR, "runtime/vendor-patch.mjs"))
 const vendorSource = await fs.readFile(
-  path.join(ROOT, "node_modules/react-rewrite-cli/dist/overlay.js"),
+  vendorOverlayPath(),
   "utf8"
 )
-const patchedVendor = patchOverlay(vendorSource, resolveConfig({}, { cwd: ROOT }))
+const patchedVendor = patchOverlay(vendorSource, resolveConfig({}, { cwd: PACKAGE_DIR }))
 
 await check("the vendor overlay is patched off its own rAF loop", () => {
   assert.match(

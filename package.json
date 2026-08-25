@@ -1,5 +1,5 @@
 {
-  "name": "@workspace/design-editor",
+  "name": "design-editor",
   "version": "0.1.0",
   "private": true,
   "description": "A standalone visual editor for running Next.js development servers.",

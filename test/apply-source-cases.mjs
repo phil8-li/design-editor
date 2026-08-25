@@ -18,11 +18,9 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const HERE = path.dirname(fileURLToPath(import.meta.url))
-const PACKAGE = path.resolve(HERE, "..")
+import { PACKAGE_DIR as PACKAGE, vendorOverlayPath } from "./host.mjs"
 
 let passed = 0
 let failed = 0
@@ -181,11 +179,7 @@ function selectionFor(element, componentName = "Fixture") {
 const { patchOverlay } = await import(path.join(PACKAGE, "runtime/vendor-patch.mjs"))
 const { resolveConfig } = await import(path.join(PACKAGE, "config.mjs"))
 const config = resolveConfig({})
-const overlayPath = path.join(
-  PACKAGE,
-  "..",
-  "node_modules/react-rewrite-cli/dist/overlay.js"
-)
+const overlayPath = vendorOverlayPath()
 const overlaySource = fs.readFileSync(overlayPath, "utf8")
 
 await check("AS-01 the patched bridge exposes the element-taking async resolver", () => {

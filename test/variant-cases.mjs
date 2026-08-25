@@ -14,11 +14,9 @@
 import assert from "node:assert/strict"
 import http from "node:http"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
-const ROOT = fileURLToPath(new URL("../..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 const FIXTURES = path.join(PACKAGE_DIR, "test", "fixtures", "variants")
 
 let passed = 0

@@ -13,11 +13,9 @@
  */
 
 import assert from "node:assert/strict"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 
 let passed = 0
 let failed = 0
@@ -147,7 +145,7 @@ function installDom() {
 async function load(contents) {
   const { build } = await import("esbuild")
   const bundled = await build({
-    stdin: { contents, resolveDir: path.join(ROOT, "design-editor"), loader: "ts" },
+    stdin: { contents, resolveDir: PACKAGE_DIR, loader: "ts" },
     bundle: true,
     format: "esm",
     write: false,

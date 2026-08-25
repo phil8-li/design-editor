@@ -5,9 +5,8 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
-import { fileURLToPath } from "node:url"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "design-editor-cli-"))
 const installedBin = path.join(fixture, "design-editor")
 

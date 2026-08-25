@@ -16,14 +16,13 @@
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
 import { browserPrelude, loadConfig, resolveConfig } from "../config.mjs"
 import { DEFAULT_THEME_NAMESPACES, aliasesFromCss } from "../server/design-system-aliases.mjs"
 import { normalizeDesignSystemManifest } from "../server/design-system-manifest.mjs"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 const FIXTURES = path.join(PACKAGE_DIR, "test", "fixtures")
 const TOKEN_GROUPS = [
   "colors", "spacing", "radii", "textStyles", "uiTextStyles", "effects", "icons", "motion",

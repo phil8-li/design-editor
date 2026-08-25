@@ -1,0 +1,14 @@
+node_modules/
+
+# Built by `npm run build` from src/; never committed, so a stale bundle can
+# never be what a host actually serves.
+dist/
+
+# Launcher state: endpoint.json, saved option sets, control defaults.
+.local/
+
+# Written by the suites that need a directory on disk.
+test/.control-default-fixture/
+test/.icon-set-fixture/
+
+.DS_Store

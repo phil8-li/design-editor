@@ -1,9 +1,7 @@
 import assert from "node:assert/strict"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 const dom = new JSDOM(
   "<!doctype html><html><body><main><section id='host'></section></main></body></html>",
   { pretendToBeVisual: true }
@@ -23,7 +21,7 @@ const { build } = await import("esbuild")
 const bundled = await build({
   stdin: {
     contents: `export * from "./src/core/host-readiness"`,
-    resolveDir: path.join(ROOT, "design-editor"),
+    resolveDir: PACKAGE_DIR,
     loader: "ts",
   },
   bundle: true,

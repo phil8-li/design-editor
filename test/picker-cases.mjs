@@ -9,15 +9,12 @@
  */
 
 import assert from "node:assert/strict"
-import path from "node:path"
 import vm from "node:vm"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
 import { browserPrelude, loadConfig } from "../config.mjs"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
-const ROOT = path.dirname(PACKAGE_DIR)
+import { PACKAGE_DIR, requireHostConfig } from "./host.mjs"
 
 let passed = 0
 let failed = 0
@@ -69,7 +66,7 @@ async function loadEditorHelpers() {
   )
 }
 
-const workspace = await loadConfig({ configPath: path.join(ROOT, "design-editor.config.mjs") })
+const workspace = await loadConfig(requireHostConfig("picker-cases"))
 const browserSandbox = { window: {} }
 vm.runInNewContext(browserPrelude(workspace, { proxyPort: 4567 }), browserSandbox)
 globalThis.__DESIGN_EDITOR_CONFIG__ = browserSandbox.window.__DESIGN_EDITOR_CONFIG__

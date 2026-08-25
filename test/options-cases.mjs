@@ -16,10 +16,9 @@ import fs from "node:fs/promises"
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 
 let passed = 0
 let failed = 0
@@ -50,7 +49,7 @@ async function checkAsync(name, fn) {
 async function load(relativePath) {
   const { build } = await import("esbuild")
   const bundled = await build({
-    entryPoints: [path.join(ROOT, relativePath)],
+    entryPoints: [path.join(PACKAGE_DIR, relativePath)],
     bundle: true,
     format: "esm",
     write: false,
@@ -126,7 +125,7 @@ async function inventoryCases() {
       },
     },
   }
-  const inventory = await load("design-editor/src/options/inventory.ts")
+  const inventory = await load("src/options/inventory.ts")
 
   check("no __STORE reports an empty state instead of throwing", () => {
     delete dom.window.__STORE
@@ -314,15 +313,15 @@ function prototypeCases(inventory) {
 
 async function sourceDefaultCases() {
   console.log("\nSource-backed control defaults")
-  const { parseArgs } = await import(path.join(ROOT, "design-editor/cli.mjs"))
-  const { browserPrelude, resolveConfig } = await import(path.join(ROOT, "design-editor/config.mjs"))
+  const { parseArgs } = await import(path.join(PACKAGE_DIR, "cli.mjs"))
+  const { browserPrelude, resolveConfig } = await import(path.join(PACKAGE_DIR, "config.mjs"))
   const { createControlDefaults } = await import(
-    path.join(ROOT, "design-editor/server/control-defaults.mjs")
+    path.join(PACKAGE_DIR, "server/control-defaults.mjs")
   )
   const { createDesignEditorRoutes } = await import(
-    path.join(ROOT, "design-editor/server/routes.mjs")
+    path.join(PACKAGE_DIR, "server/routes.mjs")
   )
-  const fixtureDir = path.join(ROOT, "design-editor/test/.control-default-fixture")
+  const fixtureDir = path.join(PACKAGE_DIR, "test/.control-default-fixture")
   const fixture = path.join(fixtureDir, "defaults.ts")
   const source = `// unrelated header stays byte-for-byte\nexport const DEFAULTS: Record<string, Record<string, unknown>> = {\n  "Card": {\n    // keep this note\n    "gap": 8,\n    "color": "#fff",\n    "dynamic": makeDefault(),\n  },\n  "Other": { "flag": true },\n}\n\nexport const SENTINEL = "untouched"\n`
 
@@ -330,7 +329,7 @@ async function sourceDefaultCases() {
   await fs.writeFile(fixture, source)
   const config = resolveConfig(
     {
-      projectRoot: ROOT,
+      projectRoot: PACKAGE_DIR,
       source: { roots: [fixtureDir], extensions: [".ts"] },
       controls: {
         leva: {
@@ -340,12 +339,12 @@ async function sourceDefaultCases() {
         },
       },
     },
-    { cwd: ROOT }
+    { cwd: PACKAGE_DIR }
   )
   const defaults = createControlDefaults(config)
 
   check("generic defaults do not assume Leva, Agentation, or host chrome", () => {
-    const generic = resolveConfig({}, { cwd: ROOT })
+    const generic = resolveConfig({}, { cwd: PACKAGE_DIR })
     assert.deepEqual(generic.chrome.trustedSelectors, [])
     assert.equal(generic.chrome.trustedSelector, "")
     assert.equal(generic.controls.leva, null)
@@ -358,12 +357,12 @@ async function sourceDefaultCases() {
   })
 
   check("a relative projectRoot resolves from the config file, not process cwd", () => {
-    const configPath = path.join(ROOT, ".local", "configs", "design-editor.config.mjs")
+    const configPath = path.join(PACKAGE_DIR, ".local", "configs", "design-editor.config.mjs")
     const resolved = resolveConfig(
       { projectRoot: "../.." },
-      { configPath, cwd: path.join(ROOT, "unrelated-cwd") }
+      { configPath, cwd: path.join(PACKAGE_DIR, "unrelated-cwd") }
     )
-    assert.equal(resolved.projectRoot, path.resolve(ROOT))
+    assert.equal(resolved.projectRoot, path.resolve(PACKAGE_DIR))
   })
 
   check("the browser prelude excludes source-default file and export details", () => {
@@ -436,17 +435,17 @@ async function sourceDefaultCases() {
   check("refuses a configured defaults file outside editable source roots", () => {
     const unsafe = resolveConfig(
       {
-        projectRoot: ROOT,
+        projectRoot: PACKAGE_DIR,
         source: { roots: [fixtureDir], extensions: [".ts"] },
         controls: {
           leva: {
             storeGlobal: "__STORE",
-            sourceDefaults: { file: path.join(ROOT, "elsewhere.ts"), exportName: "DEFAULTS" },
+            sourceDefaults: { file: path.join(PACKAGE_DIR, "elsewhere.ts"), exportName: "DEFAULTS" },
             bindings: [],
           },
         },
       },
-      { cwd: ROOT }
+      { cwd: PACKAGE_DIR }
     )
     assert.throws(() => createControlDefaults(unsafe), /outside editable source roots/)
   })
@@ -460,7 +459,7 @@ async function sourceDefaultCases() {
       await fs.symlink(outsideFile, linkedFile)
       const unsafe = resolveConfig(
         {
-          projectRoot: ROOT,
+          projectRoot: PACKAGE_DIR,
           source: { roots: [fixtureDir], extensions: [".ts"] },
           controls: {
             leva: {
@@ -470,7 +469,7 @@ async function sourceDefaultCases() {
             },
           },
         },
-        { cwd: ROOT }
+        { cwd: PACKAGE_DIR }
       )
       assert.throws(() => createControlDefaults(unsafe), /outside editable source roots/)
     } finally {
@@ -484,7 +483,7 @@ async function sourceDefaultCases() {
 
 async function writerCases() {
   console.log("\nClass snapshot writer")
-  const { createWriter } = await load("design-editor/src/core/writer.ts")
+  const { createWriter } = await load("src/core/writer.ts")
   const parent = document.createElement("div")
   parent.className = "parent-shell"
   const element = document.createElement("button")
@@ -543,9 +542,9 @@ async function writerCases() {
 async function baselineCases() {
   console.log("\nBaseline persistence")
 
-  const client = await load("design-editor/src/options/store.ts")
+  const client = await load("src/options/store.ts")
   const { normalizeOptionSet } = await import(
-    path.join(ROOT, "design-editor/server/options-store.mjs")
+    path.join(PACKAGE_DIR, "server/options-store.mjs")
   )
 
   const KEY = "ProjectShell:412:div0/div1/div2/div3/main0/button3"
@@ -628,7 +627,7 @@ async function panelSectionCases() {
         export { optionsSection, optionsActionsSection } from "./src/options/panel"
         export { setState } from "./src/core/store"
       `,
-      resolveDir: path.join(ROOT, "design-editor"),
+      resolveDir: PACKAGE_DIR,
       loader: "ts",
     },
     bundle: true,

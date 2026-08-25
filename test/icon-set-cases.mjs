@@ -21,14 +21,12 @@ import fs from "node:fs/promises"
 import http from "node:http"
 import path from "node:path"
 import vm from "node:vm"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
 import { browserPrelude, loadConfig, resolveConfig } from "../config.mjs"
 import { createIconSet, resolveIconSetConfig } from "../server/icon-set.mjs"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
-const ROOT = path.dirname(PACKAGE_DIR)
+import { PACKAGE_DIR, requireHostConfig } from "./host.mjs"
 
 let passed = 0
 let failed = 0
@@ -60,28 +58,28 @@ async function checkAsync(name, fn) {
 console.log("\nThe icon-set seam")
 
 check("no icon set is a valid host, and both halves are required together", () => {
-  assert.deepEqual(resolveIconSetConfig(undefined, ROOT), { attribute: "", data: null })
-  assert.deepEqual(resolveIconSetConfig(null, ROOT), { attribute: "", data: null })
-  assert.deepEqual(resolveIconSetConfig({}, ROOT), { attribute: "", data: null })
+  assert.deepEqual(resolveIconSetConfig(undefined, PACKAGE_DIR), { attribute: "", data: null })
+  assert.deepEqual(resolveIconSetConfig(null, PACKAGE_DIR), { attribute: "", data: null })
+  assert.deepEqual(resolveIconSetConfig({}, PACKAGE_DIR), { attribute: "", data: null })
 
   // An attribute with no data names icons the picker cannot draw; data with no
   // attribute cannot be matched to the `<svg>` the user clicked. Either half
   // alone is a config that looks configured and does nothing.
-  assert.throws(() => resolveIconSetConfig({ attribute: "data-icon" }, ROOT), /both/)
-  assert.throws(() => resolveIconSetConfig({ data: "icons.json" }, ROOT), /both/)
+  assert.throws(() => resolveIconSetConfig({ attribute: "data-icon" }, PACKAGE_DIR), /both/)
+  assert.throws(() => resolveIconSetConfig({ data: "icons.json" }, PACKAGE_DIR), /both/)
 })
 
 check("the attribute is a plain lowercase attribute name", () => {
   for (const attribute of ["Data-Icon", "data icon", "data-icon=x", "1data", "a".repeat(80)]) {
     assert.throws(
-      () => resolveIconSetConfig({ attribute, data: "icons.json" }, ROOT),
+      () => resolveIconSetConfig({ attribute, data: "icons.json" }, PACKAGE_DIR),
       /attribute/,
       `"${attribute}" should be refused`
     )
   }
-  assert.deepEqual(resolveIconSetConfig({ attribute: "data-icon", data: "a/icons.json" }, ROOT), {
+  assert.deepEqual(resolveIconSetConfig({ attribute: "data-icon", data: "a/icons.json" }, PACKAGE_DIR), {
     attribute: "data-icon",
-    data: path.join(ROOT, "a/icons.json"),
+    data: path.join(PACKAGE_DIR, "a/icons.json"),
   })
 })
 
@@ -101,8 +99,8 @@ await checkAsync("the catalog is sorted, and anything that is not a drawing is d
   )
   try {
     const set = createIconSet(
-      resolveConfig({ projectRoot: ROOT, icons: { attribute: "data-icon", data: file } }, {
-        cwd: ROOT,
+      resolveConfig({ projectRoot: PACKAGE_DIR, icons: { attribute: "data-icon", data: file } }, {
+        cwd: PACKAGE_DIR,
       })
     )
     const payload = set.read()
@@ -131,7 +129,7 @@ check("a host with no icon set serves an empty catalog rather than failing", () 
 
 console.log("\nThe Workspaces set")
 
-const workspace = await loadConfig({ configPath: path.join(ROOT, "design-editor.config.mjs") })
+const workspace = await loadConfig(requireHostConfig("icon-set-cases"))
 const hostIcons = createIconSet(workspace).read()
 const prelude = browserPrelude(workspace, { proxyPort: 4567 })
 

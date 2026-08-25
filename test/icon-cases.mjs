@@ -12,10 +12,9 @@
  */
 
 import assert from "node:assert/strict"
-import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 
-const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url))
+import { PACKAGE_DIR } from "./host.mjs"
 
 let passed = 0
 let failed = 0
