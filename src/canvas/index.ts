@@ -11,12 +11,12 @@
 import { isCanvasElement, isChrome } from "../core/dom"
 import { canvasAction, isDeepSelect, NUDGE, ownsCanvasKeys } from "../core/keymap"
 import { getResolver, toSelectable } from "../core/resolve"
+import { editorOwnsInput } from "../core/store"
 import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
 import { installSelectionFrame } from "./selection"
 import { installTransform, translateBy } from "./transform"
 import { installSnapping } from "./snapping"
-import { installMeasure } from "./measure"
 import { installMarquee } from "./marquee"
 import { installLayerMenu } from "./layer-menu"
 
@@ -27,7 +27,6 @@ export function installCanvas(context: EditorContext): void {
   installSelectionFrame(context)
   installTransform(context)
   installSnapping(context)
-  installMeasure(context)
   installLayerMenu(context)
 
   // `select()` early-returns when the element is already the whole selection,
@@ -62,16 +61,16 @@ export function installCanvas(context: EditorContext): void {
     pointerX = event.clientX
     pointerY = event.clientY
     pointerHit = hitFor(event)
-    const { tool } = context.getState()
-    if (tool === "hand" || tool === "text") return
+    if (!editorOwnsInput()) return
+    if (context.getState().tool === "hand") return
     if (isChrome(event.target)) return
     setHovered(targetFor(pointerHit, isDeepSelect(event)))
   }
 
   const onPointerDown = (event: PointerEvent) => {
     if (isChrome(event.target)) return
-    const { tool } = context.getState()
-    if (tool === "hand" || tool === "text" || tool === "comment") return
+    if (!editorOwnsInput()) return
+    if (context.getState().tool === "hand") return
     // Right-click belongs to the layer-stack menu, which selects for itself.
     if (event.button !== 0) return
 
@@ -104,8 +103,8 @@ export function installCanvas(context: EditorContext): void {
   /** Double-click descends exactly one level and takes the scope with it. */
   const onDoubleClick = (event: MouseEvent) => {
     if (isChrome(event.target)) return
-    const { tool } = context.getState()
-    if (tool === "hand" || tool === "text" || tool === "comment") return
+    if (!editorOwnsInput()) return
+    if (context.getState().tool === "hand") return
     const hit = hitFor(event)
     if (!hit) return
 
@@ -144,6 +143,7 @@ export function installCanvas(context: EditorContext): void {
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
+    if (!editorOwnsInput()) return
     // A held modifier changes what a click would select, so the outline has to
     // follow it even while the pointer is stationary.
     if (event.key === "Meta" || event.key === "Control") {
@@ -195,18 +195,22 @@ export function installCanvas(context: EditorContext): void {
   }
 
   const onKeyUp = (event: KeyboardEvent) => {
+    if (!editorOwnsInput()) return
     if (event.key !== "Meta" && event.key !== "Control") return
     setHovered(
       targetFor(pointerHit ?? resolver.hitStack(pointerX, pointerY)[0] ?? null, isDeepSelect(event))
     )
   }
 
-  // Swallow app activation while a design tool is active: clicking a button to
+  // Swallow app activation while the editor owns the page: clicking a button to
   // select it must not also navigate. Capture on `window` runs before the
   // vendor overlay's own document-level guards, so ours wins the gesture.
+  //
+  // Interactive mode is exactly the absence of this line, which is why it is
+  // the mode's whole point rather than a convenience: nothing else in the
+  // editor stops the app from responding to a click.
   const onClick = (event: MouseEvent) => {
-    const { tool } = context.getState()
-    if (tool !== "move" && tool !== "select" && tool !== "hand") return
+    if (!editorOwnsInput()) return
     if (isChrome(event.target) || !isCanvasElement(event.target)) return
     event.preventDefault()
     event.stopPropagation()

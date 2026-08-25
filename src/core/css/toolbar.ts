@@ -1,4 +1,4 @@
-/** Figma UI3-style floating bottom toolbar and its compact action inventory. */
+/** Figma UI3-style floating bottom toolbar, its controls, and their tooltips. */
 
 import { tokens as t } from "../tokens"
 
@@ -47,13 +47,30 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
   display: inline-flex; align-items: center; gap: 6px;
   border: none; border-radius: ${t.radius.md};
   background: ${t.color.bgRaised}; color: ${t.color.text};
-  font-family: inherit; font-size: 11px; font-weight: 500;
+  font-family: inherit; font-size: ${t.type.body}; font-weight: ${t.type.weightValue};
   cursor: pointer;
 }
 .de-button:hover { background: ${t.color.bgHover}; }
-.de-button--primary { background: ${t.color.accentSurface}; }
+/*
+ * The accent is a LIGHT indigo, so a filled button flips its ink instead of
+ * darkening its surface. White on this fill measures 1.9:1; the fixed-dark ink
+ * measures 10.1:1, which is why tokens.ts pairs the two.
+ */
+.de-button--primary { background: ${t.color.accentSurface}; color: ${t.color.onAccent}; }
 .de-button--primary:hover { background: ${t.color.accentSurfaceHover}; }
 .de-button--danger:hover { background: ${t.color.danger}; }
+/*
+ * A pressed text button is a MODE, and a mode has to be legible from across the
+ * room — the whole point of the interactive switch is that a click no longer
+ * does what the editor trained you to expect. A hover-weight wash would not
+ * carry that, so it takes the same filled treatment as the primary action.
+ */
+.de-button[aria-pressed="true"] {
+  background: ${t.color.accentSurface};
+  color: ${t.color.onAccent};
+  font-weight: ${t.type.weightSection};
+}
+.de-button[aria-pressed="true"]:hover { background: ${t.color.accentSurfaceHover}; }
 .de-button[disabled] { opacity: 0.4; cursor: default; background: ${t.color.bgRaised}; }
 .de-button:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
 
@@ -62,34 +79,43 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
   display: inline-flex; align-items: center;
   padding: 0 6px;
   color: ${t.color.textDim};
-  font-size: 10px;
+  font-size: ${t.type.caption};
 }
-.de-actions { position: relative; }
-.de-actions-menu {
-  position: absolute;
-  right: 0; bottom: calc(100% + 8px);
-  width: 272px;
-  max-height: min(520px, calc(100vh - 72px));
-  overflow-y: auto;
-  padding: 6px;
-  background: ${t.color.bgRaised};
-  border: 1px solid ${t.color.border};
-  border-radius: ${t.radius.lg};
-  box-shadow: ${t.shadow.popover};
-}
-.de-actions-menu[hidden] { display: none; }
-.de-action-row {
-  width: 100%; min-height: 28px;
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 4px 7px;
-  border: none; border-radius: ${t.radius.md};
-  background: transparent; color: ${t.color.text};
-  font: inherit; text-align: left; cursor: pointer;
-}
-.de-action-row:hover { background: ${t.color.bgHoverQuiet}; }
-.de-action-row:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -2px; }
-.de-capability-group { padding: 7px; border-top: 1px solid ${t.color.border}; }
-.de-capability-title { color: ${t.color.text}; font-size: 10px; font-weight: 600; }
-.de-capability-copy { margin-top: 2px; color: ${t.color.textDim}; font-size: 9px; line-height: 1.45; }
 
+/*
+ * Tooltips. Always ABOVE the control: this strip is pinned to the bottom of the
+ * viewport, so a tip below it would render off-screen. Delayed on the way in so
+ * it never fires while the pointer is only crossing the bar, and instant on the
+ * way out so walking the row does not trail a queue of labels. Not the native
+ * \`title\` attribute — that waits about a second and then paints OS chrome,
+ * which beside this surface reads as a glitch rather than as an answer.
+ */
+.de-toolbar [data-de-tip] { position: relative; }
+.de-toolbar [data-de-tip]::after {
+  content: attr(data-de-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 6px;
+  background: ${t.color.bgSunken};
+  color: ${t.color.text};
+  border-radius: ${t.radius.md};
+  box-shadow: ${t.shadow.popover};
+  font-size: ${t.type.caption};
+  font-weight: ${t.type.weightBody};
+  line-height: 14px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity ${t.duration.fast} ${t.ease};
+}
+.de-toolbar [data-de-tip]:hover::after,
+.de-toolbar [data-de-tip]:focus-visible::after {
+  opacity: 1;
+  transition-delay: 400ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .de-toolbar [data-de-tip]::after { transition: none; }
+}
 `

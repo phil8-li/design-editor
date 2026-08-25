@@ -23,7 +23,15 @@ export interface Selection {
   key: string
 }
 
-export type ToolId = "move" | "select" | "text" | "hand" | "comment"
+/**
+ * Two tools, because two is what the toolbar draws.
+ *
+ * "select" (Scale) only ever did what Move already does, "text" mirrored a
+ * vendor mode this editor cannot commit, and "comment" was gated in three
+ * canvas handlers while never appearing as a control — a mode the user could
+ * not reach is a branch nobody can test.
+ */
+export type ToolId = "move" | "hand"
 
 export interface Rect {
   x: number

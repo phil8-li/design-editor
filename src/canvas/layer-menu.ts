@@ -10,6 +10,7 @@
 
 import { el, isChrome } from "../core/dom"
 import { getResolver, toSelectable } from "../core/resolve"
+import { editorOwnsInput } from "../core/store"
 import type { EditorContext } from "../core/context"
 
 /** Deeper than this the stack is layout wrappers, and the menu is a wall of divs. */
@@ -77,8 +78,12 @@ export function installLayerMenu(context: EditorContext): void {
 
   const onContextMenu = (event: MouseEvent) => {
     close()
+    // Its own window listener, so it needs its own mode gate: interactive mode
+    // is a promise that every gesture reaches the app, and a right-click that
+    // opened the layer stack instead would break it as surely as a left one.
+    if (!editorOwnsInput()) return
     const { tool } = context.getState()
-    if (tool !== "move" && tool !== "select") return
+    if (tool !== "move") return
     if (isChrome(event.target)) return
     const stack = resolver.hitStack(event.clientX, event.clientY).slice(0, MAX_ROWS)
     if (!stack.length) return
