@@ -5,6 +5,7 @@ import {
   type DesignSystemCatalog,
   type DesignSystemToken,
   type TailwindTokenAlias,
+  type TrackingUnit,
 } from "./config"
 import { splitVariantChain } from "./responsive"
 
@@ -333,8 +334,20 @@ function directUtilities(classNames: readonly string[]): string[] {
   return classNames.filter((name) => splitVariantChain(name).length === 1)
 }
 
+/**
+ * The utility a theme alias is written as, or null when this axis has no use
+ * for that namespace.
+ *
+ * `alias.name` arrives already stripped of its namespace — the server splits
+ * `--color-background` into `{ namespace: "color", name: "background" }`, and a
+ * v3 host's alias never had a custom property to strip in the first place. This
+ * function therefore reads the namespace off the alias rather than re-deriving
+ * it from a hardcoded spelling of one host's variables. The four mappings below
+ * are Tailwind's own utility grammar, not a host's vocabulary: a namespace the
+ * editor has no role for simply yields no utility.
+ */
 function aliasUtility(property: DesignTokenProperty, alias: TailwindTokenAlias): string | null {
-  const name = alias.name.replace(/^--(?:color|radius|text|shadow)-/, "")
+  const name = alias.name
   const stem = UTILITY_STEM[property]
   const category = PROPERTY_CATEGORY[property]
   if (alias.namespace === "color" && category === "colors" && stem) return `${stem}-${name}`
@@ -453,7 +466,18 @@ export function textStyleSignature(value: {
     .join("|")
 }
 
-function textTokenSignature(token: DesignSystemToken): string | null {
+/**
+ * A text token as the px signature a computed style can be compared against.
+ *
+ * The unit is DECLARED by the host, never inferred. This used to read the unit
+ * off the magnitude — under 1 was treated as em, 1 or more as px — which is
+ * true of this app's manifest and of nothing in particular. A system with
+ * `letter-spacing: -0.5px` on a 14px body style would have had that half-pixel
+ * multiplied into -7px and matched nothing, and a system tracking headlines at
+ * `1.2em` would have been read as 1.2px. `designSystem.trackingUnit` (or the
+ * manifest's own `trackingUnit`) says which one it is.
+ */
+function textTokenSignature(token: DesignSystemToken, trackingUnit: TrackingUnit): string | null {
   const value = token.values.default
   if (!value || typeof value !== "object") return null
   const shape = value as Record<string, unknown>
@@ -462,14 +486,17 @@ function textTokenSignature(token: DesignSystemToken): string | null {
   const fontWeight = scalar(shape.fontWeight)
   const tracking = scalar(shape.letterSpacing)
   if (fontSize === null || lineHeight === null || tracking === null) return null
-  // The catalog stores tracking in em; computed style reports px. Larger generic-host values are px.
-  const letterSpacing = Math.abs(tracking) < 1 ? tracking * fontSize : tracking
+  const letterSpacing = trackingUnit === "em" ? tracking * fontSize : tracking
   return textStyleSignature({ fontSize, lineHeight, fontWeight, letterSpacing })
 }
 
-function rawTokenValues(property: DesignTokenProperty, token: DesignSystemToken): string[] {
+function rawTokenValues(
+  property: DesignTokenProperty,
+  token: DesignSystemToken,
+  trackingUnit: TrackingUnit
+): string[] {
   if (property === "text-style") {
-    const signature = textTokenSignature(token)
+    const signature = textTokenSignature(token, trackingUnit)
     return signature ? [signature] : []
   }
   const value = token.values.default
@@ -497,10 +524,11 @@ export function computedTokenMatches(
   resolveCssVar: (name: string) => string = (name) => `var(${name})`
 ): DesignSystemMatch[] {
   const targetNumber = scalar(computedValue)
+  const trackingUnit = registry.trackingUnit ?? "em"
   return tokensForProperty(property, registry).flatMap((token) => {
     const candidates = [
       ...tokenVariables(token).map((name) => resolveCssVar(name)),
-      ...rawTokenValues(property, token),
+      ...rawTokenValues(property, token, trackingUnit),
     ].filter(Boolean)
     const equal = candidates.some((candidate) => {
       const candidateNumber = scalar(candidate)

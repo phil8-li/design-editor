@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert/strict"
+import fs from "node:fs"
 import path from "node:path"
 import vm from "node:vm"
 import { fileURLToPath } from "node:url"
@@ -65,9 +66,25 @@ async function loadEditorHelpers() {
 
 console.log("\nDesign-system catalog")
 
-const workspace = await loadConfig({
-  configPath: path.join(ROOT, "design-editor.config.mjs"),
-})
+/**
+ * THIS repository's host config, and its numbers are deliberately pinned below.
+ *
+ * That makes this suite the one place the editor is coupled to the app it lives
+ * in, which is the point: it is the regression net that catches a change to the
+ * tool silently changing what this app sees. The host-AGNOSTIC contract — that
+ * the same code reads a design system it has never met, with differently spelled
+ * `@theme` namespaces, absent token groups, a Tailwind v3 scale, or no manifest
+ * at all — is proved without this file, on the fixture hosts in
+ * host-agnostic-cases.mjs.
+ */
+const HOST_CONFIG = path.join(ROOT, "design-editor.config.mjs")
+if (!fs.existsSync(HOST_CONFIG)) {
+  throw new Error(
+    `${HOST_CONFIG} is missing. This suite pins the host repository's own catalog; ` +
+      "run host-agnostic-cases.mjs for the package-only contract."
+  )
+}
+const workspace = await loadConfig({ configPath: HOST_CONFIG })
 const catalog = workspace.designSystem.catalog
 const prelude = browserPrelude(workspace, { proxyPort: 4567 })
 const browserSandbox = { window: {} }
