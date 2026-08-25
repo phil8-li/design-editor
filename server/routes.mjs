@@ -14,6 +14,7 @@ import { createAgent } from "./agent.mjs"
 import { createControlDefaults } from "./control-defaults.mjs"
 import { createIconSet } from "./icon-set.mjs"
 import { createOptionsStore, normalizeOptionSet } from "./options-store.mjs"
+import { createVariantCatalog } from "./variants.mjs"
 
 const MAX_BODY_BYTES = 1024 * 1024
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
@@ -108,7 +109,7 @@ function controlTarget(searchParams) {
   return { group, key }
 }
 
-async function route(store, defaults, agent, icons, prefix, req, res, url) {
+async function route(store, defaults, agent, icons, variants, prefix, req, res, url) {
   const { pathname, searchParams } = url
   const rest = pathname.slice(prefix.length)
 
@@ -159,6 +160,14 @@ async function route(store, defaults, agent, icons, prefix, req, res, url) {
     return
   }
 
+  // The variant axes a component declares. Read-only, and behind the same
+  // loopback guard as everything else: it reads a project file, which is
+  // exactly the capability the guard exists to keep on this machine.
+  if (rest === "/variants" && req.method === "GET") {
+    sendJson(res, 200, variants.read(searchParams.get("file") ?? ""))
+    return
+  }
+
   if (rest === "/agent" && req.method === "POST") {
     sendJson(res, 200, await agent.runAgent((await readJsonBody(req)) ?? {}))
     return
@@ -174,6 +183,7 @@ export function createDesignEditorRoutes(config = resolveConfig()) {
   const defaults = createControlDefaults(config)
   const agent = createAgent(config)
   const icons = createIconSet(config)
+  const variants = createVariantCatalog(config)
 
   return {
     prefix,
@@ -195,7 +205,7 @@ export function createDesignEditorRoutes(config = resolveConfig()) {
         return true
       }
 
-      route(store, defaults, agent, icons, prefix, req, res, url).catch((error) => {
+      route(store, defaults, agent, icons, variants, prefix, req, res, url).catch((error) => {
         if (res.headersSent) {
           res.end()
           return

@@ -12,6 +12,7 @@ import type { EditorContext } from "../../core/context"
 import type { Selection } from "../../core/types"
 
 import { iconSection } from "./section-icon"
+import { variantsSection } from "./section-variants"
 import { unifiedLayoutSection } from "./section-unified-layout"
 import { designSystemSection } from "./section-design-system"
 import { responsiveSection } from "./section-responsive"
@@ -41,6 +42,9 @@ const SECTIONS: InspectorSection[] = [
   // First, like Figma's instance properties: the first question about a placed
   // symbol is which symbol it is.
   iconSection,
+  // Directly under it, the way Figma stacks an instance's block: the main
+  // component swap first, then the variant properties that component declares.
+  variantsSection,
   optionsSection,
   designSystemSection,
   responsiveSection,

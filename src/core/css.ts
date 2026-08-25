@@ -12,6 +12,7 @@ import { layersCss } from "./css/layers"
 import { optionsCss } from "./css/options"
 import { canvasCss } from "./css/canvas"
 import { tokenPickerCss } from "./css/token-picker"
+import { variantsCss } from "./css/variants"
 
 /**
  * Concatenated in source order so the cascade is unchanged. Each module is
@@ -19,6 +20,6 @@ import { tokenPickerCss } from "./css/token-picker"
  * single `shellCss` export the shell already imports.
  */
 export const shellCss =
-  baseCss + toolbarCss + panelsCss + layersCss + optionsCss + canvasCss + tokenPickerCss
+  baseCss + toolbarCss + panelsCss + layersCss + optionsCss + canvasCss + tokenPickerCss + variantsCss
 
 export { vendorChromeCss }
