@@ -102,6 +102,8 @@ export const tokens = {
     body: "11px",
     /** Group headers and hints. Density, not tone — use sparingly. */
     caption: "10px",
+    /** Inventory eyebrows and type tags in the options panel, and only those. */
+    micro: "9px",
     weightBody: 400,
     weightValue: 500,
     weightSection: 600,
@@ -128,3 +130,17 @@ export const tokens = {
 } as const
 
 export type Tokens = typeof tokens
+
+/**
+ * A filled accent surface and the ink that rides on it, as ONE declaration.
+ *
+ * The fill and its foreground are not two decisions. While the accent was
+ * Figma's dark blue a call site could write `background: accentSurface` alone
+ * and inherit the shell's white ink harmlessly; against the design system's
+ * light indigo that same line lands at 1.9:1 and the label disappears. Five
+ * call sites were already written that way. Emitting both properties together
+ * means the wrong pairing cannot be written — the same reason `glyph-plate.ts`
+ * owns a fill and a radius rather than exporting a colour.
+ */
+export const accentFill = `background: ${RAIL}; color: ${ON_RAIL};`
+export const accentFillHover = `background: ${tokens.color.accentSurfaceHover}; color: ${ON_RAIL};`

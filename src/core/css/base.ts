@@ -68,7 +68,7 @@ html.design-editor-active {
 [data-design-editor] {
   box-sizing: border-box;
   font-family: ${t.font.ui};
-  font-size: 11px;
+  font-size: ${t.type.body};
   line-height: 16px;
   color: ${t.color.text};
   -webkit-font-smoothing: antialiased;

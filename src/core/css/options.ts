@@ -1,6 +1,6 @@
 /** Saved option rows, the design-options browser, and the AI prompt panel. */
 
-import { tokens as t } from "../tokens"
+import { tokens as t, accentFill } from "../tokens"
 
 export const optionsCss = `/* ---------- options / variants ---------- */
 .de-option-row { display: flex; align-items: center; gap: 2px; }
@@ -42,13 +42,13 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   height: 28px; padding: 0 12px;
   border: 1px solid ${t.color.borderInteractive}; border-radius: ${t.radius.xl};
   background: ${t.color.bgRaised}; color: ${t.color.text};
-  font-family: inherit; font-size: 11px; font-weight: 600;
+  font-family: inherit; font-size: ${t.type.body}; font-weight: ${t.type.weightSection};
   box-shadow: ${t.shadow.panel};
   cursor: pointer;
   transition: background ${t.duration.fast} ${t.ease};
 }
 .de-options-root .de-opt-launcher:hover { background: ${t.color.bgHover}; }
-.de-options-root .de-opt-launcher[aria-expanded="true"] { background: ${t.color.accentSurface}; border-color: ${t.color.accent}; }
+.de-options-root .de-opt-launcher[aria-expanded="true"] { ${accentFill} border-color: ${t.color.accent}; }
 .de-options-root .de-opt-launcher:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 2px; }
 
 .de-options-root .de-opt-window {
@@ -69,7 +69,7 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   height: 34px; padding: 0 6px 0 12px;
   border-bottom: 1px solid ${t.color.border};
 }
-.de-opt-title { font-size: 11px; font-weight: 600; }
+.de-opt-title { font-size: ${t.type.body}; font-weight: ${t.type.weightSection}; }
 .de-opt-close {
   width: 22px; height: 22px;
   border: none; border-radius: ${t.radius.sm};
@@ -83,10 +83,10 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   height: 24px; padding: 0 10px;
   border: none; border-radius: ${t.radius.md};
   background: transparent; color: ${t.color.textMuted};
-  font-family: inherit; font-size: 11px; font-weight: 500; cursor: pointer;
+  font-family: inherit; font-size: ${t.type.body}; font-weight: ${t.type.weightValue}; cursor: pointer;
 }
 .de-opt-tab:hover { background: ${t.color.bgHover}; color: ${t.color.text}; }
-.de-opt-tab[aria-pressed="true"] { background: ${t.color.accentSurface}; color: ${t.color.text}; }
+.de-opt-tab[aria-pressed="true"] { ${accentFill} }
 .de-opt-tab:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
 
 .de-opt-filter {
@@ -94,7 +94,7 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   height: ${t.size.rowHeight}px;
   border: 1px solid ${t.color.border}; border-radius: ${t.radius.md};
   background: ${t.color.bgSunken}; color: ${t.color.text};
-  font-family: inherit; font-size: 11px;
+  font-family: inherit; font-size: ${t.type.body};
   outline: none;
 }
 .de-opt-filter:focus { border-color: ${t.color.accent}; }
@@ -113,7 +113,7 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   margin: 0 0 8px; padding: 6px 8px;
   border-left: 2px solid ${t.color.borderStrong}; border-radius: ${t.radius.sm};
   background: ${t.color.bgSunken};
-  color: ${t.color.textMuted}; font-size: 10px; line-height: 1.5;
+  color: ${t.color.textMuted}; font-size: ${t.type.caption}; line-height: 1.5;
 }
 
 .de-opt-folder { border-top: 1px solid ${t.color.border}; }
@@ -121,18 +121,18 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   display: flex; align-items: center; gap: 8px;
   height: 28px; padding: 0 4px;
   cursor: pointer; list-style: none;
-  font-size: 11px; font-weight: 600;
+  font-size: ${t.type.body}; font-weight: ${t.type.weightSection};
 }
 .de-opt-summary::-webkit-details-marker { display: none; }
 .de-opt-summary::before {
   content: "▸";
-  color: ${t.color.textDim}; font-size: 9px;
+  color: ${t.color.textDim}; font-size: ${t.type.micro};
   transition: transform ${t.duration.fast} ${t.ease};
 }
 .de-opt-folder[open] > .de-opt-summary::before { transform: rotate(90deg); }
 .de-opt-summary:hover { background: ${t.color.bgHover}; }
 .de-opt-folder-name { flex: none; }
-.de-opt-count { flex: 1; color: ${t.color.textDim}; font-size: 10px; font-weight: 400; }
+.de-opt-count { flex: 1; color: ${t.color.textDim}; font-size: ${t.type.caption}; font-weight: ${t.type.weightBody}; }
 .de-opt-folder-body { padding: 0 0 6px 14px; display: flex; flex-direction: column; gap: 2px; }
 /* Only the inspector's inline copy scrolls. The options browser is a full-height
    list of its own and must keep growing. */
@@ -147,25 +147,25 @@ export const optionsCss = `/* ---------- options / variants ---------- */
 .de-opt-row[data-hidden] { opacity: 0.55; }
 .de-opt-head { display: flex; align-items: baseline; gap: 6px; }
 .de-opt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.de-opt-type { color: ${t.color.textDim}; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; }
+.de-opt-type { color: ${t.color.textDim}; font-size: ${t.type.micro}; text-transform: uppercase; letter-spacing: 0.04em; }
 .de-opt-tag {
   padding: 0 4px;
   border-radius: ${t.radius.sm};
   background: ${t.color.bgHover}; color: ${t.color.textMuted};
-  font-size: 9px; font-weight: 500;
+  font-size: ${t.type.micro}; font-weight: ${t.type.weightValue};
 }
 .de-opt-tag--saved { background: ${t.color.accentSoft}; color: ${t.color.text}; }
 .de-opt-path {
-  font-family: ${t.font.mono}; font-size: 9px;
+  font-family: ${t.font.mono}; font-size: ${t.type.micro};
   color: ${t.color.textDim}; word-break: break-all;
 }
-.de-opt-value { color: ${t.color.textMuted}; font-family: ${t.font.mono}; font-size: 10px; }
+.de-opt-value { color: ${t.color.textMuted}; font-family: ${t.font.mono}; font-size: ${t.type.caption}; }
 .de-opt-check { display: inline-flex; align-items: center; gap: 6px; color: ${t.color.textMuted}; cursor: pointer; }
 .de-opt-input {
   height: 20px; padding: 0 6px;
   border: 1px solid ${t.color.border}; border-radius: ${t.radius.sm};
   background: ${t.color.bgSunken}; color: ${t.color.text};
-  font-family: ${t.font.mono}; font-size: 10px;
+  font-family: ${t.font.mono}; font-size: ${t.type.caption};
   outline: none;
 }
 .de-opt-input:focus { border-color: ${t.color.accent}; }
@@ -176,12 +176,12 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   padding: 1px 7px;
   border: 1px solid ${t.color.border}; border-radius: ${t.radius.xl};
   background: ${t.color.bgRaised}; color: ${t.color.textMuted};
-  font-family: inherit; font-size: 10px; cursor: pointer;
+  font-family: inherit; font-size: ${t.type.caption}; cursor: pointer;
   transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease};
 }
 .de-opt-chip:hover { background: ${t.color.bgHover}; color: ${t.color.text}; }
 .de-opt-chip[aria-pressed="true"] {
-  background: ${t.color.accentSurface}; border-color: ${t.color.accent}; color: ${t.color.text};
+  ${accentFill} border-color: ${t.color.accent};
 }
 .de-opt-chip:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
 
@@ -193,7 +193,7 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   align-self: flex-start;
   padding: 0; border: none; background: transparent;
   color: ${t.color.textDim};
-  font-family: inherit; font-size: 10px; text-decoration: underline;
+  font-family: inherit; font-size: ${t.type.caption}; text-decoration: underline;
   text-underline-offset: 2px; cursor: pointer;
 }
 .de-opt-link:hover { color: ${t.color.text}; }
@@ -202,7 +202,7 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   margin: 0; padding: 6px 8px;
   border-radius: ${t.radius.sm};
   background: ${t.color.bgSunken}; color: ${t.color.textMuted};
-  font-size: 10px; line-height: 1.5;
+  font-size: ${t.type.caption}; line-height: 1.5;
 }
 .de-opt-why[hidden] { display: none; }
 
@@ -212,11 +212,11 @@ export const optionsCss = `/* ---------- options / variants ---------- */
   padding: 6px 8px;
   border: 1px solid ${t.color.border}; border-radius: ${t.radius.md};
   background: ${t.color.bgSunken}; color: ${t.color.text};
-  font-family: inherit; font-size: 11px; line-height: 1.45;
+  font-family: inherit; font-size: ${t.type.body}; line-height: 1.45;
   outline: none;
 }
 .de-ai-input:focus { border-color: ${t.color.accent}; }
-.de-ai-status { color: ${t.color.textDim}; font-size: 10px; line-height: 1.5; white-space: pre-wrap; }
+.de-ai-status { color: ${t.color.textDim}; font-size: ${t.type.caption}; line-height: 1.5; white-space: pre-wrap; }
 .de-ai-status[data-state="error"] { color: ${t.color.danger}; }
 
 `

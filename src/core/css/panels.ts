@@ -1,6 +1,6 @@
 /** Panel shells, section chrome, and the shared field/select primitives. */
 
-import { tokens as t } from "../tokens"
+import { tokens as t, accentFill } from "../tokens"
 
 export const panelsCss = `/* ---------- panels ---------- */
 .de-panel {
@@ -34,7 +34,7 @@ export const panelsCss = `/* ---------- panels ---------- */
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 8px 0 10px;
   color: ${t.color.text};
-  font-size: 11px; font-weight: 600;
+  font-size: ${t.type.body}; font-weight: ${t.type.weightSection};
 }
 .de-section-body { padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 /* An author \`display\` beats the UA [hidden] rule, so restate it. */
@@ -70,14 +70,14 @@ export const panelsCss = `/* ---------- panels ---------- */
 }
 .de-layout-group-title {
   color: ${t.color.textMuted};
-  font-size: 10px;
-  font-weight: 600;
+  font-size: ${t.type.caption};
+  font-weight: ${t.type.weightSection};
 }
-.de-hint { color: ${t.color.textDim}; font-size: 10px; line-height: 1.4; }
+.de-hint { color: ${t.color.textDim}; font-size: ${t.type.caption}; line-height: 1.4; }
 
 /* Selection identity: what you picked, and where it lives in the source. */
-.de-tagname { color: ${t.color.textDim}; font-weight: 400; }
-.de-source { font-size: 10px; color: ${t.color.textDim}; word-break: break-all; }
+.de-tagname { color: ${t.color.textDim}; font-weight: ${t.type.weightBody}; }
+.de-source { font-size: ${t.type.caption}; color: ${t.color.textDim}; word-break: break-all; }
 
 .de-row { display: flex; align-items: center; gap: 6px; }
 .de-row--split { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -96,7 +96,7 @@ export const panelsCss = `/* ---------- panels ---------- */
 .de-field:focus-within { border-color: ${t.color.accent}; background: ${t.color.bgSunken}; }
 .de-field-label {
   color: ${t.color.textDim};
-  font-size: 10px;
+  font-size: ${t.type.caption};
   min-width: 12px;
   user-select: none;
   cursor: ew-resize;
@@ -104,13 +104,13 @@ export const panelsCss = `/* ---------- panels ---------- */
 .de-field input {
   flex: 1; min-width: 0; width: 100%;
   border: none; background: transparent; outline: none;
-  color: ${t.color.text}; font-family: inherit; font-size: 11px;
+  color: ${t.color.text}; font-family: inherit; font-size: ${t.type.body};
 }
 .de-field input::-webkit-outer-spin-button,
 .de-field input::-webkit-inner-spin-button { appearance: none; margin: 0; }
 .de-field input[disabled] { color: ${t.color.textDim}; cursor: default; }
 .de-field input::placeholder { color: ${t.color.textDim}; }
-.de-field-suffix { color: ${t.color.textDim}; font-size: 10px; user-select: none; }
+.de-field-suffix { color: ${t.color.textDim}; font-size: ${t.type.caption}; user-select: none; }
 
 /* ---------- paint rows (fill / stroke / effects) ---------- */
 .de-paint-row { display: flex; align-items: center; gap: 4px; }
@@ -120,7 +120,7 @@ export const panelsCss = `/* ---------- panels ---------- */
   flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: ${t.color.textMuted};
-  font-family: ${t.font.mono}; font-size: 10px;
+  font-family: ${t.font.mono}; font-size: ${t.type.caption};
 }
 .de-paint-card {
   display: flex; flex-direction: column; gap: 4px;
@@ -133,7 +133,7 @@ export const panelsCss = `/* ---------- panels ---------- */
   display: inline-flex; align-items: center; justify-content: center;
   border: none; border-radius: ${t.radius.sm};
   background: transparent; color: ${t.color.textDim};
-  font-family: inherit; font-size: 11px; line-height: 1;
+  font-family: inherit; font-size: ${t.type.body}; line-height: 1;
   cursor: pointer;
   transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease};
 }
@@ -155,13 +155,13 @@ export const panelsCss = `/* ---------- panels ---------- */
   flex: 1; min-width: 0;
   border: none; border-radius: ${t.radius.sm};
   background: transparent; color: ${t.color.textDim};
-  font-family: inherit; font-size: 10px; line-height: 1;
+  font-family: inherit; font-size: ${t.type.caption}; line-height: 1;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   cursor: pointer;
   transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease};
 }
 .de-segment:hover { color: ${t.color.text}; }
-.de-segment[aria-pressed="true"] { background: ${t.color.accentSurface}; color: ${t.color.text}; }
+.de-segment[aria-pressed="true"] { ${accentFill} }
 .de-segment:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -1px; }
 
 .de-select {
@@ -170,7 +170,7 @@ export const panelsCss = `/* ---------- panels ---------- */
   padding: 0 6px;
   border: 1px solid transparent; border-radius: ${t.radius.md};
   background: transparent; color: ${t.color.text};
-  font-family: inherit; font-size: 11px;
+  font-family: inherit; font-size: ${t.type.body};
   appearance: none; cursor: pointer;
 }
 .de-select:hover { border-color: ${t.color.borderInteractive}; }
@@ -181,7 +181,7 @@ export const panelsCss = `/* ---------- panels ---------- */
   padding: 24px 16px;
   color: ${t.color.textDim};
   text-align: center;
-  font-size: 11px;
+  font-size: ${t.type.body};
   line-height: 1.5;
 }
 

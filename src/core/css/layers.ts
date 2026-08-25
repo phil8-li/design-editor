@@ -17,7 +17,7 @@ export const layersCss = `/* ---------- layers ---------- */
 .de-layer[aria-selected="true"] { background: ${t.color.selectionSurface}; color: ${t.color.text}; }
 .de-layer:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -2px; }
 .de-layer-name { overflow: hidden; text-overflow: ellipsis; }
-.de-layer--component .de-layer-name { color: ${t.color.component}; font-weight: 500; }
+.de-layer--component .de-layer-name { color: ${t.color.component}; font-weight: ${t.type.weightValue}; }
 .de-layer[aria-selected="true"] .de-layer-name { color: ${t.color.text}; }
 .de-layer-twisty {
   width: 14px; height: 14px; flex: none;
@@ -54,7 +54,7 @@ export const layersCss = `/* ---------- layers ---------- */
   background: ${t.color.selectionSurface};
   color: ${t.color.text};
 }
-.de-layer-menu-row--component { color: ${t.color.component}; font-weight: 500; }
+.de-layer-menu-row--component { color: ${t.color.component}; font-weight: ${t.type.weightValue}; }
 .de-layer-menu-row--component:hover { color: ${t.color.text}; }
 
 `
