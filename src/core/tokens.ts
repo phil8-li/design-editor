@@ -14,14 +14,14 @@
  * edge. Regenerate against `src/app/globals.css` if the rung moves.
  *
  *   --sem-background-chrome   --base-gray-1200   #363c44
- *   --sem-text-icon-on-chrome --base-gray-white  #ffffff
+ *   --sem-fixed-always-light  --base-gray-white  #ffffff
  *   --sem-decorative-on-chrome --base-indigos-indigo-01  #a1bbff
- *   --sem-text-icon-fixed-dark --base-gray-1600  #0c1014
+ *   --sem-fixed-always-dark   --base-gray-1600   #0c1014
  */
 
 /** `--sem-background-chrome`. Every surface below is a step off this ground. */
 const CHROME = "#363c44"
-/** `--sem-text-icon-on-chrome`. Also the substance every quiet step is cut from. */
+/** `--sem-fixed-always-light`. Also the substance every quiet step is cut from. */
 const ON_CHROME = "#ffffff"
 /**
  * `--sem-decorative-on-chrome`. The workspace's rail colour, and the editor's
@@ -29,7 +29,7 @@ const ON_CHROME = "#ffffff"
  * a fill under dark ink, but it must never sit behind white text.
  */
 const RAIL = "#a1bbff"
-/** `--sem-text-icon-fixed-dark`. The ink that rides on a filled `RAIL`. */
+/** `--sem-fixed-always-dark`. The ink that rides on a filled `RAIL`. */
 const ON_RAIL = "#0c1014"
 
 /** A quiet step off the chrome, expressed the way the app expresses it. */
@@ -56,7 +56,7 @@ export const tokens = {
      */
     borderInteractive: rule(32),
     text: ON_CHROME,
-    /** `--sem-text-icon-on-chrome-weak` — Prism's 75% step. 6.9:1 on chrome. */
+    /** `--sem-fixed-always-light-weaker` — Prism's 75% step. 6.9:1 on chrome. */
     textMuted: "rgba(255,255,255,0.75)",
     /** 4.7:1 on chrome. The obvious 55% lands at 4.4:1 and fails. */
     textDim: "rgba(255,255,255,0.58)",
