@@ -74,6 +74,28 @@ export const tokens = {
     onAccent: ON_RAIL,
     accentSoft: `color-mix(in srgb, ${RAIL} 16%, transparent)`,
     selectionSurface: `color-mix(in srgb, ${RAIL} 18%, transparent)`,
+    /**
+     * A control's own well.
+     *
+     * Fields used to be transparent until hovered, which made a panel of eight
+     * numbers read as eight pieces of text. Giving every field a resting well
+     * — the step open-pencil calls `--color-panel-field` — is what turns the
+     * column into a form. 10% rather than a literal grey so it still tracks
+     * the chrome if the rung moves.
+     */
+    field: lift(10),
+    fieldHover: lift(16),
+    /**
+     * A selected LAYER ROW, which is not a selected element outline.
+     *
+     * The row is a solid band the width of the panel, so it carries ink at
+     * full contrast rather than the 18% wash the canvas overlay uses. Muted is
+     * the same band while focus is elsewhere: still findable, no longer loud.
+     */
+    rowSelected: `color-mix(in srgb, ${RAIL} 34%, ${CHROME})`,
+    rowSelectedMuted: `color-mix(in srgb, ${RAIL} 16%, ${CHROME})`,
+    /** A committed write, in the one place that reports one: the code footer. */
+    success: "#7ee2a8",
     /** Component (as opposed to plain element) names. */
     component: "#c9b8ff",
     /** `--sem-text-icon-alert`, lifted to carry on the dark chrome. */
@@ -81,6 +103,20 @@ export const tokens = {
     guide: "#ff6b9a",
     measure: "#ff6b9a",
     autoLayout: "#c9b8ff",
+  },
+  /**
+   * Syntax tints for the Code tab, and only there.
+   *
+   * Kept out of `color` because they are not chrome roles — nothing else in
+   * the editor may reach for "the colour of a string literal". They are tuned
+   * against `bgSunken`, which is the only ground the code view is drawn on.
+   */
+  code: {
+    tag: "#7dd3fc",
+    attribute: "#c4b5fd",
+    string: "#86efac",
+    number: "#fca5a5",
+    punctuation: "rgba(255,255,255,0.58)",
   },
   radius: { sm: "2px", md: "4px", lg: "6px", xl: "10px" },
   shadow: {
@@ -121,6 +157,8 @@ export const tokens = {
     miniSize: 18,
     /** Toolbar hit targets: larger on purpose, they are pointer-first. */
     toolSize: 28,
+    /** The right panel's tab strip. Tall enough to be a landmark, not a row. */
+    tabBar: 34,
     /** Handles, guides, and the marquee all share one hairline. */
     hairline: 1,
   },

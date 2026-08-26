@@ -8,6 +8,9 @@
 import { baseCss, vendorChromeCss } from "./css/base"
 import { toolbarCss } from "./css/toolbar"
 import { panelsCss } from "./css/panels"
+import { inspectorCss } from "./css/inspector"
+import { codeCss } from "./css/code"
+import { promptsCss } from "./css/prompts"
 import { layersCss } from "./css/layers"
 import { optionsCss } from "./css/options"
 import { canvasCss } from "./css/canvas"
@@ -20,6 +23,18 @@ import { variantsCss } from "./css/variants"
  * single `shellCss` export the shell already imports.
  */
 export const shellCss =
-  baseCss + toolbarCss + panelsCss + layersCss + optionsCss + canvasCss + tokenPickerCss + variantsCss
+  baseCss +
+  toolbarCss +
+  panelsCss +
+  // After `panels`, because the tab host re-lays out `.de-panel-body` for the
+  // right panel only and has to win on equal specificity.
+  inspectorCss +
+  codeCss +
+  promptsCss +
+  layersCss +
+  optionsCss +
+  canvasCss +
+  tokenPickerCss +
+  variantsCss
 
 export { vendorChromeCss }

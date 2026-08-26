@@ -195,18 +195,14 @@ check("no toolbar button opens a menu any more", () => {
 
 console.log("\nSurviving controls")
 
-check("the mode switch, the two panel toggles, undo, redo and both commit buttons are the whole bar", () => {
+check("the mode switch, the two panel toggles, undo, redo and Apply are the whole bar", () => {
   assert.ok(mode())
   assert.ok(byLabel("Toggle layers panel"))
   assert.ok(byLabel("Toggle inspector"))
   assert.ok(byLabel("Undo"))
   assert.ok(byLabel("Redo"))
   assert.ok(byText("Apply to code"))
-  // The commit path is two buttons, not one. Apply writes what became a class;
-  // Copy hands over what never can be. Dropping either leaves a class of change
-  // with nowhere to go, which is the state this bar was in before.
-  assert.ok(byText("Copy change prompts"))
-  assert.equal(buttons().length, 7, `expected seven controls, saw ${buttons().length}`)
+  assert.equal(buttons().length, 6, `expected six controls, saw ${buttons().length}`)
 })
 
 // V and H picked between two tools. With one tool left there is nothing for a
@@ -555,76 +551,25 @@ check("leaving the mode hands the canvas back", () => {
   assert.notEqual(context.getState().hovered, null, "hover must come back")
 })
 
-// ── The commit path is two buttons ─────────────────────────────────────────
+// ── The commit path's other half moved out ─────────────────────────────────
 
 console.log("\nCopy change prompts")
 
 /**
- * The clipboard is stubbed rather than mocked away: what these cases are
- * actually about is WHEN the write happens. A browser grants a click one
- * transient user activation and revokes it the moment the handler yields, so a
- * copy that lands after an await is a copy that silently does nothing on the
- * user's machine while passing every test that only checks the text.
+ * The button is gone from HERE, not gone. Apply writes what became a class;
+ * the copy hands over what never can be, and dropping either would leave a
+ * class of change with nowhere to go — the state this bar was in before it
+ * existed. What changed is where it lives: it now sits under the queue it
+ * copies, in the right panel's Prompts tab, which is the only place the queue
+ * can actually be read. `inspector-tabs-cases.mjs` holds the behaviour; this
+ * case only holds the line that it is not drawn twice.
  */
-let clipboardText = null
-let clipboardCalls = 0
-Object.defineProperty(window.navigator, "clipboard", {
-  configurable: true,
-  value: {
-    writeText(text) {
-      clipboardCalls += 1
-      clipboardText = text
-      return Promise.resolve()
-    },
-  },
-})
-
-const copyButton = () => byText("Copy change prompts")
-const clickCopy = () => copyButton().dispatchEvent(new window.MouseEvent("click", { bubbles: true }))
-
-check("with nothing un-writable the button is present but disabled", () => {
-  editor.clearPreviewOnly()
-  context.refresh()
-  assert.ok(copyButton(), "the button must exist even with nothing to hand over")
-  assert.equal(copyButton().hasAttribute("disabled"), true)
-})
-
-check("a change that cannot become a class enables it", () => {
-  editor.recordPreviewOnly({
-    filePath: "src/components/workspace/sidebar-search.tsx",
-    componentName: "SidebarSearch",
-    tagName: "svg",
-    className: "size-4",
-    property: "icon",
-    from: "Compass",
-    to: "Flag",
-  })
-  context.refresh()
-  assert.equal(editor.previewOnlyChanges().length, 1)
-  assert.equal(copyButton().hasAttribute("disabled"), false)
-})
-
-check("the clipboard write happens inside the click, not a task later", () => {
-  clipboardCalls = 0
-  clipboardText = null
-  clickCopy()
-  // Synchronously after dispatch — no await, no microtask drain. If the handler
-  // ever grows an await before the write, this is the case that fails.
-  assert.equal(clipboardCalls, 1, "writeText must be called in the click task")
-  assert.match(clipboardText, /Flag/)
-  assert.match(clipboardText, /sidebar-search\.tsx/)
-})
-
-check("the copied brief carries no absolute path and no Source attribution", () => {
-  assert.doesNotMatch(clipboardText, /\*\*Source:\*\*/)
-  assert.doesNotMatch(clipboardText, new RegExp(PACKAGE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
-  assert.doesNotMatch(clipboardText, /\/Users\//)
-})
-
-check("clearing the ledger disables it again", () => {
-  editor.clearPreviewOnly()
-  context.refresh()
-  assert.equal(copyButton().hasAttribute("disabled"), true)
+check("the toolbar no longer draws it — the Prompts tab does", () => {
+  assert.equal(byText("Copy change prompts"), null)
+  const inPanel = Array.from(context.slots.right.querySelectorAll("button")).some(
+    (button) => button.textContent.trim() === "Copy change prompts"
+  )
+  assert.ok(inPanel, "the button left the toolbar without arriving in the panel")
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

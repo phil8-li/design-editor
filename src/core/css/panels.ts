@@ -112,6 +112,14 @@ export const panelsCss = `/* ---------- panels ---------- */
 .de-field input[disabled] { color: ${t.color.textDim}; cursor: default; }
 .de-field input::placeholder { color: ${t.color.textDim}; }
 .de-field-suffix { color: ${t.color.textDim}; font-size: ${t.type.caption}; user-select: none; }
+/* A measured value in a field's clothes — read-only, so it never takes a caret. */
+.de-field-value {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: ${t.color.text}; font-size: ${t.type.body};
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
 
 /* ---------- paint rows (fill / stroke / effects) ---------- */
 .de-paint-row { display: flex; align-items: center; gap: 4px; }

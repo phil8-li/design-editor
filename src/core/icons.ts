@@ -367,7 +367,265 @@ const ICONS = {
     ],
     "rootFill": "currentColor",
     "ink": 22
-  }
+  },
+
+  /*
+   * The second wave: layer-row type marks, row affordances, the right panel's
+   * tab marks, and the align/arrange strip.
+   *
+   * Authored here rather than vendored, because the host's 152-icon set has no
+   * drawing for any of them — it is a product icon set, and these are tooling
+   * marks (an alignment edge, a component diamond, a code bracket). They are
+   * written in the open-source geometric idiom the rest of the authored glyphs
+   * already use: pure geometry on the 24 grid, stroked at the family's 2 units.
+   *
+   * Unlike the machine-extracted entries above, these declare their stroke ONCE
+   * on the root via `rootStroke` instead of repeating five presentation
+   * attributes per node. `drawIcon` puts the weight, the caps and the joins on
+   * the <svg>, and the children inherit — same rendered result, a fifth of the
+   * data. No `ink` is declared: they are stroked, so the window may not be used
+   * to resize them (see `inkViewBox`), and they are drawn to the same 2..22
+   * extent `Search` and `ChevronRight` already occupy.
+   */
+
+  /** Right panel, Code tab. */
+  "Code": {
+    "nodes": [
+      ["path", { "d": "m18 16 4-4-4-4" }],
+      ["path", { "d": "m6 8-4 4 4 4" }],
+      ["path", { "d": "m14.5 4-5 16" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  /** Right panel, Change prompts tab — the mark the app uses for "for the AI". */
+  "Sparkles": {
+    "nodes": [
+      ["path", { "d": "M10 2 11.9 7.1 17 9l-5.1 1.9L10 16l-1.9-5.1L3 9l5.1-1.9Z" }],
+      ["path", { "d": "M18 14.5 18.9 17.1 21.5 18l-2.6.9L18 21.5l-.9-2.6L14.5 18l2.6-.9Z" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "Copy": {
+    "nodes": [
+      ["rect", { "x": "8", "y": "8", "width": "14", "height": "14", "rx": "2" }],
+      ["path", { "d": "M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "Trash": {
+    "nodes": [
+      ["path", { "d": "M3 6h18" }],
+      ["path", { "d": "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" }],
+      ["path", { "d": "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+
+  /*
+   * Layer-row affordances. `Eye` above is the host's filled drawing and stays
+   * the shown state; `EyeOff` is its struck-through twin, authored stroked
+   * because a filled eye with a filled slash reads as a blob at 12px.
+   */
+  "EyeOff": {
+    "nodes": [
+      ["path", { "d": "M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19" }],
+      ["path", { "d": "M6.61 6.61A18.15 18.15 0 0 0 2 12s3 8 10 8a9.12 9.12 0 0 0 5.39-1.61" }],
+      ["path", { "d": "M14.12 14.12a3 3 0 1 1-4.24-4.24" }],
+      ["path", { "d": "m2 2 20 20" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "Lock": {
+    "nodes": [
+      ["rect", { "x": "3", "y": "11", "width": "18", "height": "11", "rx": "2" }],
+      ["path", { "d": "M7 11V7a5 5 0 0 1 10 0v4" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "LockOpen": {
+    "nodes": [
+      ["rect", { "x": "3", "y": "11", "width": "18", "height": "11", "rx": "2" }],
+      ["path", { "d": "M7 11V7a5 5 0 0 1 9.9-1" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+
+  /*
+   * Layer-row type marks. One per kind the tree can tell apart from the DOM:
+   * a box for an element, a T for a text run, a picture for an image, and the
+   * diamond cluster for a React component — which is the only one that also
+   * gets a colour (`tokens.color.component`), because it is the only one whose
+   * distinction survives being read at a glance.
+   */
+  "Square": {
+    "nodes": [["rect", { "x": "3", "y": "3", "width": "18", "height": "18", "rx": "2" }]],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "Type": {
+    "nodes": [
+      ["path", { "d": "M4 7V4h16v3" }],
+      ["path", { "d": "M9 20h6" }],
+      ["path", { "d": "M12 4v16" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "Image": {
+    "nodes": [
+      ["rect", { "x": "3", "y": "3", "width": "18", "height": "18", "rx": "2" }],
+      ["circle", { "cx": "9", "cy": "9", "r": "2" }],
+      ["path", { "d": "m21 15-3.09-3.09a2 2 0 0 0-2.83 0L6 21" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "Component": {
+    "nodes": [
+      ["path", { "d": "M12 2.6 15.4 6 12 9.4 8.6 6Z" }],
+      ["path", { "d": "M18 8.6 21.4 12 18 15.4 14.6 12Z" }],
+      ["path", { "d": "M6 8.6 9.4 12 6 15.4 2.6 12Z" }],
+      ["path", { "d": "M12 14.6 15.4 18 12 21.4 8.6 18Z" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+
+  /*
+   * The alignment strip.
+   *
+   * Six marks, read as a pair of triples: three that move the child along the
+   * inline axis and three along the block axis. Each is a rule at the edge the
+   * press aligns TO plus the bars that move — so the mark states the outcome,
+   * not the direction of travel, which is what makes a strip of six legible
+   * without labels.
+   */
+  "AlignStartVertical": {
+    "nodes": [
+      ["rect", { "x": "6", "y": "14", "width": "9", "height": "6", "rx": "2" }],
+      ["rect", { "x": "6", "y": "4", "width": "16", "height": "6", "rx": "2" }],
+      ["path", { "d": "M2 2v20" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "AlignCenterVertical": {
+    "nodes": [
+      ["path", { "d": "M12 2v20" }],
+      ["path", { "d": "M8 10H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4" }],
+      ["path", { "d": "M16 10h4a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-4" }],
+      ["path", { "d": "M8 20H7a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2h1" }],
+      ["path", { "d": "M16 14h1a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-1" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "AlignEndVertical": {
+    "nodes": [
+      ["rect", { "x": "2", "y": "4", "width": "16", "height": "6", "rx": "2" }],
+      ["rect", { "x": "9", "y": "14", "width": "9", "height": "6", "rx": "2" }],
+      ["path", { "d": "M22 22V2" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "AlignStartHorizontal": {
+    "nodes": [
+      ["rect", { "x": "4", "y": "6", "width": "6", "height": "16", "rx": "2" }],
+      ["rect", { "x": "14", "y": "6", "width": "6", "height": "9", "rx": "2" }],
+      ["path", { "d": "M22 2H2" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "AlignCenterHorizontal": {
+    "nodes": [
+      ["path", { "d": "M2 12h20" }],
+      ["path", { "d": "M10 16v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4" }],
+      ["path", { "d": "M10 8V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v4" }],
+      ["path", { "d": "M20 16v1a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v-1" }],
+      ["path", { "d": "M14 8V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "AlignEndHorizontal": {
+    "nodes": [
+      ["rect", { "x": "4", "y": "2", "width": "6", "height": "16", "rx": "2" }],
+      ["rect", { "x": "14", "y": "9", "width": "6", "height": "9", "rx": "2" }],
+      ["path", { "d": "M22 22H2" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  /** Distribute: the two rules plus the gap the press opens between them. */
+  "SpaceBetweenHorizontal": {
+    "nodes": [
+      ["rect", { "x": "3", "y": "5", "width": "6", "height": "14", "rx": "2" }],
+      ["rect", { "x": "15", "y": "7", "width": "6", "height": "10", "rx": "2" }],
+      ["path", { "d": "M3 2v20" }],
+      ["path", { "d": "M21 2v20" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "SpaceBetweenVertical": {
+    "nodes": [
+      ["rect", { "x": "5", "y": "15", "width": "14", "height": "6", "rx": "2" }],
+      ["rect", { "x": "7", "y": "3", "width": "10", "height": "6", "rx": "2" }],
+      ["path", { "d": "M2 21h20" }],
+      ["path", { "d": "M2 3h20" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+
+  /*
+   * Arrange. Our "front" and "back" are positions among JSX SIBLINGS, not a
+   * z-index — so the marks are travel-to-a-limit and travel-one-step, which is
+   * what reordering source order actually does.
+   */
+  "ArrowUpToLine": {
+    "nodes": [
+      ["path", { "d": "M5 3h14" }],
+      ["path", { "d": "m18 13-6-6-6 6" }],
+      ["path", { "d": "M12 7v14" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "ArrowDownToLine": {
+    "nodes": [
+      ["path", { "d": "M12 17V3" }],
+      ["path", { "d": "m6 11 6 6 6-6" }],
+      ["path", { "d": "M19 21H5" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "ArrowUp": {
+    "nodes": [
+      ["path", { "d": "m5 12 7-7 7 7" }],
+      ["path", { "d": "M12 19V5" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
+  "ArrowDown": {
+    "nodes": [
+      ["path", { "d": "M12 5v14" }],
+      ["path", { "d": "m19 12-7 7-7-7" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
 }
 
 /**

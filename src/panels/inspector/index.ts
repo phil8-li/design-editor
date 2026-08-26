@@ -1,18 +1,29 @@
 /**
  * Right-hand inspector.
  *
- * A stack of collapsible sections, each owning one file. A section returns
- * `null` when it has nothing to say about the current selection, which keeps
- * the panel as short as the element is simple.
+ * Three tabs over one selection. **Design** is the historical panel: a stack
+ * of collapsible sections, each owning one file, each returning `null` when it
+ * has nothing to say about the current selection — which keeps the panel as
+ * short as the element is simple. **Code** shows that same selection as
+ * source, and **Change prompts** holds the queue of edits the writer cannot
+ * express as classes.
+ *
+ * They are tabs rather than three more sections because they are not more to
+ * scroll past: each is a different thing to be looking at, and two of them own
+ * a footer that has to stay put while their body scrolls.
  */
 
 import { clear, el } from "../../core/dom"
+import { icon, type IconName } from "../../core/icons"
 import { createWriter, type Writer } from "../../core/writer"
 import type { EditorContext } from "../../core/context"
 import type { Selection } from "../../core/types"
 
+import { codeTab, type InspectorTab } from "./tab-code"
+import { promptsTab } from "./tab-prompts"
 import { iconSection } from "./section-icon"
 import { variantsSection } from "./section-variants"
+import { positionSection } from "./section-position"
 import { unifiedLayoutSection } from "./section-unified-layout"
 import { designSystemSection } from "./section-design-system"
 import { responsiveSection } from "./section-responsive"
@@ -49,6 +60,10 @@ const SECTIONS: InspectorSection[] = [
   optionsSection,
   designSystemSection,
   responsiveSection,
+  // Above layout, the way every editor stacks it: where the thing sits and how
+  // it lines up with its siblings is the first question, and it is answerable
+  // without knowing anything about the box's own internals.
+  positionSection,
   unifiedLayoutSection,
   appearanceSection,
   fillSection,
@@ -128,17 +143,92 @@ function restoreFocus(host: HTMLElement, memory: FocusMemory | null): void {
   target.setSelectionRange(Math.min(memory.start, limit), Math.min(memory.end ?? memory.start, limit))
 }
 
+interface TabDefinition {
+  id: string
+  label: string
+  glyph: IconName
+  tab: InspectorTab
+}
+
 export function installInspector(editor: EditorContext): void {
   const writer = createWriter(editor.bridge)
   const host = el("div")
-  editor.slots.right.append(host)
+
+  /*
+   * Design is a tab like the other two, but its body is built by `render()`
+   * rather than by a controller — so it hands over the same `{node, update}`
+   * shape and the strip below never has to know which is which.
+   */
+  const design: InspectorTab = { node: host, update: () => render() }
+  const tabs: TabDefinition[] = [
+    { id: "design", label: "Design", glyph: "SlidersHorizontal", tab: design },
+    { id: "code", label: "Code", glyph: "Code", tab: codeTab(editor) },
+    { id: "prompts", label: "Prompts", glyph: "Sparkles", tab: promptsTab(editor) },
+  ]
+
+  let activeId = tabs[0].id
+  const buttons = new Map<string, HTMLElement>()
+  const panels = new Map<string, HTMLElement>()
+
+  const strip = el("div", { class: "de-tabs", role: "tablist", "aria-label": "Inspector views" })
+  for (const definition of tabs) {
+    const button = el(
+      "button",
+      {
+        class: "de-tab",
+        type: "button",
+        role: "tab",
+        id: `de-tab-${definition.id}`,
+        "aria-controls": `de-tabpanel-${definition.id}`,
+        "aria-selected": String(definition.id === activeId),
+        onclick: () => activate(definition.id),
+      },
+      [icon(definition.glyph, 13), definition.label]
+    )
+    buttons.set(definition.id, button)
+    strip.append(button)
+
+    const panel = el(
+      "div",
+      {
+        class: "de-tabpanel",
+        role: "tabpanel",
+        id: `de-tabpanel-${definition.id}`,
+        "aria-labelledby": `de-tab-${definition.id}`,
+      },
+      [definition.tab.node]
+    )
+    panel.hidden = definition.id !== activeId
+    panels.set(definition.id, panel)
+  }
+
+  editor.slots.right.append(strip, ...panels.values())
+
+  /**
+   * Switching tabs updates the tab you switch TO, and only that one.
+   *
+   * The hidden panes keep their DOM — losing the code view's scroll position
+   * every time you glance at the design tab would make the pair unusable — but
+   * a hidden pane is not re-read on every write either, which is what keeps the
+   * ledger and the code view off the hot path of a scrub.
+   */
+  function activate(id: string): void {
+    activeId = id
+    for (const definition of tabs) {
+      const selected = definition.id === id
+      buttons.get(definition.id)?.setAttribute("aria-selected", String(selected))
+      const panel = panels.get(definition.id)
+      if (panel) panel.hidden = !selected
+    }
+    tabs.find((definition) => definition.id === id)?.tab.update()
+  }
 
   let scheduled = 0
   const invalidate = () => {
     if (scheduled) return
     scheduled = requestAnimationFrame(() => {
       scheduled = 0
-      render()
+      tabs.find((definition) => definition.id === activeId)?.tab.update()
     })
   }
 
@@ -220,5 +310,7 @@ export function installInspector(editor: EditorContext): void {
     invalidate()
   })
   editor.onRefresh(invalidate)
-  render()
+  // Every tab once at boot, so a tab that is switched to before the first write
+  // is not empty. After this, only the visible one is kept current.
+  for (const definition of tabs) definition.tab.update()
 }
