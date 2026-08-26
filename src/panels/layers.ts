@@ -7,13 +7,18 @@
  * branch is walked only while expanded, and rows are diffed in place.
  */
 
+import { toSourceRef } from "../core/bridge"
+import { LAYER_INDENT } from "../core/css/layers"
 import { el } from "../core/dom"
-import { icon } from "../core/icons"
+import { icon, type IconName } from "../core/icons"
+import { isDeepSelect } from "../core/keymap"
 import { getResolver } from "../core/resolve"
+import { elementKey } from "../core/store"
+import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
-import type { LayerElement } from "../core/types"
+import type { LayerElement, Selection } from "../core/types"
 
-const INDENT = 12, MAX_DEPTH = 40
+const INDENT = LAYER_INDENT, MAX_DEPTH = 40
 /** Filtering is the only full-tree walk; bound it so typing can never lock up. */
 const FILTER_BUDGET = 6000
 
@@ -28,15 +33,44 @@ function setAttr(node: Element, name: string, value: string | null): void {
   else if (node.getAttribute(name) !== value) node.setAttribute(name, value)
 }
 
+/**
+ * The row's type mark, decided from what the DOM can actually tell apart.
+ *
+ * A component wins over whatever it happens to be rendered as, and is the only
+ * one of the four that also takes a colour. Below it the test is deliberately
+ * shallow — media, then a leaf that is nothing but words, then the box that
+ * everything else is. Guessing harder (list, button, link) would put a dozen
+ * near-identical outlines in one column, which is texture, not information.
+ */
+function glyphFor(element: LayerElement, promoted: boolean): IconName {
+  if (promoted) return "Component"
+  const tag = element.tagName.toLowerCase()
+  if (tag === "img" || tag === "svg" || tag === "picture") return "Image"
+  if (!element.firstElementChild && (element.textContent ?? "").trim()) return "Type"
+  return "Square"
+}
+
+/** One row action, restated in place. The glyph is redrawn only when it flips. */
+function setAction(button: HTMLElement, on: boolean, glyph: IconName, label: string): void {
+  if (button.dataset.glyph !== glyph) {
+    button.dataset.glyph = glyph
+    button.replaceChildren(icon(glyph, 12))
+  }
+  setAttr(button, "aria-pressed", String(on))
+  // The label names the OUTCOME, not the state: a button that says "Locked"
+  // leaves a screen-reader user to guess what pressing it does.
+  setAttr(button, "aria-label", label)
+  setAttr(button, "title", label)
+}
+
 export function installLayersPanel(context: EditorContext): void {
   const resolver = getResolver(context.bridge)
+  const writer = createWriter(context.bridge)
   const childrenOf = (element: Element): LayerElement[] => resolver.layerChildren(element)
   const search = el("input", { class: "de-ai-input", type: "search", placeholder: "Filter layers",
     "aria-label": "Filter layers", style: "min-height:0;height:24px;resize:none" }) as HTMLInputElement
-  const tree = el("div", { role: "tree", "aria-label": "Layers",
-    style: "position:relative;padding-bottom:8px" })
-  const indicator = el("div", { class: "de-guide", "aria-hidden": "true",
-    style: "display:none;left:0;right:0;height:2px" })
+  const tree = el("div", { class: "de-layers-tree", role: "tree", "aria-label": "Layers" })
+  const indicator = el("div", { class: "de-layer-drop", "aria-hidden": "true", style: "display:none" })
   const header = el("div", { class: "de-section-header" }, ["Layers"])
   tree.append(indicator)
   context.slots.left.append(header, el("div", { style: "padding:0 8px 8px" }, [search]), tree)
@@ -46,8 +80,10 @@ export function installLayersPanel(context: EditorContext): void {
   const rowByElement = new Map<LayerElement, HTMLElement>()
   const rowInfo = new WeakMap<HTMLElement, Row>()
   const metaCache = new WeakMap<LayerElement, Meta>()
+  /** What `display` to put back when the eye is un-hidden; see `toggleVisible`. */
+  const restoreDisplay = new WeakMap<LayerElement, string>()
   let filter: { query: string; reveal: Set<LayerElement>; matched: Set<LayerElement> } | null = null
-  let visible: Row[] = [], focused: LayerElement | null = null
+  let visible: Row[] = [], focused: LayerElement | null = null, anchor: LayerElement | null = null
 
   /**
    * The tree and the canvas must agree on what a layer is, so the instance-root
@@ -105,25 +141,60 @@ export function installLayersPanel(context: EditorContext): void {
   function buildRow(row: Row, selected: Set<LayerElement>, focusTarget: LayerElement | null) {
     let node = rowByElement.get(row.element)
     if (!node) {
-      node = el("div", { class: "de-layer", role: "treeitem" }, [
+      const fresh = el("div", { class: "de-layer", role: "treeitem" }, [
         el("span", { class: "de-layer-twisty", "aria-hidden": "true" }),
+        el("span", { class: "de-layer-icon", "aria-hidden": "true" }),
         el("span", { class: "de-layer-name" }),
+        el("span", { class: "de-layer-actions" }, [
+          el("button", { class: "de-layer-action", type: "button", "data-action": "lock" }),
+          el("button", { class: "de-layer-action", type: "button", "data-action": "eye" }),
+        ]),
       ])
+      // open-pencil stops the press on the action itself rather than filtering
+      // it out of the row handler. Same here, and on both events: pointerdown
+      // is what would otherwise begin a row drag, click is what would select.
+      const strip = fresh.lastElementChild as HTMLElement
+      strip.addEventListener("pointerdown", (event) => event.stopPropagation())
+      strip.addEventListener("click", (event) => {
+        event.stopPropagation()
+        const action = (event.target as Element).closest<HTMLElement>(".de-layer-action")
+        const current = rowInfo.get(fresh)
+        if (!action || !current) return
+        if (action.dataset.action === "lock") toggleLock(current)
+        else toggleVisible(current)
+      })
+      node = fresh
       rowByElement.set(row.element, node)
     }
     rowInfo.set(node, row)
-    const [twisty, label] = Array.from(node.children) as HTMLElement[]
+    const [twisty, glyph, label, strip] = Array.from(node.children) as HTMLElement[]
+    const [lock, eye] = Array.from(strip.children) as HTMLElement[]
     const openState = row.hasChildren ? String(row.open) : null
     // Rows are recycled across renders, so the twisty is toggled by presence
     // rather than rebuilt — a fresh <svg> per frame would churn the whole tree.
     if (row.hasChildren && twisty.childElementCount === 0) twisty.append(icon("ChevronRight", 10))
     else if (!row.hasChildren && twisty.childElementCount > 0) twisty.replaceChildren()
+    // Same reason the mark is remembered on the node: it can only change when
+    // the element does, and redrawing it is another whole <svg>.
+    const mark = glyphFor(row.element, row.meta.promoted)
+    if (glyph.dataset.glyph !== mark) {
+      glyph.dataset.glyph = mark
+      glyph.replaceChildren(icon(mark, 12))
+    }
     if (label.textContent !== row.meta.name) label.textContent = row.meta.name
     // The stylesheet rotates the twisty off its own aria-expanded; the row
     // carries the state a screen reader actually reads.
     setAttr(twisty, "aria-expanded", openState)
-    setAttr(node, "class", `de-layer${row.meta.promoted ? " de-layer--component" : ""}`)
-    setAttr(node, "style", `padding-left:${8 + row.depth * INDENT}px`)
+    // Hidden is read back off the cascade rather than remembered, so a row is
+    // right about an element the app itself hid. Every visible row reads in one
+    // batch here, which is one style flush per render, not one per row.
+    const isHidden = getComputedStyle(row.element).display === "none"
+    const isLocked = context.getState().locked.has(row.element)
+    setAction(lock, isLocked, isLocked ? "Lock" : "LockOpen", `${isLocked ? "Unlock" : "Lock"} ${row.meta.name}`)
+    setAction(eye, isHidden, isHidden ? "EyeOff" : "Eye", `${isHidden ? "Show" : "Hide"} ${row.meta.name}`)
+    setAttr(node, "class", `de-layer${row.meta.promoted ? " de-layer--component" : ""}` +
+      `${isLocked ? " de-layer--locked" : ""}${isHidden ? " de-layer--hidden" : ""}`)
+    setAttr(node, "style", `padding-left:${8 + row.depth * INDENT}px;--de-indent:${row.depth * INDENT}px`)
     setAttr(node, "aria-expanded", openState)
     setAttr(node, "aria-selected", String(selected.has(row.element)))
     setAttr(node, "aria-level", String(row.depth + 1))
@@ -155,6 +226,52 @@ export function installLayersPanel(context: EditorContext): void {
     if (!visible.length) tree.append(el("div", { class: "de-empty" }, [hint]))
   }
 
+  /**
+   * The row as a writable target. `context.describe` is private to the context
+   * module, so this rebuilds the same shape from the two core helpers it uses —
+   * the same thing `section-align` does to write to a selection's parent.
+   */
+  function describe(element: LayerElement): Selection {
+    const info = context.bridge.elementInfo(element)
+    const componentName = info?.componentName || element.tagName.toLowerCase()
+    return {
+      element,
+      tagName: element.tagName.toLowerCase(),
+      componentName,
+      source: toSourceRef(info),
+      key: elementKey(element, componentName, info?.lineNumber ?? 0),
+    }
+  }
+
+  /**
+   * The eye is a real edit, so it goes through the writer every other panel
+   * writes through: `display: none` previews now and lands as `hidden` at
+   * "Apply to code", and Cmd+Z undoes it like any other change.
+   *
+   * Showing has to name a value — `applyStyles` sets, it cannot unset — so the
+   * display the element had when it was hidden is kept for the trip back.
+   * Without that a hidden flex row would come back as a block and quietly
+   * restack its children. `block` is only the fallback for something this
+   * session never hid itself.
+   */
+  function toggleVisible(row: Row): void {
+    const shown = getComputedStyle(row.element).display
+    const hidden = shown === "none"
+    if (!hidden) restoreDisplay.set(row.element, shown)
+    const value = hidden ? restoreDisplay.get(row.element) ?? "block" : "none"
+    const summary = `${hidden ? "Show" : "Hide"} ${row.meta.name}`
+    writer.applyStyles(describe(row.element), [{ property: "display", value }], summary)
+    render()
+  }
+
+  /** A new Set per toggle: `setState` compares by identity. */
+  function toggleLock(row: Row): void {
+    const locked = new Set(context.getState().locked)
+    if (!locked.delete(row.element)) locked.add(row.element)
+    context.setState({ locked })
+    render()
+  }
+
   function rowAt(target: EventTarget | null): Row | null {
     const node = target instanceof Element ? target.closest(".de-layer") : null
     return node ? rowInfo.get(node as HTMLElement) ?? null : null
@@ -170,6 +287,7 @@ export function installLayersPanel(context: EditorContext): void {
     if (!element) return
     focused = element
     if (select) {
+      anchor = element
       // A row selects at its own depth, so the canvas scope follows it. Without
       // that, the next click on the canvas jumps straight back out to the top.
       context.selectMany([element])
@@ -177,6 +295,38 @@ export function installLayersPanel(context: EditorContext): void {
     }
     render()
     rowByElement.get(element)?.focus()
+  }
+
+  /**
+   * The three ways a row can be clicked.
+   *
+   * The accelerator comes from `keymap.isDeepSelect`, so this lane and the
+   * canvas cannot drift apart on the platform question. They spend it
+   * differently on purpose: the canvas has no flattened row order, so Shift is
+   * its additive toggle; the tree has one, so Shift is the range and the
+   * accelerator is the toggle — which is also how open-pencil reads it.
+   *
+   * A range walks the FLATTENED visible rows from the last row a click or an
+   * Enter landed on. That is the order the eye is dragging down, and the only
+   * one in which "the rows between these two" has an answer when the two sit
+   * under different parents.
+   *
+   * Only a plain click re-points the scope: a multi-row selection has no single
+   * parent to scope to, and guessing one would silently change what the next
+   * click on the canvas resolves to.
+   */
+  function selectRow(row: Row, event: MouseEvent): void {
+    const to = visible.indexOf(row)
+    const from = event.shiftKey ? visible.findIndex((r) => r.element === anchor) : -1
+    if (from !== -1) {
+      const span = visible.slice(Math.min(from, to), Math.max(from, to) + 1)
+      context.selectMany(span.map((r) => r.element))
+    } else if (isDeepSelect(event)) {
+      anchor = row.element
+      context.select(row.element, { additive: true })
+    } else return activate(row.element, true)
+    // Selection is already written; this only moves roving focus and repaints.
+    activate(row.element, false)
   }
 
   // Drop lines come from the vendor's `getSiblings`, the only thing that knows
@@ -197,11 +347,15 @@ export function installLayersPanel(context: EditorContext): void {
     const node = row && rowByElement.get(row.element)
     if (!drag || !row || !node || row.parent !== drag.parent) return 0
     const rect = node.getBoundingClientRect()
+    const above = event.clientY <= rect.top + rect.height / 2
     const next = visible[visible.indexOf(row) + 1]
-    const target = event.clientY <= rect.top + rect.height / 2 ? row : next?.parent === row.parent ? next : null
+    const target = above ? row : next?.parent === row.parent ? next : null
     const line = target?.meta.drag?.fromLine ?? 0
     if (!line || line === drag.ref.fromLine || !drag.lines.has(line)) return 0
-    indicator.style.top = `${rowByElement.get(target!.element)!.offsetTop - 1}px`
+    // Drawn on the HOVERED row's own edge, not the target's top, so above and
+    // below read as two gestures — `reorder` is handed one line either way.
+    indicator.style.top = `${node.offsetTop + (above ? 0 : node.offsetHeight) - 1}px`
+    indicator.style.left = `${4 + row.depth * INDENT}px`
     return line
   }
 
@@ -209,7 +363,7 @@ export function installLayersPanel(context: EditorContext): void {
     const row = rowAt(event.target)
     if (!row) return
     if (row.hasChildren && (event.target as Element).closest(".de-layer-twisty")) toggle(row, !row.open)
-    else activate(row.element, true)
+    else selectRow(row, event as MouseEvent)
   })
   tree.addEventListener("pointerover", (event) => {
     const row = rowAt(event.target)
