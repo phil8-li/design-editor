@@ -77,6 +77,38 @@ export const layersCss = `/* ---------- layers ---------- */
   color: ${t.color.textDim};
 }
 .de-layer--component .de-layer-icon { color: ${t.color.component}; }
+/* A hidden element still has a row; it just stops competing for the eye. */
+.de-layer--hidden .de-layer-name { opacity: 0.5; }
+/*
+ * The lock and the eye.
+ *
+ * The strip is always laid out and only ever changes OPACITY — revealing it by
+ * mounting it would reflow the name mid-hover, which is exactly the jitter that
+ * makes a row feel unclickable. It stays up on a row whose state is not the
+ * default, because a lock nobody can see is a lock nobody can undo.
+ */
+.de-layer-actions {
+  display: flex; flex: none; align-items: center; gap: 2px;
+  margin-left: 4px;
+  opacity: 0;
+}
+.de-layer:hover .de-layer-actions,
+.de-layer:focus-within .de-layer-actions,
+.de-layer[aria-selected="true"] .de-layer-actions,
+.de-layer--locked .de-layer-actions,
+.de-layer--hidden .de-layer-actions { opacity: 1; }
+.de-layer-action {
+  width: ${t.size.miniSize}px; height: ${t.size.miniSize}px;
+  flex: none; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: ${t.radius.sm};
+  background: transparent;
+  color: ${t.color.textDim};
+  cursor: pointer;
+}
+.de-layer-action:hover { background: ${t.color.bgHover}; color: ${t.color.text}; }
+.de-layer-action[aria-pressed="true"] { color: ${t.color.text}; }
+.de-layer-action:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -2px; }
 /* The drop line rides the boundary between two rows, so it is placed by the
    panel and only coloured here. Accent, never the pink canvas guide: this is a
    commit target in the tree, not a measurement on the page. */

@@ -139,14 +139,40 @@ async function load(contents) {
 const window = installDom()
 Object.defineProperty(window.navigator, "platform", { value: "MacIntel", configurable: true })
 
-const { createContext, installLayersPanel, getState, setState, layersCss, LAYER_INDENT, tokens } =
-  await load(`
+const {
+  createContext,
+  installLayersPanel,
+  getState,
+  setState,
+  isLocked,
+  layersCss,
+  LAYER_INDENT,
+  tokens,
+} = await load(`
     export { createContext } from "./src/core/context"
     export { installLayersPanel } from "./src/panels/layers"
-    export { getState, setState } from "./src/core/store"
+    export { getState, setState, isLocked } from "./src/core/store"
     export { layersCss, LAYER_INDENT } from "./src/core/css/layers"
     export { tokens } from "./src/core/tokens"
   `)
+
+/**
+ * Everything the writer queued for source, newest last.
+ *
+ * This is the only honest way to tell an edit that will reach the user's JSX
+ * from one that merely painted the preview: both leave an inline style behind,
+ * and only the first arrives here.
+ */
+const queued = []
+const bridge = {
+  elementInfo,
+  toast() {},
+  store: {
+    addPendingPropertyOperation(key, operation, propertyKeys) {
+      queued.push({ key, operation, propertyKeys })
+    },
+  },
+}
 
 const slot = () => {
   const node = window.document.createElement("div")
@@ -154,10 +180,12 @@ const slot = () => {
   window.document.body.append(node)
   return node
 }
-const context = createContext(
-  { elementInfo, toast() {} },
-  { overlay: slot(), toolbar: slot(), left: slot(), right: slot() }
-)
+const context = createContext(bridge, {
+  overlay: slot(),
+  toolbar: slot(),
+  left: slot(),
+  right: slot(),
+})
 installLayersPanel(context)
 
 const $ = (name) => window.document.getElementById(name)
@@ -211,10 +239,12 @@ check("a range with no anchor yet falls back to selecting the one row", () => {
   setState({ selection: [] })
   // The anchor survives a cleared selection, so this case has to reach past
   // the click path and drop it the only way a real session can: a new panel.
-  const fresh = createContext(
-    { elementInfo, toast() {} },
-    { overlay: slot(), toolbar: slot(), left: slot(), right: slot() }
-  )
+  const fresh = createContext(bridge, {
+    overlay: slot(),
+    toolbar: slot(),
+    left: slot(),
+    right: slot(),
+  })
   installLayersPanel(fresh)
   const first = fresh.slots.left.querySelector(".de-layer")
   first.dispatchEvent(new window.MouseEvent("click", { bubbles: true, shiftKey: true }))
@@ -309,6 +339,105 @@ check("arrow keys still rove without changing the selection", () => {
   rows()[2].dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }))
   assert.deepEqual(selection(), before)
   assert.equal(rows()[3].getAttribute("tabindex"), "0")
+})
+
+// ── Row actions ────────────────────────────────────────────────────────────
+
+const action = (index, kind) =>
+  rows()[index].querySelector(`.de-layer-action[data-action="${kind}"]`)
+const press = (button, type = "click") =>
+  button.dispatchEvent(new window.MouseEvent(type, { bubbles: true }))
+
+console.log("\nRow actions")
+
+check("both actions say which way they will go, and start unpressed", () => {
+  const lock = action(3, "lock")
+  const eye = action(3, "eye")
+  assert.equal(lock.getAttribute("aria-pressed"), "false")
+  assert.equal(lock.getAttribute("aria-label"), "Lock Homecoming")
+  assert.equal(lock.dataset.glyph, "LockOpen")
+  assert.equal(eye.getAttribute("aria-pressed"), "false")
+  assert.equal(eye.getAttribute("aria-label"), "Hide Homecoming")
+  assert.equal(eye.dataset.glyph, "Eye")
+})
+
+check("the strip is reserved, not mounted on hover — only opacity moves", () => {
+  assert.match(layersCss, /\.de-layer-actions \{[^}]*opacity: 0;[^}]*\}/s)
+  // Nothing in the reveal may change the box: `display` or `width` here is the
+  // difference between a row that holds still and one that jumps under the
+  // cursor at the moment it is being aimed at.
+  assert.ok(!/\.de-layer-actions \{[^}]*display: none/s.test(layersCss))
+  assert.match(layersCss, /\.de-layer:hover \.de-layer-actions,/)
+  assert.match(layersCss, /\.de-layer\[aria-selected="true"\] \.de-layer-actions,/)
+  assert.match(layersCss, /\.de-layer--hidden \.de-layer-actions \{ opacity: 1; \}/)
+})
+
+check("pressing an action never reaches the row, so the selection holds", () => {
+  click(2)
+  const before = selection()
+  let leaked = 0
+  const spy = () => (leaked += 1)
+  const tree = context.slots.left.querySelector(".de-layers-tree")
+  tree.addEventListener("pointerdown", spy)
+  press(action(4, "eye"), "pointerdown")
+  press(action(4, "eye"))
+  press(action(4, "lock"))
+  tree.removeEventListener("pointerdown", spy)
+  assert.equal(leaked, 0, "the press that would start a row drag was stopped")
+  assert.deepEqual(selection(), before)
+  // Put the fixture back: both toggles are their own inverse.
+  press(action(4, "eye"))
+  press(action(4, "lock"))
+  assert.deepEqual(selection(), before)
+})
+
+check("the eye goes through the writer, not straight onto the element", () => {
+  queued.length = 0
+  press(action(4, "eye"))
+  assert.equal(queued.length, 1, "hiding queued exactly one source operation")
+  const [hide] = queued
+  assert.equal(hide.operation.op, "updateClass")
+  assert.equal(hide.operation.file, "src/Card.tsx")
+  assert.deepEqual(hide.propertyKeys, ["display"])
+  // `display: none` is a utility the source writer can express, so it must
+  // arrive as `hidden` rather than as a preview-only style the Apply drops.
+  assert.deepEqual(
+    hide.operation.updates.map((update) => update.tailwindToken),
+    ["hidden"]
+  )
+  assert.equal(window.getComputedStyle($("photo")).display, "none")
+  const eye = action(4, "eye")
+  assert.equal(eye.getAttribute("aria-pressed"), "true")
+  assert.equal(eye.getAttribute("aria-label"), "Show img")
+  assert.ok(rows()[4].classList.contains("de-layer--hidden"))
+
+  press(action(4, "eye"))
+  assert.equal(queued.length, 2, "showing is a second write, not an unset")
+  // Showing has to name a display, and it names the one the element had —
+  // never a blanket `block`, which would restack a flex row's children.
+  assert.notEqual(queued[1].operation.updates[0].tailwindToken, "hidden")
+  assert.notEqual(window.getComputedStyle($("photo")).display, "none")
+  assert.equal(action(4, "eye").getAttribute("aria-label"), "Hide img")
+})
+
+check("the lock is session state: no source write, still selectable", () => {
+  setState({ selection: [] })
+  queued.length = 0
+  press(action(5, "lock"))
+  assert.ok(isLocked($("box")), "the canvas can now ask the store to skip it")
+  assert.deepEqual(queued, [], "a lock is not a fact about the user's app")
+  assert.equal(action(5, "lock").getAttribute("aria-pressed"), "true")
+  assert.equal(action(5, "lock").getAttribute("aria-label"), "Unlock div")
+  assert.equal(action(5, "lock").dataset.glyph, "Lock")
+  assert.ok(rows()[5].classList.contains("de-layer--locked"))
+
+  // The tree is the way back out of a lock, so it must never honour one.
+  click(5)
+  assert.deepEqual(selection(), ["box"])
+
+  press(action(5, "lock"))
+  assert.ok(!isLocked($("box")))
+  assert.equal(action(5, "lock").getAttribute("aria-label"), "Lock div")
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

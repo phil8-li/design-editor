@@ -28,6 +28,24 @@ export interface EditorState {
   scope: Element | null
   /** Already resolved: the painter must never re-run the resolver per frame. */
   hovered: Element | null
+  /**
+   * Elements the user has locked from the layers tree.
+   *
+   * A lock is a property of THIS EDITING SESSION, not of the user's app. It
+   * says "stop letting me grab this on the canvas", which is a fact about the
+   * pointer and not about the product — there is nothing in the JSX it could
+   * correspond to. That is exactly why it is never written to source and never
+   * reaches the change ledger, and it is the one row affordance that differs
+   * from the eye beside it, which is a real edit.
+   *
+   * It lives in the store rather than in the layers panel because the canvas
+   * lane is the one that has to honour it, and lanes read each other only
+   * through here. Keyed by the element, the same way the tree keys its rows.
+   *
+   * Replaced rather than mutated on every toggle: `setState` compares by
+   * identity, so a Set edited in place would notify nobody.
+   */
+  locked: ReadonlySet<Element>
   layersOpen: boolean
   inspectorOpen: boolean
   /** Option sets keyed by `Selection.key`. */
@@ -43,6 +61,7 @@ const state: EditorState = {
   selection: [],
   scope: null,
   hovered: null,
+  locked: new Set<Element>(),
   layersOpen: true,
   inspectorOpen: true,
   optionSets: {},
@@ -89,6 +108,18 @@ export function primarySelection(): Selection | null {
  */
 export function editorOwnsInput(): boolean {
   return !state.interactive
+}
+
+/**
+ * Whether the canvas should refuse to hit-test `element`.
+ *
+ * Asked as a function for the same reason as `editorOwnsInput`: the lock is
+ * only worth anything if every path that can grab an element asks the same
+ * question. The tree deliberately does NOT ask it — a locked layer stays
+ * selectable from the panel, which is the only way back out of the lock.
+ */
+export function isLocked(element: Element | null): boolean {
+  return Boolean(element && state.locked.has(element))
 }
 
 /** `tag` plus index among same-tag siblings — one step of a DOM path. */
