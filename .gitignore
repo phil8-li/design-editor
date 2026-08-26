@@ -12,3 +12,6 @@ test/.control-default-fixture/
 test/.icon-set-fixture/
 
 .DS_Store
+
+# Per-task worktrees. Checkouts, never sources.
+.worktrees/

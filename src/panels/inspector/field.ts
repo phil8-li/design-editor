@@ -316,7 +316,15 @@ export function segmented(options: SegmentedOptions): HTMLElement {
 
 export interface IconButtonOptions {
   label: string
-  glyph: string
+  /**
+   * A unicode mark or a drawn one.
+   *
+   * It was `string` while every caller had a `⇤` to hand. The align strip draws
+   * real glyphs now, and a caller that has an `<svg>` should not have to build
+   * the button itself just to pass one in — that is how a second, subtly
+   * different button gets written.
+   */
+  glyph: string | Node
   pressed?: boolean
   onClick(): void
 }
@@ -339,7 +347,7 @@ export function iconButton(options: IconButtonOptions): HTMLElement {
 /** Small trailing affordance on a list row or a section header: `+`, eye, `−`. */
 export function miniButton(options: {
   label: string
-  glyph: string
+  glyph: string | Node
   pressed?: boolean
   danger?: boolean
   onClick(): void
