@@ -80,6 +80,7 @@ const bundled = await build({
       export { installOptionsBrowser } from "./src/options/inventory-panel"
       export { getState, setState, editorOwnsInput } from "./src/core/store"
       export { toolbarCss } from "./src/core/css/toolbar"
+      export { tokens } from "./src/core/tokens"
       export { recordPreviewOnly, previewOnlyChanges, clearPreviewOnly } from "./src/core/change-prompt"
     `,
     resolveDir: PACKAGE_DIR,
@@ -316,6 +317,76 @@ check("clicking a toggle moves its own flag and only its own", () => {
   byLabel("Toggle layers panel").click()
   assert.equal(context.getState().layersOpen, true)
   editor.setState({ layersOpen: true, inspectorOpen: true })
+})
+
+// ── The pill it is drawn as ────────────────────────────────────────────────
+
+console.log("\nThe floating pill")
+
+/** The declarations of one rule, by selector, from the stylesheet as shipped. */
+const block = (selector) =>
+  editor.toolbarCss.match(new RegExp(`${selector}\\s*\\{[^}]*\\}`, "s"))?.[0] ?? ""
+
+/*
+ * The bar used to be a 36px box with a 34px row centred in it, so the padding
+ * was a leftover rather than a decision and a taller button would have been
+ * absorbed by a number declared in another file. It is a pill wrapped around its
+ * row now and the height is a consequence of the two numbers that make it. The
+ * absence of a `height` is asserted because an absence is exactly what a later
+ * edit restores without noticing.
+ */
+check("the bar takes its height from its contents, not from a fixed number", () => {
+  const bar = block("\\.de-toolbar")
+  assert.ok(bar, "the container rule must exist")
+  assert.doesNotMatch(bar, /(^|[^-])height:/)
+  assert.match(bar, /padding: 4px;/)
+  // A pill hanging over live product pixels needs a wider cast than the panels
+  // that are already docked against an edge.
+  assert.match(bar, /box-shadow: 0 8px 30px/)
+  assert.doesNotMatch(bar, /0 2px 14px/, "the docked panel's shadow is back on the pill")
+  // Concentric: the outer curve, the inner curve, and the padding between them.
+  assert.match(bar, new RegExp(`border-radius: ${editor.tokens.radius.xl};`))
+  const square = block("\\.de-toolbar \\.de-tool")
+  assert.match(square, new RegExp(`border-radius: ${editor.tokens.radius.lg};`))
+  assert.match(square, /width: 32px; height: 32px;/)
+  // `.de-tool` also dresses the inspector's `iconButton`, inside a 240px panel
+  // where the smaller square is already as much as a row can hold. The bar's is
+  // an override, so growing it must not have grown theirs.
+  assert.match(
+    block("\\.de-tool"),
+    new RegExp(`width: ${editor.tokens.size.toolSize}px;`),
+    "the bar's square leaked into the panels"
+  )
+})
+
+/*
+ * Rules at every seam were furniture. Space replaced them everywhere except the
+ * one place space cannot work — two icon squares meeting two more — because
+ * likeness groups the eye faster than distance separates it. One hairline, and
+ * the bar still has to read as three clusters.
+ */
+check("the clusters are parted by space, bar the one seam space cannot carry", () => {
+  const seam = block("\\.de-toolbar-group \\+ \\.de-toolbar-group")
+  assert.ok(seam, "consecutive groups must still be spaced deliberately")
+  assert.doesNotMatch(seam, /border-left/)
+  assert.match(seam, /margin-left/)
+  const hairlines = editor.toolbarCss.match(/\.de-toolbar-group[^{]*::before\s*\{/g) ?? []
+  assert.equal(hairlines.length, 1, `expected one hairline, saw ${hairlines.length}`)
+})
+
+/*
+ * The on state was an 18% wash borrowed from the canvas, where a tint has to
+ * let the page show THROUGH it. Nothing shows through a 32px button, so the
+ * wash was paying for a transparency nobody needed and reading, at a glance, as
+ * a hover that had got stuck.
+ */
+check("an on panel toggle wears the accent as a fill, not as a wash", () => {
+  const on = block('\\.de-toolbar \\.de-tool\\[aria-pressed="true"\\]')
+  assert.ok(on, "the pressed tool rule must exist")
+  assert.doesNotMatch(on, /color-mix/)
+  assert.match(on, new RegExp(`background: ${editor.tokens.color.accentSurface};`))
+  // The accent is a light indigo, so the ink flips with the fill or vanishes.
+  assert.match(on, new RegExp(`color: ${editor.tokens.color.onAccent};`))
 })
 
 // ── Hover text and accessible names ────────────────────────────────────────
