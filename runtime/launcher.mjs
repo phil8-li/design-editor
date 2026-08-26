@@ -21,6 +21,7 @@ import { Readable } from "node:stream"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { browserPrelude } from "../config.mjs"
+import { openBrowser } from "./open-browser.mjs"
 import { patchOverlay } from "./vendor-patch.mjs"
 
 const LOOPBACK = "127.0.0.1"
@@ -308,9 +309,13 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
         // The vendor's own banner reports the port it asked for, not the one it
         // got, so this line has to land after it to be the one a reader trusts.
         setImmediate(() => {
+          const url = `http://${LOOPBACK}:${runtime.proxyPort}`
           console.log(
-            `[design-editor] proxy http://${LOOPBACK}:${runtime.proxyPort} — ws ://${LOOPBACK}:${runtime.wsPort} — api ${config.apiPrefix}`
+            `[design-editor] proxy ${url} — ws ://${LOOPBACK}:${runtime.wsPort} — api ${config.apiPrefix}`
           )
+          // This is the editing URL. The dev server's own URL still works and
+          // still has no editor on it, so the one worth opening is this one.
+          if (open) openBrowser(url)
         })
       }
     })
@@ -379,7 +384,10 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
     process.argv[0],
     vendor.entry,
     ...(appPort ? [String(appPort)] : []),
-    ...(open ? [] : ["--no-open"]),
+    // Never the vendor's own open. It fires with the port it asked for, which
+    // the listen patch above may have remapped, so it can send the browser to a
+    // port nothing is serving. `recordBoundPort` opens the bound one instead.
+    "--no-open",
     ...(host ? ["--host", host] : []),
     ...(verbose ? ["--verbose"] : []),
   ]

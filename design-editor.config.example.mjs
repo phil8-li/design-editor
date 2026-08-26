@@ -14,7 +14,11 @@ const config = {
     // Dev server port. Omit to pass one on the command line instead.
     port: 3000,
     host: "127.0.0.1",
+    // Open the editing URL on start. The dev server's own URL is left alone —
+    // it has no editor on it.
     open: false,
+    // The npm script `--dev` runs when nothing is listening on `port` yet.
+    devScript: "dev",
   },
 
   // "auto" lets the tool take the first free port near the vendor's defaults.

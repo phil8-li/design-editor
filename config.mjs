@@ -67,7 +67,10 @@ const V3_SPACING_SCALE = {
 }
 
 export const DEFAULT_CONFIG = {
-  app: { port: null, host: "127.0.0.1", open: false, openQuery: "design" },
+  // `devScript` is the host's own npm script, run only under `--dev`. Named
+  // rather than assumed to be `next dev`, because the script is where a host
+  // keeps the env, the flags and the wrapper its app actually needs.
+  app: { port: null, host: "127.0.0.1", open: false, openQuery: "design", devScript: "dev" },
   ports: { proxy: "auto", ws: "auto" },
   projectRoot: null,
   stateDir: ".local/design-editor",

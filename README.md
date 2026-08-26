@@ -11,7 +11,8 @@ leaves no trace in your source tree.
 ## Requirements
 
 - Node >= 20.9
-- A Next.js app with a dev server you can start yourself
+- A Next.js app with a dev script (`--dev` runs it for you; without it, start
+  the dev server yourself first)
 - App Router and Pages Router are both supported, and neither requires a
   `next.config` file. The overlay can inspect any Next app; durable layout and
   appearance edits currently write Tailwind utilities, so full visual editing
@@ -40,7 +41,7 @@ browser bundle when installing from source.
    ```json
    {
      "scripts": {
-       "design": "design-editor --no-open 3000",
+       "design": "design-editor --dev --open 3000",
        "verify:design-editor": "design-editor --verify"
      }
    }
@@ -61,26 +62,40 @@ browser bundle when installing from source.
 ## Use
 
 ```sh
-npm run dev          # your app, on 3000
-npm run design       # in a second terminal
+npm run design
 ```
 
-Open the **proxy** URL the launcher prints — not your dev server. The line to
-trust is the one prefixed `[design-editor]`; the vendored CLI prints a banner
-just above it that reports the ports it asked for rather than the ones it got.
+One command, one terminal. It starts your dev server, waits for it to answer,
+mounts the editing proxy in front of it, and opens that proxy in your browser.
+The page you land on is your app — the editor is the chrome around it.
+
+If a dev server is already up on the port, it attaches to that one instead and
+leaves it alone, including on the way out: `Ctrl+C` only stops a server this
+command started.
+
+Without `--dev` the app has to be running already, and the launcher says so
+rather than failing inside the vendor's health check. Without `--open`, open the
+**proxy** URL it prints — not your dev server. The line to trust is the one
+prefixed `[design-editor]`; the vendored CLI prints a banner just above it that
+reports the ports it asked for rather than the ones it bound.
 
 ```
 design-editor [appPort] [options]
 
   appPort                 Dev server port
+  --dev                   Start the app's dev server too, and attach when it is up
+  --dev-script <name>     npm script --dev runs (default: app.devScript, "dev")
   --config <path>         Config file (default: nearest one above cwd)
   --proxy-port <n>        Port for the editing proxy the browser loads
   --ws-port <n>           Port for the source-edit WebSocket
   --host <host>           Dev server host (default: 127.0.0.1)
-  --open / --no-open      Open a browser on start (default: no)
+  --open / --no-open      Open the editing URL on start (default: no)
   --verify                Check the vendor patch still applies, then exit
   --print-config          Print the resolved config as JSON, then exit
 ```
+
+`--dev` runs your own npm script with `PORT` set, so whatever that script
+already does — env files, wrappers, extra flags — keeps happening.
 
 `--verify` is worth running in CI. It is the check that fails loudly when a
 dependency bump moves the vendored bundle out from under the patch.
