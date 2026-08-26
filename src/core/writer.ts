@@ -62,12 +62,19 @@ function nthOfType(element: LayerElement): number {
  * Filtered to CSS properties on purpose. An icon swap is in the ledger — it is
  * exactly the kind of change that needs an agent — but it announces itself as
  * preview-only at the moment it happens, and repeating it in the Apply toast
- * would report the same loss twice.
+ * would report the same loss twice. A stranded class list is in the ledger for
+ * the same reason and skipped for the same one: `class` is an attribute, and a
+ * toast that listed it among the declarations that "cannot be written to code"
+ * would be naming a CSS property that does not exist.
+ *
+ * A stranded CSS property is NOT filtered. It is in the ledger precisely
+ * because it could not be written, which is exactly what the toast reports —
+ * the translator could spell it, but there was no file to spell it into.
  */
 export function untranslatedProperties(): string[] {
   const seen = new Set<string>()
   for (const change of previewOnlyChanges()) {
-    if (change.property === "icon") continue
+    if (change.property === "icon" || change.property === "class") continue
     seen.add(change.property)
   }
   return [...seen]
@@ -173,21 +180,52 @@ export function createWriter(bridge: RewriteBridge): Writer {
     }
   }
 
+  /**
+   * True only when the engine took the operation.
+   *
+   * The answer matters because a rejection used to end here. The comment that
+   * stood in this catch claimed "Apply to code reports the shortfall", but the
+   * toolbar's shortfall report is `untranslatedProperties()`, which reads the
+   * ledger — and nothing had been written to it. The change stayed on screen,
+   * `hasChanges()` stayed false, and the next hot reload ate it. Callers use
+   * the false to strand the change into the ledger instead.
+   */
   const dispatch = (
     selection: Selection,
     source: SourceRef,
     updates: ClassUpdate[],
     keys: string[],
     identity?: { className: string; parentClassName: string | undefined }
-  ) => {
+  ): boolean => {
     const operation = operationFor(selection, source, updates, identity)
-    if (!operation) return
+    if (!operation) return false
     try {
       bridge.store.addPendingPropertyOperation(selection.key, operation, keys)
+      return true
     } catch {
-      // The engine rejects operations it cannot locate in source; the live
-      // preview still stands, and "Apply to code" reports the shortfall.
+      // The engine rejects operations it cannot locate in source.
+      return false
     }
+  }
+
+  /**
+   * A change the translator could spell but that has nowhere to land.
+   *
+   * Recorded with whatever path is known and never patched afterwards, unlike
+   * the preview-only branch in `writeStyles`: this only ever runs once
+   * resolution has already been attempted and come back empty or unusable, so
+   * asking again would be a second sourcemap round trip for the same "no".
+   */
+  const strand = (
+    selection: Selection,
+    change: { className: string; property: string; from: string; to: string }
+  ) => {
+    recordPreviewOnly({
+      filePath: selection.source?.filePath ?? null,
+      componentName: selection.componentName,
+      tagName: selection.element.tagName.toLowerCase(),
+      ...change,
+    })
   }
 
   /**
@@ -199,20 +237,30 @@ export function createWriter(bridge: RewriteBridge): Writer {
    * the engine's `addPendingPropertyOperation` fires its own state-change
    * listeners when the entry lands, which is what takes the toolbar's Apply
    * button out of its disabled state. Awaiting here would stall a drag instead.
+   *
+   * `stranded` is the caller's answer to the two ways this can come up empty:
+   * the file never resolves — under React 19 the sync walk always says `""`,
+   * the async resolver hands back a bundler chunk about half the time, and
+   * `isProjectSourcePath` rejects it — or the engine refuses an operation it
+   * cannot locate. Both used to end in silence, which is the whole reason a
+   * panel edit could leave the Prompts tab empty. The change is on screen
+   * either way, so the only honest place left for it is the ledger.
    */
   const queue = (
     selection: Selection,
     updates: ClassUpdate[],
     keys: string[],
+    stranded: () => void,
     identity?: { className: string; parentClassName: string | undefined }
   ) => {
     const known = selection.source
     if (known?.filePath) {
-      dispatch(selection, known, updates, keys, identity)
+      if (!dispatch(selection, known, updates, keys, identity)) stranded()
       return
     }
     void ensureSource(selection).then((source) => {
-      if (source) dispatch(selection, source, updates, keys, identity)
+      if (source && dispatch(selection, source, updates, keys, identity)) return
+      stranded()
     })
   }
 
@@ -227,6 +275,11 @@ export function createWriter(bridge: RewriteBridge): Writer {
     const updates: ClassUpdate[] = []
     const keys: string[] = []
     const dropped: string[] = []
+    // What each queued write would have to say for itself if it never reaches
+    // source. Collected here rather than rebuilt in the fallback because by the
+    // time resolution answers, the "from" is long overwritten by the preview.
+    const translated: Array<{ property: string; from: string; to: string }> = []
+    const className = selection.element.getAttribute("class") ?? ""
 
     for (const write of writes) {
       // Read before the write: a preview-only change is only actionable as
@@ -261,9 +314,17 @@ export function createWriter(bridge: RewriteBridge): Writer {
       }
       updates.push(update)
       keys.push(propertyKey(write.property))
+      translated.push({ property: write.property, from: before, to: write.value })
     }
 
-    if (updates.length) queue(selection, updates, keys)
+    // Only the writes in `updates` are stranded here. The branch above already
+    // recorded the ones the translator could not spell, and recording those a
+    // second time would put the same loss in front of the user twice.
+    if (updates.length) {
+      queue(selection, updates, keys, () => {
+        for (const write of translated) strand(selection, { className, ...write })
+      })
+    }
     return dropped
   }
 
@@ -310,7 +371,26 @@ export function createWriter(bridge: RewriteBridge): Writer {
       keys.push(`class:${added}`)
     }
     if (updates.length) {
-      queue(selection, updates, keys, identity)
+      // One entry for the whole write, not one per token: what an agent needs
+      // is the class attribute it should end up with, and a variant swap is
+      // half a dozen tokens moving together. The element is described by the
+      // class list it had BEFORE the write, because that is still what stands
+      // in the JSX — the write is stranded precisely because it never got
+      // there.
+      const after = element.getAttribute("class") ?? ""
+      queue(
+        selection,
+        updates,
+        keys,
+        () =>
+          strand(selection, {
+            className: identity.className,
+            property: "class",
+            from: identity.className,
+            to: after,
+          }),
+        identity
+      )
     }
   }
 
