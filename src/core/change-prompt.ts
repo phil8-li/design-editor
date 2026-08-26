@@ -28,7 +28,10 @@ export interface PreviewOnlyChange {
   componentName: string
   tagName: string
   className: string
-  /** A CSS property in kebab-case, or `icon` for a glyph swap. */
+  /**
+   * A CSS property in kebab-case, `icon` for a glyph swap, or `class` for a
+   * class list that was writable but had no file to be written into.
+   */
   property: string
   from: string
   to: string
@@ -101,6 +104,12 @@ function describe(change: PreviewOnlyChange): string {
     : `\`<${change.tagName}>\``
   if (change.property === "icon") {
     return `- ${element} — swap the icon to \`${change.to}\` (currently \`${change.from || "unknown"}\`)`
+  }
+  if (change.property === "class") {
+    // The same fork the icon line makes, for the same reason. A class list is
+    // an attribute on the JSX, not a declaration: "set `class` to ..." would
+    // send the agent looking for a CSS rule that was never going to exist.
+    return `- ${element} — the class attribute becomes \`${change.to}\` (currently \`${change.from || "none"}\`)`
   }
   const from = change.from ? ` (currently \`${change.from}\`)` : ""
   return `- ${element} — set \`${change.property}\` to \`${change.to}\`${from}`

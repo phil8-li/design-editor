@@ -41,12 +41,14 @@ const UNRESOLVED = "File not resolved"
 /**
  * What the row calls the change, and the two values it moves between.
  *
- * `property` is a CSS property for every entry but one. `icon` is a glyph
+ * `property` is a CSS property for all but two entries. `icon` is a glyph
  * swap: there is no `icon:` declaration to go looking for, and a row that
  * printed one would send the reader to the stylesheet instead of to the JSX.
- * `describe()` in `change-prompt.ts` already forks here for the markdown, so
- * the row forks the same way — the panel and the brief have to be telling the
- * same story, or reading one of them is worthless.
+ * `class` is the same kind of lie — an attribute on the JSX, reached by a
+ * variant picker or the responsive section whose write found no file to land
+ * in. `describe()` in `change-prompt.ts` already forks on both for the
+ * markdown, so the row forks the same way — the panel and the brief have to be
+ * telling the same story, or reading one of them is worthless.
  *
  * The empty `from` is spelled rather than dropped. A blank where a value goes
  * reads as a rendering bug; "unset" is the actual claim, and it is the same
@@ -55,6 +57,9 @@ const UNRESOLVED = "File not resolved"
 function summarize(change: PreviewOnlyChange): { label: string; from: string; to: string } {
   if (change.property === "icon") {
     return { label: "swap icon", from: change.from || "unknown", to: change.to }
+  }
+  if (change.property === "class") {
+    return { label: "class attribute", from: change.from || "none", to: change.to }
   }
   return { label: change.property, from: change.from || "unset", to: change.to }
 }
