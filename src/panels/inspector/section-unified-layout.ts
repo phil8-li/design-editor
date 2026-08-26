@@ -2,7 +2,6 @@
 
 import { el } from "../../core/dom"
 import { section } from "./field"
-import { alignSection } from "./section-align"
 import { layoutSection } from "./section-layout"
 import { autoLayoutSection } from "./section-autolayout"
 import type { InspectorSection, SectionContext } from "./index"
@@ -19,8 +18,10 @@ function group(title: string, node: HTMLElement | null): HTMLElement | null {
 }
 
 export const unifiedLayoutSection: InspectorSection = (context: SectionContext) => {
+  // Alignment used to lead this stack. It is one of the questions the Position
+  // section asks now, next to arrange, which is where it belongs: it describes
+  // where the box sits among its siblings, not how the box is sized.
   const groups = [
-    group("Parent alignment", alignSection(context)),
     group("Size", layoutSection(context)),
     group("Auto layout", autoLayoutSection(context)),
   ].filter((node): node is HTMLElement => node !== null)
