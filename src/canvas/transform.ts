@@ -2,20 +2,32 @@
  * Drag-to-move and handle-resize for the current selection.
  *
  * Both write to inline styles first so the gesture stays at 60fps, then hand
- * the resulting values to the inspector's writer on release. Snapping and
- * alignment guides live in `snapping.ts` and hook in through `onDragUpdate`.
+ * the resulting values to the inspector's writer on release. The frames in
+ * between are preview and nothing else: they are never recorded, so a drag is
+ * one history step and one ledger row rather than one per pointermove.
+ * Snapping and alignment guides live in `snapping.ts` and hook in through
+ * `onDragUpdate`.
  */
 
 import { isChrome, round } from "../core/dom"
 import { editorOwnsInput } from "../core/store"
 import type { EditorContext } from "../core/context"
-import type { LayerElement } from "../core/types"
+import type { LayerElement, Selection } from "../core/types"
+import type { StyleWrite, Writer } from "../core/writer"
 import type { HandleId } from "./selection"
 
 interface DragTarget {
+  /** The writer takes a Selection, not an element: it needs the source ref too. */
+  selection: Selection
   element: LayerElement
   offsetX: number
   offsetY: number
+  /**
+   * The inline declarations as the gesture found them, so the release can put
+   * them back exactly. An empty string and `0px` are different states — one
+   * leaves the stylesheet in charge — and a normalised reading loses that.
+   */
+  inline: { transform: string; width: string; height: string }
 }
 
 interface Gesture {
@@ -102,15 +114,36 @@ export function translateBy(element: LayerElement, dx: number, dy: number): stri
 
 const DRAG_THRESHOLD = 3
 
-export function installTransform(context: EditorContext): void {
+/**
+ * Restores one inline declaration, where "no declaration" is a value too.
+ * Blanking a property the element never set inline is not the same as removing
+ * it: the blank keeps the declaration and shuts the stylesheet out.
+ */
+function setInline(element: LayerElement, property: string, value: string): void {
+  if (value) element.style.setProperty(property, value)
+  else element.style.removeProperty(property)
+}
+
+export function installTransform(context: EditorContext, writer: Writer): void {
   let gesture: Gesture | null = null
   let capture: Element | null = null
   let pointerId = -1
 
-  const targetsFor = (elements: LayerElement[]): DragTarget[] =>
-    elements.map((element) => {
+  const targetsFor = (selections: Selection[]): DragTarget[] =>
+    selections.map((selection) => {
+      const element = selection.element
       const offset = readOffset(element)
-      return { element, offsetX: offset.x, offsetY: offset.y }
+      return {
+        selection,
+        element,
+        offsetX: offset.x,
+        offsetY: offset.y,
+        inline: {
+          transform: element.style.transform,
+          width: element.style.width,
+          height: element.style.height,
+        },
+      }
     })
 
   const onPointerDown = (event: PointerEvent) => {
@@ -121,7 +154,8 @@ export function installTransform(context: EditorContext): void {
 
     const target = event.target as HTMLElement | null
     const handleId = target?.dataset?.handle as HandleId | undefined
-    const selected = state.selection[0]?.element ?? null
+    const primary = state.selection[0] ?? null
+    const selected = primary?.element ?? null
 
     const capturePointer = () => {
       capture = event.target instanceof Element ? event.target : null
@@ -134,14 +168,14 @@ export function installTransform(context: EditorContext): void {
       }
     }
 
-    if (handleId && selected) {
+    if (handleId && primary) {
       gesture = {
-        targets: targetsFor([selected]),
+        targets: targetsFor([primary]),
         mode: "resize",
         handle: handleId,
         startX: event.clientX,
         startY: event.clientY,
-        startRect: selected.getBoundingClientRect(),
+        startRect: primary.element.getBoundingClientRect(),
         moved: false,
       }
       capturePointer()
@@ -158,7 +192,7 @@ export function installTransform(context: EditorContext): void {
 
     // Dragging one member of a multi-selection carries the whole set.
     gesture = {
-      targets: targetsFor(state.selection.map((entry) => entry.element)),
+      targets: targetsFor(state.selection),
       mode: "move",
       handle: null,
       startX: event.clientX,
@@ -233,6 +267,45 @@ export function installTransform(context: EditorContext): void {
     }
   }
 
+  /**
+   * The gesture's own preview, rewound and then replayed through the writer.
+   *
+   * `writer.applyStyles` reads the "before" value off the element to decide
+   * whether anything changed and what the ledger's "from" should be, so with
+   * the dragged value still sitting inline the write reads as a no-op: no
+   * history step, and a change prompt that reports `from` equal to `to`.
+   * Restoring first is what makes a drag an edit like any other. Both halves
+   * run in the same task, so nothing paints in between and the rewind is
+   * invisible.
+   */
+  const commit = (finished: Gesture) => {
+    const summary = finished.mode === "resize" ? "Resize" : "Move"
+    for (const target of finished.targets) {
+      const style = target.element.style
+      const writes: StyleWrite[] = []
+      if (finished.mode === "resize") {
+        writes.push({ property: "width", value: style.width })
+        writes.push({ property: "height", value: style.height })
+      }
+      // A resize only moves the origin when a west or north handle dragged it,
+      // and a move that snapped back where it started moved nothing. The
+      // element is the honest record of which of those happened.
+      if (style.transform !== target.inline.transform) {
+        writes.push({ property: "transform", value: style.transform })
+      }
+      if (writes.length === 0) continue
+
+      setInline(target.element, "transform", target.inline.transform)
+      if (finished.mode === "resize") {
+        setInline(target.element, "width", target.inline.width)
+        setInline(target.element, "height", target.inline.height)
+      }
+      // One call carrying every property the gesture settled, so a resize that
+      // also shifted the origin is one step on the timeline rather than three.
+      writer.applyStyles(target.selection, writes, summary)
+    }
+  }
+
   const onPointerUp = () => {
     if (capture && pointerId >= 0 && "releasePointerCapture" in capture) {
       try {
@@ -247,6 +320,10 @@ export function installTransform(context: EditorContext): void {
     const finished = gesture
     gesture = null
     if (!finished.moved) return
+    // Before the hooks and the refresh: both read state the write produces —
+    // the guides come down around a settled element, and the panels repaint
+    // from the history and ledger entries this leaves behind.
+    commit(finished)
     for (const hook of endHooks) hook()
     context.refresh()
   }
