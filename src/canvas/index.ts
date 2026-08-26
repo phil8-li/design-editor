@@ -26,7 +26,7 @@ export function installCanvas(context: EditorContext): void {
   const resolver = getResolver(context.bridge)
 
   installSelectionFrame(context)
-  installTransform(context)
+  installTransform(context, writer)
   installSnapping(context)
   installLayerMenu(context)
 
