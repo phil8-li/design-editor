@@ -55,6 +55,7 @@ console.log("\nFlags")
 await check("--dev-script implies --dev", () => {
   assert.deepEqual(parseArgs(["--dev-script", "start"]), {
     open: undefined,
+    start: undefined,
     dev: true,
     devScript: "start",
     verify: false,

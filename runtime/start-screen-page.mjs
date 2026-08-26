@@ -17,15 +17,17 @@
 import { startScreenStyle } from "./start-screen-style.mjs"
 
 /**
- * Where the folder picker opens when nothing at all was detected: no app is
- * running, so no project root came back, and the browser cannot name a single
- * absolute path on the machine it is talking to. The filesystem root is the one
- * path that is always there to navigate down from.
+ * Where the folder picker opens before the server has said where home is, and
+ * if it never does. The filesystem root is the one path that is always there to
+ * navigate down from.
  */
 const PICKER_FALLBACK = "/"
 
 /** How long the waiting state stays silent before it says what to check. */
 const SLOW_MS = 90_000
+
+/** Long enough that a path is typed rather than spelled, short enough to feel live. */
+const TYPING_MS = 300
 
 const CLIENT = `
 const $ = (id) => document.getElementById(id)
@@ -41,10 +43,12 @@ const el = {
 }
 
 let apps = []
+let home = ${JSON.stringify(PICKER_FALLBACK)}
 let root = null      // { path, info } — the folder the editor will write source into
 let browsing = null  // { path, project } while the picker is open
 let devScript = null
 let busy = false
+let typing = 0
 
 /*
  * The browser is never told the server's home directory and the API contract is
@@ -85,11 +89,16 @@ function render() {
   for (const row of el.apps.children) {
     row.setAttribute("aria-pressed", String(app !== null && Number(row.dataset.port) === app.port))
   }
-  el.path.textContent = root ? tilde(root.path) : "Not chosen yet"
+  // The field is never written from here — it is the one control the user types
+  // into, and render() runs on every keystroke.
   const scripts = root ? root.info.devScripts : []
   el.scriptRow.hidden = app !== null || scripts.length < 2
   el.submit.textContent = app ? "Start designing" : "Start app & designing"
-  if (app || !root) show(el.hint, "")
+  // A disabled primary button has to say what is missing. The folder is the one
+  // thing the machine often cannot work out for itself, so it is the one step
+  // most likely to be sitting unanswered here.
+  if (!root) show(el.hint, el.url.value.trim() === "" ? "" : "Now the folder its source is in.")
+  else if (app) show(el.hint, "")
   else if (devScript) show(el.hint, "Runs npm run " + devScript + " in " + tilde(root.path))
   else show(el.hint, "That folder has no dev script in its package.json.")
   el.submit.disabled = busy || el.url.value.trim() === "" || !root || (!app && !devScript)
@@ -113,6 +122,8 @@ async function getJson(path, errorNode) {
 
 function adoptProject(project) {
   root = { path: project.path, info: project }
+  // Only when it differs, so confirming what was pasted does not move the caret.
+  if (el.path.value !== project.path) el.path.value = project.path
   devScript = project.devScripts[0] ?? null
   el.script.replaceChildren()
   for (const name of project.devScripts) {
@@ -195,9 +206,46 @@ function closePicker() {
   el.change.focus()
 }
 
+/*
+ * The typed path, resolved once the typing stops.
+ *
+ * This is the fast way in and, for a project the machine will not name — a dev
+ * server whose cwd macOS refuses to report — the only one that is not a walk
+ * down from the home directory. Finder's Copy as Pathname and the shell both
+ * produce exactly what this field takes.
+ */
+async function resolveTyped() {
+  const value = el.path.value.trim()
+  if (value === "") return
+  if (!/^([/~]|[A-Za-z]:[\\\\/])/.test(value)) {
+    show(el.folderError, "Paste the folder's full path — the one starting at /.")
+    return
+  }
+  const data = await getJson("/api/project?path=" + encodeURIComponent(value), el.folderError)
+  // Typed on while that was in flight; the later keystroke owns the field.
+  if (!data || el.path.value.trim() !== value) return
+  if (!data.project.isDirectory) {
+    show(el.folderError, "There is no folder at that path.")
+    return
+  }
+  adoptProject(data.project)
+  render()
+}
+
+el.path.addEventListener("input", () => {
+  clearErrors()
+  // Anything already adopted is stale the moment the path changes, so the
+  // button goes back to disabled rather than starting the wrong project.
+  root = null
+  devScript = null
+  render()
+  clearTimeout(typing)
+  typing = setTimeout(resolveTyped, ${TYPING_MS})
+})
+
 el.change.addEventListener("click", () => {
   clearErrors()
-  browse(root ? root.path : ${JSON.stringify(PICKER_FALLBACK)})
+  browse(el.path.value.trim() || home)
 })
 el.cancel.addEventListener("click", closePicker)
 el.use.addEventListener("click", () => {
@@ -282,6 +330,7 @@ function waitForEditor(script) {
 async function boot() {
   const data = await getJson("/api/apps", el.appsError)
   apps = (data && data.apps) || []
+  home = (data && data.home) || home
   el.apps.replaceChildren(...apps.map(appRow))
   show(
     el.appsNote,
@@ -328,10 +377,11 @@ export function startScreenPage() {
     </div>
 
     <div class="section">
-      <p class="label">Project folder</p>
+      <label class="label" for="folder-path">Project folder</label>
       <div class="folder">
-        <span class="path" id="folder-path">Not chosen yet</span>
-        <button type="button" class="ghost" id="folder-change">Change</button>
+        <input id="folder-path" class="path" type="text" spellcheck="false"
+               placeholder="Paste a folder path, or browse">
+        <button type="button" class="ghost" id="folder-change">Browse</button>
       </div>
       <div class="picker" id="picker" hidden>
         <p class="crumbs" id="crumbs"></p>

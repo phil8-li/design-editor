@@ -139,8 +139,13 @@ code { font-family: var(--mono); color: var(--text); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #url:focus { border-color: var(--accent); outline: none; }
 
-/* Two rows held open, so the list arriving does not push the card around. */
-.apps { min-height: 64px; display: flex; flex-direction: column; gap: 4px; }
+/*
+ * No reserved height. Most machines run one dev server, and a list sized for
+ * two left a hole under it that read as a rendering fault rather than as room.
+ * The note below carries the empty case, so the list can simply not be there.
+ */
+.apps { display: flex; flex-direction: column; gap: 4px; }
+.apps:empty { display: none; }
 .app {
   width: 100%;
   display: flex;
@@ -163,25 +168,26 @@ code { font-family: var(--mono); color: var(--text); }
 
 .folder { display: flex; align-items: center; gap: 8px; }
 /*
- * The tail of a path is the part that identifies it, so the clip has to fall at
- * the FRONT. direction:rtl moves the ellipsis there; unicode-bidi:plaintext
- * keeps the Latin path itself rendering left to right inside it.
+ * A field rather than a label, because pasting a path is the fast way in and
+ * the only way into a project the machine will not name for itself. It scrolls
+ * to the caret like any text input, so the tail — the identifying part of a
+ * path — is what stays in view while it is being typed.
  */
 .path {
   flex: 1;
   min-width: 0;
-  direction: rtl;
-  unicode-bidi: plaintext;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  padding: 6px 10px;
+  padding: 7px 10px;
   font-family: var(--mono);
   font-size: var(--size-label);
-  color: var(--text-muted);
+  color: var(--text);
   background: var(--bg-sunken);
+  border: 1px solid var(--border-interactive);
   border-radius: var(--radius-sm);
+  transition: border-color var(--fast) var(--ease);
 }
+.path::placeholder { color: var(--text-dim); }
+.path:hover { border-color: var(--accent-soft); }
+.path:focus { border-color: var(--accent); outline: none; }
 
 button { font: inherit; cursor: pointer; }
 .ghost {

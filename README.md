@@ -11,8 +11,8 @@ leaves no trace in your source tree.
 ## Requirements
 
 - Node >= 20.9
-- A Next.js app with a dev script (`--dev` runs it for you; without it, start
-  the dev server yourself first)
+- A Next.js app with a dev script (the start screen and `--dev` both run it for
+  you; with neither, start the dev server yourself first)
 - App Router and Pages Router are both supported, and neither requires a
   `next.config` file. The overlay can inspect any Next app; durable layout and
   appearance edits currently write Tailwind utilities, so full visual editing
@@ -36,7 +36,8 @@ browser bundle when installing from source.
    To hand off one immutable artifact instead, run `npm pack` in this package
    and install the resulting `.tgz` file.
 
-2. Add the scripts:
+2. Optionally add the scripts. The start screen needs neither — they are the
+   shortcut for a project you open every day:
 
    ```json
    {
@@ -62,12 +63,36 @@ browser bundle when installing from source.
 ## Use
 
 ```sh
-npm run design
+npx design-editor
 ```
 
-One command, one terminal. It starts your dev server, waits for it to answer,
-mounts the editing proxy in front of it, and opens that proxy in your browser.
-The page you land on is your app — the editor is the chrome around it.
+With no arguments it opens a start screen in your browser and asks two
+questions: which app, and where its source is.
+
+- **Which app.** It scans the usual dev-server ports and lists what answered, by
+  page title, so `Workspaces` is what you click rather than `127.0.0.1:3000`.
+  Nothing running yet is fine — type the URL you want and it will start the app
+  for you.
+- **Where its source is.** Paste a folder path, or browse to one. It reads that
+  folder's `package.json` to confirm it is the right project and to find the dev
+  script, and tells you what it is about to run before you commit to it.
+
+Press the button and it does the rest: starts the dev server if it has to, waits
+for the app to answer, mounts the editing proxy in front of it, and puts the tab
+you are already in onto the editor. The page you land on is your app — the
+editor is the chrome around it.
+
+The two answers are the whole flow, so nothing about your project has to change
+first. There is no config file to write, no script to add, and no dependency to
+install into the app you are editing.
+
+### From the command line instead
+
+If you already know the port, name it and the start screen is skipped:
+
+```sh
+npm run design            # design-editor --dev --open 3000
+```
 
 If a dev server is already up on the port, it attaches to that one instead and
 leaves it alone, including on the way out: `Ctrl+C` only stops a server this
@@ -82,7 +107,9 @@ reports the ports it asked for rather than the ones it bound.
 ```
 design-editor [appPort] [options]
 
+  (no arguments)          Open the start screen: pick a running app and its folder
   appPort                 Dev server port
+  --start / --no-start    Force or skip the start screen (default: when no port is known)
   --dev                   Start the app's dev server too, and attach when it is up
   --dev-script <name>     npm script --dev runs (default: app.devScript, "dev")
   --config <path>         Config file (default: nearest one above cwd)
@@ -95,7 +122,12 @@ design-editor [appPort] [options]
 ```
 
 `--dev` runs your own npm script with `PORT` set, so whatever that script
-already does — env files, wrappers, extra flags — keeps happening.
+already does — env files, wrappers, extra flags — keeps happening. The start
+screen takes the same path: the script it names in the hint is the one it runs.
+
+Because the folder you choose is the project root, the config file is discovered
+from there rather than from wherever you happened to be standing when you typed
+the command.
 
 `--verify` is worth running in CI. It is the check that fails loudly when a
 dependency bump moves the vendored bundle out from under the patch.
@@ -415,7 +447,11 @@ Ports and the API prefix come from the launcher's `endpoint.json`.
 ```
 cli.mjs                     argv contract and entry point
 config.mjs                  defaults, discovery, resolution, browser prelude
-build.mjs                   bundles src/ into dist/design-editor.js
+build.mjs                   bundles src/ into dist/design-editor.js and dist/tokens.mjs
+runtime/start-screen.mjs    the loopback server behind the no-arguments flow
+runtime/start-screen-page.mjs   its document, and the script that drives it
+runtime/start-screen-style.mjs  its stylesheet, built from the editor's tokens
+runtime/local-apps.mjs      port scan, project inspection, folder listing
 runtime/launcher.mjs        vendor resolution, monkey-patches, route mount
 runtime/vendor-patch.mjs    the 23 splices against react-rewrite-cli 0.1.1
 server/design-system-config.mjs token manifest and authored-alias normalization

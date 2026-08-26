@@ -16,6 +16,7 @@
 
 import fs from "node:fs"
 import http from "node:http"
+import os from "node:os"
 import path from "node:path"
 
 import {
@@ -47,6 +48,21 @@ function isLoopbackHost(value) {
     return false
   }
   return host === "localhost" || host === "127.0.0.1" || host === "::1"
+}
+
+/**
+ * The one thing a pasted path may be that `path.isAbsolute` refuses.
+ *
+ * A path arrives here from a text field, and the field is the fast way in for
+ * anyone whose project is not one of the detected apps. Every other source of a
+ * path on this machine — the shell, `pwd`, Finder's Copy as Pathname — writes
+ * `~` for the home directory, so a field that rejected it would be rejecting
+ * the most likely thing to be typed into it.
+ */
+function expandHome(value) {
+  if (typeof value !== "string") return value
+  if (value !== "~" && !value.startsWith("~/")) return value
+  return path.join(os.homedir(), value.slice(1))
 }
 
 /**
@@ -120,9 +136,10 @@ function parseAppUrl(value) {
  * boot from inside its own banner. Checking here is the difference between an
  * inline message on the screen and a terminal that simply stops.
  */
-function resolveProject(value) {
-  if (typeof value !== "string" || value.trim() === "") throw badRequest("Confirm the project folder before starting.")
-  if (!path.isAbsolute(value)) throw badRequest(`The project folder has to be a full path, and "${value}" is not one.`)
+function resolveProject(raw) {
+  if (typeof raw !== "string" || raw.trim() === "") throw badRequest("Confirm the project folder before starting.")
+  const value = expandHome(raw.trim())
+  if (!path.isAbsolute(value)) throw badRequest(`The project folder has to be a full path, and "${raw}" is not one.`)
 
   let projectRoot
   try {
@@ -214,9 +231,15 @@ export async function createStartScreen({ host = LOOPBACK, port = 0, log = conso
   const routes = {
     "GET /": (_req, res) => send(res, 200, "text/html; charset=utf-8", startScreenPage()),
     "GET /api/apps": async (_req, res) =>
-      sendJson(res, 200, { apps: await scanLocalApps({ ports: DEFAULT_SCAN_PORTS, host }) }),
+      sendJson(res, 200, {
+        apps: await scanLocalApps({ ports: DEFAULT_SCAN_PORTS, host }),
+        // Where the folder picker should open when nothing was detected. The
+        // browser cannot name a single path on the machine it is talking to,
+        // and the alternative starting point is `/`.
+        home: os.homedir(),
+      }),
     "GET /api/project": (_req, res, url) => {
-      const dir = url.searchParams.get("path") ?? ""
+      const dir = expandHome(url.searchParams.get("path") ?? "")
       if (!path.isAbsolute(dir)) throw badRequest("Ask for a folder by its full path.")
       sendJson(res, 200, { project: describeProject(dir), listing: listDirectories(dir) })
     },

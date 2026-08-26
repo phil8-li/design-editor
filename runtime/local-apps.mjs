@@ -214,7 +214,13 @@ async function probeTitle(url, timeoutMs) {
 export async function scanLocalApps({
   ports = DEFAULT_SCAN_PORTS,
   host = "127.0.0.1",
-  timeoutMs = 400,
+  // Long enough to get a NAME out of a dev server, not just a port. A warm one
+  // answers in milliseconds, but the scan is often the first request the thing
+  // has had all day and Next compiles the route before it replies — measured at
+  // 8s cold, well past any timeout worth waiting through. So this buys the warm
+  // case and the cold one still lists, labelled by its address. Probes run
+  // concurrently, so it is the whole scan's ceiling, not a cost per port.
+  timeoutMs = 1500,
 } = {}) {
   const probed = await Promise.all(
     ports.map(async (port) => {
