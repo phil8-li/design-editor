@@ -13,6 +13,17 @@ export const codeCss = `/* ---------- code tab ---------- */
   padding: 8px;
   border-bottom: 1px solid ${t.color.border};
 }
+/* The picker takes the row; the file reference keeps whatever is left. */
+.de-code-header .de-select { flex: 1; min-width: 0; }
+.de-code-source {
+  flex: none; max-width: 50%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ${t.font.mono};
+  font-size: ${t.type.caption};
+  color: ${t.color.textDim};
+}
+/* Stands in for the code view, so it has to fill the same slot. */
+.de-code .de-empty { flex: 1; min-height: 0; }
 .de-code-view {
   flex: 1; min-height: 0;
   margin: 0; padding: 10px;
