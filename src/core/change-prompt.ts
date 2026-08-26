@@ -77,6 +77,24 @@ export function clearPreviewOnly(): void {
   ledger.length = 0
 }
 
+/**
+ * Drops one entry, so a row in the Prompts tab can retract just itself.
+ *
+ * Matched by `identityOf` rather than by object reference on purpose. The two
+ * have to agree: `recordPreviewOnly` COLLAPSES a re-edit of the same element
+ * and property onto the stored record, so the object a caller recorded second
+ * is not the object in the ledger, while the row the user is looking at is
+ * exactly the one that survived the collapse. Identity is the only thing both
+ * ends can name, and it is what the row is showing.
+ */
+export function removePreviewOnly(change: PreviewOnlyChange): boolean {
+  const identity = identityOf(change)
+  const index = ledger.findIndex((entry) => identityOf(entry) === identity)
+  if (index === -1) return false
+  ledger.splice(index, 1)
+  return true
+}
+
 function describe(change: PreviewOnlyChange): string {
   const element = change.className
     ? `\`<${change.tagName} class="${change.className}">\``
