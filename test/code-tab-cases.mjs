@@ -264,6 +264,18 @@ const openCode = () => {
 }
 const pane = () => right.querySelector(".de-code")
 const codeView = () => pane().querySelector(".de-code-view")
+/**
+ * What the view says, read back as text.
+ *
+ * The newline is structural now — one row per line, so the gutter can number
+ * them — so the rows are rejoined here. This still asserts the screen matches
+ * the generator character for character; it just reads the rows instead of a
+ * flat run.
+ */
+const viewText = () =>
+  Array.from(codeView().querySelectorAll(".de-code-text"))
+    .map((line) => line.textContent)
+    .join("\n")
 const picker = () => pane().querySelector(".de-select")
 const copyButton = () => pane().querySelector(".de-code-actions button")
 const status = () => pane().querySelector(".de-code-status")
@@ -301,7 +313,7 @@ check("selecting an element draws it, and the pre matches the generator", () => 
   openCode()
   assert.equal(codeView().hidden, false)
   assert.equal(pane().querySelector(".de-empty").hidden, true)
-  assert.equal(codeView().textContent, text("jsx"))
+  assert.equal(viewText(), text("jsx"))
   assert.equal(copyButton().disabled, false)
 })
 
@@ -316,12 +328,12 @@ check("the tints reach the DOM as the five reserved classes", () => {
 
 check("switching the picker switches the view without touching the selection", () => {
   showView("html")
-  assert.equal(codeView().textContent, text("html"))
+  assert.equal(viewText(), text("html"))
   showView("classes")
-  assert.equal(codeView().textContent, text("classes"))
-  assert.match(codeView().textContent, /^rounded-xl\n/)
+  assert.equal(viewText(), text("classes"))
+  assert.match(viewText(), /^rounded-xl\n/)
   showView("jsx")
-  assert.equal(codeView().textContent, text("jsx"))
+  assert.equal(viewText(), text("jsx"))
 })
 
 check("the resolved source shows as file:line, never as the user's home", () => {
@@ -385,6 +397,33 @@ check("a refused clipboard is reported, not swallowed", () => {
 check("this view is read-only: no Reset, because nothing can be written back", () => {
   const labels = Array.from(pane().querySelectorAll("button")).map((node) => node.textContent.trim())
   assert.deepEqual(labels, ["Copy"])
+})
+
+console.log("\nLine gutter")
+
+check("every line is a numbered row, counting from one", () => {
+  editor.setState({ selection: [cardSelection] })
+  openCode()
+  showView("jsx")
+  const rows = Array.from(codeView().querySelectorAll(".de-code-line"))
+  assert.equal(rows.length, text("jsx").split("\n").length)
+  assert.deepEqual(
+    rows.map((row) => row.dataset.line),
+    rows.map((_, index) => String(index + 1))
+  )
+})
+
+check("the number is not part of the text, so a copy takes only the code", () => {
+  // Drawn by ::before from the attribute, so it is in no text node at all.
+  for (const row of codeView().querySelectorAll(".de-code-line")) {
+    assert.equal(row.textContent, row.querySelector(".de-code-text").textContent)
+  }
+  assert.equal(viewText(), text("jsx"))
+  assert.match(editor.shellCss, /\.de-code-line::before\s*\{[^}]*content:\s*attr\(data-line\)/)
+})
+
+check("a long line wraps rather than running off a 260px panel", () => {
+  assert.match(editor.shellCss, /\.de-code-text\s*\{[^}]*white-space:\s*pre-wrap/)
 })
 
 console.log("\nCode stylesheet")

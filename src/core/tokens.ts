@@ -122,6 +122,17 @@ export const tokens = {
   shadow: {
     panel: "0 2px 14px rgba(0,0,0,0.4), 0 0 0 0.5px rgba(0,0,0,0.6)",
     popover: "0 6px 22px rgba(0,0,0,0.5), 0 0 0 0.5px rgba(0,0,0,0.6)",
+    /**
+     * A surface that hangs over the product rather than docking to an edge.
+     *
+     * `panel` is tuned for something already abutting the viewport: a tight
+     * 14px blur only has to lift it off a page it touches. The toolbar pill
+     * floats in the middle of the screen over live product pixels of an
+     * unknown colour, where that tight cast reads as a rectangle pasted on
+     * rather than as something in front. Wider, and hung below the element,
+     * is what puts air underneath — same ink as the other two.
+     */
+    float: "0 8px 30px rgba(0,0,0,0.4)",
   },
   font: {
     /** `--font-sans`. The face the product ships, not next/font Inter. */

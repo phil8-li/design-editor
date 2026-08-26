@@ -358,7 +358,9 @@ check("both actions say which way they will go, and start unpressed", () => {
   assert.equal(lock.dataset.glyph, "LockOpen")
   assert.equal(eye.getAttribute("aria-pressed"), "false")
   assert.equal(eye.getAttribute("aria-label"), "Hide Homecoming")
-  assert.equal(eye.dataset.glyph, "Eye")
+  // The stroked twin, not the host's filled `Eye`: that one is drawn for 24px
+  // and collapses into an arc with a blob beside it at the row's 12px.
+  assert.equal(eye.dataset.glyph, "EyeOpen")
 })
 
 check("the strip is reserved, not mounted on hover — only opacity moves", () => {

@@ -170,11 +170,38 @@ export function codeTab(editor: EditorContext): InspectorTab {
 
     const tokens = elementCode(selection, view)
     generated = codeText(tokens)
-    for (const token of tokens) {
-      const tint = TINT[token.kind]
-      code.append(tint ? el("span", { class: tint }, [token.text]) : document.createTextNode(token.text))
-    }
+    drawLines(tokens)
     setStatus(IDLE_STATUS)
+  }
+
+  /**
+   * Lay the token run out as numbered lines.
+   *
+   * The generator emits newlines inside token text, which is right for the
+   * clipboard and wrong for the screen: a flat run cannot wrap without losing
+   * where one line ended. So the run is cut at every newline and each piece
+   * gets its own row, tints intact across the cut.
+   */
+  function drawLines(tokens: ReturnType<typeof elementCode>): void {
+    let line = startLine(1)
+    let number = 1
+    for (const token of tokens) {
+      const parts = token.text.split("\n")
+      parts.forEach((part, index) => {
+        if (index > 0) line = startLine(++number)
+        if (!part) return
+        const tint = TINT[token.kind]
+        line.append(tint ? el("span", { class: tint }, [part]) : document.createTextNode(part))
+      })
+    }
+    // A generator that ends on a newline would otherwise leave a numbered blank.
+    if (!line.textContent) line.parentElement?.remove()
+  }
+
+  function startLine(number: number): HTMLElement {
+    const text = el("span", { class: "de-code-text" })
+    code.append(el("div", { class: "de-code-line", "data-line": String(number) }, [text]))
+    return text
   }
 
   return { node, update: render }

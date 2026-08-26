@@ -426,10 +426,23 @@ const ICONS = {
   },
 
   /*
-   * Layer-row affordances. `Eye` above is the host's filled drawing and stays
-   * the shown state; `EyeOff` is its struck-through twin, authored stroked
-   * because a filled eye with a filled slash reads as a blob at 12px.
+   * Layer-row affordances, both authored stroked.
+   *
+   * The host's filled `Eye` above is drawn for a 24px product icon: its pupil
+   * is an evenodd cutout in a lid that only closes at that size. Rendered at
+   * the row's 12px it collapses into an arc with a blob beside it — checked in
+   * a browser, not inferred. So the shown state gets a stroked twin here, which
+   * also means the pair now matches in weight instead of one being filled and
+   * the other outlined.
    */
+  "EyeOpen": {
+    "nodes": [
+      ["path", { "d": "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" }],
+      ["circle", { "cx": "12", "cy": "12", "r": "3" }],
+    ],
+    "rootFill": "none",
+    "rootStroke": "currentColor",
+  },
   "EyeOff": {
     "nodes": [
       ["path", { "d": "M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19" }],

@@ -21,17 +21,8 @@ const TOOL = 32
 const PAD = 4
 const GAP = 2
 
-/*
- * The lift, which is most of what makes this read as floating.
- *
- * `tokens.shadow.panel` is tuned for a surface docked against a viewport edge:
- * a tight 14px blur that only has to lift a panel off the page it already
- * abuts. This pill is not docked. It hangs in the middle of the screen over
- * live product pixels of an unknown colour, and a tight shadow there reads as a
- * rectangle pasted onto the page rather than as something in front of it. A
- * wider cast, hung lower than the element, is what puts air underneath.
- */
-const LIFT = "0 8px 30px rgba(0,0,0,0.4)"
+/** The lift, which is most of what makes this read as floating. */
+const LIFT = t.shadow.float
 
 export const toolbarCss = `/* ---------- toolbar ---------- */
 /*

@@ -133,14 +133,21 @@ export const promptsCss = `/* ---------- change prompts ---------- */
 .de-prompt-brief-text[hidden] { display: none; }
 
 /* ---------- footer and empty state ---------- */
+/*
+ * Two rows, not one. "Copy change prompts" beside a count does not fit the
+ * 260px panel: side by side the label wrapped and the second line fell out of
+ * the button — seen in a browser at 1440x900. The count takes a line of its
+ * own and the actions sit under it, so the button keeps one line at any width.
+ */
 .de-prompt-footer {
   flex: none;
-  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px;
   padding: 8px;
   border-top: 1px solid ${t.color.border};
 }
-.de-prompt-count { font-size: ${t.type.caption}; color: ${t.color.textDim}; }
-.de-prompt-actions { display: inline-flex; align-items: center; gap: 4px; }
+.de-prompt-count { flex: 1 1 100%; font-size: ${t.type.caption}; color: ${t.color.textDim}; }
+.de-prompt-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.de-prompt-actions button { white-space: nowrap; }
 .de-prompts-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .de-prompts-empty-glyph { color: ${t.color.accent}; }
 .de-prompts-empty-detail { font-size: ${t.type.caption}; text-align: left; }

@@ -11,7 +11,7 @@
 import { isCanvasElement, isChrome } from "../core/dom"
 import { canvasAction, isDeepSelect, NUDGE, ownsCanvasKeys } from "../core/keymap"
 import { getResolver, toSelectable } from "../core/resolve"
-import { editorOwnsInput } from "../core/store"
+import { editorOwnsInput, isLocked } from "../core/store"
 import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
 import type { LayerElement } from "../core/types"
@@ -49,7 +49,10 @@ export function installCanvas(context: EditorContext): void {
   /** The one answer both the outline and the click use. */
   const targetFor = (hit: Element | null, deep: boolean): LayerElement | null => {
     if (!hit) return null
-    return resolver.resolve(hit, context.getState().scope, deep)
+    const found = resolver.resolve(hit, context.getState().scope, deep)
+    // A locked layer is invisible to the pointer, hover included. The tree does
+    // not ask this question, which is the only way back out of the lock.
+    return isLocked(found) ? null : found
   }
 
   const marquee = installMarquee(context)

@@ -36,6 +36,29 @@ export const codeCss = `/* ---------- code tab ---------- */
   tab-size: 2;
   white-space: pre;
 }
+/*
+ * One row per logical line, numbered in a gutter, wrapping in place.
+ *
+ * A 260px panel cannot show a JSX line: at 1440x900 a data-URI src and a
+ * sentence of body copy both ran off the right edge with nothing to say they
+ * had. Wrapping is the only way the content is all readable, and once a line
+ * can occupy several rows it needs a number to still read as one line — which
+ * is what open-pencil's view does too.
+ *
+ * The number is ::before content, so selecting the view and copying it takes
+ * the code and leaves the gutter behind. It counts lines in THIS view, not in
+ * the file; the file's own line is in the header beside the name.
+ */
+.de-code-line {
+  display: grid; grid-template-columns: 2ch 1fr; gap: 10px;
+}
+.de-code-line::before {
+  content: attr(data-line);
+  text-align: right;
+  color: ${t.color.textDim};
+  user-select: none; -webkit-user-select: none;
+}
+.de-code-text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .de-code-tag { color: ${t.code.tag}; }
 .de-code-attribute { color: ${t.code.attribute}; }
 .de-code-string { color: ${t.code.string}; }

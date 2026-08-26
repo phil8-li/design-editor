@@ -191,7 +191,7 @@ export function installLayersPanel(context: EditorContext): void {
     const isHidden = getComputedStyle(row.element).display === "none"
     const isLocked = context.getState().locked.has(row.element)
     setAction(lock, isLocked, isLocked ? "Lock" : "LockOpen", `${isLocked ? "Unlock" : "Lock"} ${row.meta.name}`)
-    setAction(eye, isHidden, isHidden ? "EyeOff" : "Eye", `${isHidden ? "Show" : "Hide"} ${row.meta.name}`)
+    setAction(eye, isHidden, isHidden ? "EyeOff" : "EyeOpen", `${isHidden ? "Show" : "Hide"} ${row.meta.name}`)
     setAttr(node, "class", `de-layer${row.meta.promoted ? " de-layer--component" : ""}` +
       `${isLocked ? " de-layer--locked" : ""}${isHidden ? " de-layer--hidden" : ""}`)
     setAttr(node, "style", `padding-left:${8 + row.depth * INDENT}px;--de-indent:${row.depth * INDENT}px`)
