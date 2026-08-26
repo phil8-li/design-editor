@@ -8,17 +8,22 @@
  * `layout`/`layoutId` fights Motion's own transform and breaks the app's
  * shared-element morphs. Writing `justify-content`/`align-items` on the parent
  * says the same thing in a way that survives the trip to source.
+ *
+ * What is left here is that write path and the parent it writes to. The strip
+ * of buttons moved into `section-position.ts`, where align, distribute and
+ * arrange are drawn as one section — but the reasoning above is the reason the
+ * strip works the way it does, so it stays with the code it justifies.
  */
 
-import { el } from "../../core/dom"
 import { toSourceRef } from "../../core/bridge"
 import { elementKey } from "../../core/store"
 import type { EditorContext } from "../../core/context"
 import type { Selection } from "../../core/types"
-import { iconButton, section } from "./field"
-import type { InspectorSection } from "./index"
+import type { SectionContext } from "./index"
 
-type Place = "flex-start" | "center" | "flex-end"
+export type Place = "flex-start" | "center" | "flex-end"
+export type Axis = "horizontal" | "vertical"
+export type AlignProperty = "justify-content" | "align-items"
 
 /** Computed `justify-content`/`align-items` collapsed onto the three we write. */
 function placeOf(value: string): Place | null {
@@ -44,74 +49,44 @@ function describeParent(editor: EditorContext, parent: HTMLElement): Selection {
   }
 }
 
-export const alignSection: InspectorSection = ({ editor, selection, writer, invalidate }) => {
+export interface ParentAlignment {
+  /** The parent, in the shape the writer addresses a selection by. */
+  target: Selection
+  isFlex: boolean
+  column: boolean
+  /** True when the parent's main axis is already spread. */
+  distributed: boolean
+  /** Horizontal on a row is `justify-content`; on a column it is `align-items`. */
+  propertyFor(axis: Axis): AlignProperty
+  /** What the parent's computed style says that axis is set to today. */
+  currentFor(axis: Axis): Place | null
+  write(property: string, value: string, summary: string): void
+}
+
+/**
+ * The parent's alignment state, or null when there is no parent worth writing
+ * to. `<body>` and `<html>` are the app's frame rather than a layout the user
+ * authored, so laying the selection out inside one is not an offer we make.
+ */
+export function parentAlignment({ editor, selection, writer }: SectionContext): ParentAlignment | null {
   const parent = selection.element.parentElement
   if (!parent || parent === document.body || parent === document.documentElement) return null
 
   const target = describeParent(editor, parent)
-  const parentStyle = getComputedStyle(parent)
-  const isFlex = parentStyle.display === "flex" || parentStyle.display === "inline-flex"
-
-  if (!isFlex) {
-    const enable = el(
-      "button",
-      {
-        class: "de-button",
-        type: "button",
-        onclick: () => {
-          writer.applyStyles(target, [{ property: "display", value: "flex" }], "Auto layout on parent")
-          invalidate()
-        },
-      },
-      ["Make parent auto layout"]
-    )
-    return section(
-      "Align",
-      el("div", { class: "de-stack" }, [
-        el("div", { class: "de-hint" }, [
-          `<${target.tagName}> is not a flex container, so alignment has nothing to act on.`,
-        ]),
-        enable,
-      ])
-    )
-  }
-
-  const column = parentStyle.flexDirection.startsWith("column")
-  const justify = placeOf(parentStyle.justifyContent)
-  const align = placeOf(parentStyle.alignItems)
-
-  /** Horizontal on a row is `justify-content`; on a column it is `align-items`. */
-  const propertyFor = (axis: "horizontal" | "vertical") =>
+  const style = getComputedStyle(parent)
+  const column = style.flexDirection.startsWith("column")
+  const justify = placeOf(style.justifyContent)
+  const align = placeOf(style.alignItems)
+  const propertyFor = (axis: Axis): AlignProperty =>
     (axis === "horizontal") === column ? "align-items" : "justify-content"
 
-  const currentFor = (axis: "horizontal" | "vertical") =>
-    propertyFor(axis) === "justify-content" ? justify : align
-
-  const button = (axis: "horizontal" | "vertical", place: Place, label: string, glyph: string) =>
-    iconButton({
-      label,
-      glyph,
-      pressed: currentFor(axis) === place,
-      onClick: () => {
-        writer.applyStyles(target, [{ property: propertyFor(axis), value: place }], label)
-        invalidate()
-      },
-    })
-
-  const body = el("div", { class: "de-stack" }, [
-    el("div", { class: "de-row", style: "gap:2px" }, [
-      button("horizontal", "flex-start", "Align left", "⇤"),
-      button("horizontal", "center", "Align horizontal centers", "↔"),
-      button("horizontal", "flex-end", "Align right", "⇥"),
-      el("div", { style: "flex:1" }),
-      button("vertical", "flex-start", "Align top", "⤒"),
-      button("vertical", "center", "Align vertical centers", "↕"),
-      button("vertical", "flex-end", "Align bottom", "⤓"),
-    ]),
-    el("div", { class: "de-hint" }, [
-      `Aligns every child of <${target.tagName}> — that is what flex alignment means.`,
-    ]),
-  ])
-
-  return section("Align", body)
+  return {
+    target,
+    isFlex: style.display === "flex" || style.display === "inline-flex",
+    column,
+    distributed: style.justifyContent === "space-between",
+    propertyFor,
+    currentFor: (axis) => (propertyFor(axis) === "justify-content" ? justify : align),
+    write: (property, value, summary) => writer.applyStyles(target, [{ property, value }], summary),
+  }
 }
