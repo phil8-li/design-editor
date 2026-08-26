@@ -220,7 +220,10 @@ export function numberField(options: NumberFieldOptions): HTMLElement {
     label.addEventListener("pointercancel", onUp)
   })
 
-  return el("div", { class: "de-field" }, [
+  // `--numeric` rather than styling every `.de-field input`: tabular figures
+  // stop the digits walking sideways under a scrub, but the same treatment on
+  // a text field would space out prose that has no columns to keep.
+  return el("div", { class: "de-field de-field--numeric" }, [
     label,
     input,
     options.suffix ? el("span", { class: "de-field-suffix" }, [options.suffix]) : null,

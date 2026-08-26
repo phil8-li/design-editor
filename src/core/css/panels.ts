@@ -1,6 +1,6 @@
 /** Panel shells, section chrome, and the shared field/select primitives. */
 
-import { tokens as t, accentFill } from "../tokens"
+import { tokens as t } from "../tokens"
 
 export const panelsCss = `/* ---------- panels ---------- */
 .de-panel {
@@ -29,9 +29,23 @@ export const panelsCss = `/* ---------- panels ---------- */
 .de-panel-body:hover::-webkit-scrollbar-thumb { background: ${t.color.borderStrong}; background-clip: content-box; }
 
 .de-section { border-bottom: 1px solid ${t.color.border}; }
+/*
+ * A grid, and the actions column is reserved whether or not the header has an
+ * action in it.
+ *
+ * With \`space-between\` the title of a section that owns a \`+\` sat at the same
+ * left edge as one that does not — but the \`+\` itself was the only thing
+ * holding the right edge, so Fill's add button and Effects' add button landed
+ * wherever their titles left room, and scrolling the panel walked them left
+ * and right. A fixed trailing track means every add sits on one line down the
+ * panel, and a header without one leaves that line empty rather than closing
+ * it up. \`auto\` as the max so a header that grows a second action still fits.
+ */
 .de-section-header {
   height: ${t.size.sectionHeader}px;
-  display: flex; align-items: center; justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(${t.size.miniSize}px, auto);
+  align-items: center;
   padding: 0 8px 0 10px;
   color: ${t.color.text};
   font-size: ${t.type.body}; font-weight: ${t.type.weightSection};
@@ -52,7 +66,7 @@ export const panelsCss = `/* ---------- panels ---------- */
   cursor: pointer;
 }
 .de-section-toggle:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -2px; }
-.de-section-actions { display: inline-flex; align-items: center; gap: 2px; }
+.de-section-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; }
 .de-chevron {
   flex: none;
   display: inline-flex; align-items: center; justify-content: center;
@@ -84,37 +98,67 @@ export const panelsCss = `/* ---------- panels ---------- */
 .de-row--split { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .de-row--quad { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
 
+/*
+ * Every field rests in a well.
+ *
+ * These were transparent until hovered, on the theory that a quiet panel is a
+ * calm one. It is not: a section of eight numbers with nothing behind them
+ * reads as eight pieces of loose text, and you have to sweep the pointer along
+ * the column to find out which of them you are allowed to touch. Giving each
+ * one a resting surface is what turns the column into a form — the affordance
+ * is visible before the pointer arrives, and the row edges align the values
+ * for free. Hover lifts the same well rather than drawing a border, so nothing
+ * shifts by a pixel on the way in; the border is spent on focus instead, where
+ * it is the one state worth an accent.
+ *
+ * Horizontal padding lives on the *parts*, not here, so the leading label can
+ * be a full-height strip you can grab anywhere rather than a word with dead
+ * space above and below it.
+ */
 .de-field {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center;
   height: ${t.size.rowHeight}px;
-  padding: 0 6px;
   border-radius: ${t.radius.md};
-  background: transparent;
+  background: ${t.color.field};
   border: 1px solid transparent;
+  overflow: hidden;
   transition: border-color ${t.duration.fast} ${t.ease}, background ${t.duration.fast} ${t.ease};
 }
-.de-field:hover { border-color: ${t.color.borderInteractive}; }
-.de-field:focus-within { border-color: ${t.color.accent}; background: ${t.color.bgSunken}; }
+.de-field:hover { background: ${t.color.fieldHover}; }
+.de-field:focus-within { background: ${t.color.fieldHover}; border-color: ${t.color.accent}; }
 .de-field-label {
-  color: ${t.color.textDim};
-  font-size: ${t.type.caption};
+  flex: none; align-self: stretch;
+  display: inline-flex; align-items: center; justify-content: center;
   min-width: 12px;
+  padding: 0 6px;
+  color: ${t.color.textDim};
+  font-size: ${t.type.body};
   user-select: none;
   cursor: ew-resize;
 }
 .de-field input {
   flex: 1; min-width: 0; width: 100%;
+  padding: 0 6px 0 0;
   border: none; background: transparent; outline: none;
   color: ${t.color.text}; font-family: inherit; font-size: ${t.type.body};
 }
+/* Numbers only: a proportional font walks the digits sideways as you scrub. */
+.de-field--numeric input { font-variant-numeric: tabular-nums; }
 .de-field input::-webkit-outer-spin-button,
 .de-field input::-webkit-inner-spin-button { appearance: none; margin: 0; }
 .de-field input[disabled] { color: ${t.color.textDim}; cursor: default; }
 .de-field input::placeholder { color: ${t.color.textDim}; }
-.de-field-suffix { color: ${t.color.textDim}; font-size: ${t.type.caption}; user-select: none; }
+/* Pushed to the far edge by the flexed input, the way Figma parks a unit. */
+.de-field-suffix {
+  flex: none;
+  padding-right: 6px;
+  color: ${t.color.textDim}; font-size: ${t.type.body};
+  user-select: none;
+}
 /* A measured value in a field's clothes — read-only, so it never takes a caret. */
 .de-field-value {
   flex: 1; min-width: 0;
+  padding-right: 6px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: ${t.color.text}; font-size: ${t.type.body};
   font-variant-numeric: tabular-nums;
@@ -137,28 +181,73 @@ export const panelsCss = `/* ---------- panels ---------- */
   border: 1px solid ${t.color.border}; border-radius: ${t.radius.md};
 }
 
+/*
+ * Ghost buttons: no surface of their own, a surface on hover, an accent
+ * OUTLINE when they are holding a state on.
+ *
+ * The border is transparent at rest rather than absent, so turning one on adds
+ * a colour and never a box — a pressed \`+\` used to grow a ring the same frame
+ * it changed meaning, and the row under it stepped down a pixel. Outline
+ * rather than fill for the on state because these sit inside a section header
+ * or a row that already carries a well behind it; a second filled surface at
+ * this size reads as a badge, not a toggle.
+ */
 .de-mini {
   width: ${t.size.miniSize}px; height: ${t.size.miniSize}px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  border: none; border-radius: ${t.radius.sm};
+  border: 1px solid transparent; border-radius: ${t.radius.sm};
   background: transparent; color: ${t.color.textDim};
   font-family: inherit; font-size: ${t.type.body}; line-height: 1;
   cursor: pointer;
-  transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease};
+  transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease},
+    border-color ${t.duration.fast} ${t.ease};
 }
 .de-mini:hover { background: ${t.color.bgHover}; color: ${t.color.text}; }
-.de-mini[aria-pressed="true"] { color: ${t.color.accent}; }
+.de-mini[aria-pressed="true"] { border-color: ${t.color.accent}; color: ${t.color.accent}; }
 .de-mini--danger:hover { background: ${t.color.danger}; color: ${t.color.text}; }
 .de-mini[disabled] { opacity: 0.35; cursor: default; background: transparent; }
 .de-mini:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
 
+/*
+ * The toolbar's icon button, borrowed by inspector sections (align, direction).
+ *
+ * It is sized for the toolbar, where it is the pointer's first target; in a
+ * panel row it has to line up with the 24px fields beside it, and it answers
+ * to the same ghost/outline grammar as \`.de-mini\` rather than the toolbar's
+ * filled pressed state. Scoped to \`.de-panel\` so the toolbar keeps its own.
+ */
+.de-panel .de-tool {
+  width: ${t.size.rowHeight}px; height: ${t.size.rowHeight}px;
+  border: 1px solid transparent;
+  color: ${t.color.textDim};
+  transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease},
+    border-color ${t.duration.fast} ${t.ease};
+}
+.de-panel .de-tool:hover { background: ${t.color.bgHover}; color: ${t.color.text}; }
+.de-panel .de-tool[aria-pressed="true"] {
+  background: transparent;
+  border-color: ${t.color.accent};
+  color: ${t.color.accent};
+}
+
 /* ---------- segmented control ---------- */
+/*
+ * An inset track carrying one lifted pill.
+ *
+ * The rail is a field well, because that is what the control is: one field
+ * whose value happens to be a word from a short list, and it has to sit in a
+ * row beside real fields without looking like a different species. The
+ * selection was a filled accent, which at this size — three of them stacked in
+ * Auto layout — turned the section into a wall of indigo and shouted about
+ * defaults nobody chose. A step UP off the rail says "this one" quietly, and
+ * the ink going from dim to full carries the rest of the message.
+ */
 .de-segmented {
   display: flex; align-items: stretch;
   height: ${t.size.rowHeight}px;
   padding: 2px;
   border-radius: ${t.radius.md};
-  background: ${t.color.bgSunken};
+  background: ${t.color.field};
 }
 .de-segment {
   flex: 1; min-width: 0;
@@ -169,21 +258,27 @@ export const panelsCss = `/* ---------- panels ---------- */
   cursor: pointer;
   transition: background ${t.duration.fast} ${t.ease}, color ${t.duration.fast} ${t.ease};
 }
-.de-segment:hover { color: ${t.color.text}; }
-.de-segment[aria-pressed="true"] { ${accentFill} }
+.de-segment:hover { background: ${t.color.bgHover}; color: ${t.color.text}; }
+.de-segment[aria-pressed="true"] {
+  background: ${t.color.fieldHover};
+  color: ${t.color.text};
+  font-weight: ${t.type.weightValue};
+}
 .de-segment:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: -1px; }
 
+/* The same well as \`.de-field\`, since a select is a field you pick from. */
 .de-select {
   height: ${t.size.rowHeight}px;
   width: 100%;
   padding: 0 6px;
   border: 1px solid transparent; border-radius: ${t.radius.md};
-  background: transparent; color: ${t.color.text};
+  background: ${t.color.field}; color: ${t.color.text};
   font-family: inherit; font-size: ${t.type.body};
   appearance: none; cursor: pointer;
+  transition: border-color ${t.duration.fast} ${t.ease}, background ${t.duration.fast} ${t.ease};
 }
-.de-select:hover { border-color: ${t.color.borderInteractive}; }
-.de-select:focus { outline: none; border-color: ${t.color.accent}; }
+.de-select:hover { background: ${t.color.fieldHover}; }
+.de-select:focus { outline: none; background: ${t.color.fieldHover}; border-color: ${t.color.accent}; }
 .de-select option { background: ${t.color.bgRaised}; color: ${t.color.text}; }
 
 /*
