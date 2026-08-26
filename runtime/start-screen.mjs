@@ -1,0 +1,299 @@
+/**
+ * The start screen's HTTP server, and the handoff back to cli.mjs.
+ *
+ * Until now the only way in was `design-editor --dev 3000`, so the port, the
+ * project root and the dev script all had to be known before anything was on
+ * screen. This server is the other order: bind on loopback first, let the page
+ * ask what is running and what is on disk, and end with one validated choice.
+ * `chosen` IS that handoff — the CLI awaits it, then loads that project's
+ * config and boots the proxy.
+ *
+ * The page is untrusted input like any other client, so the refusals on
+ * `/api/start` are the safety story of the feature, not a formality: this
+ * process rewrites source files and proxies whatever origin it is handed. Each
+ * refusal is a sentence, because whoever reads one is looking at a screen.
+ */
+
+import fs from "node:fs"
+import http from "node:http"
+import path from "node:path"
+
+import {
+  DEFAULT_SCAN_PORTS,
+  describeProject,
+  listDirectories,
+  scanLocalApps,
+} from "./local-apps.mjs"
+import { startScreenPage } from "./start-screen-page.mjs"
+
+const LOOPBACK = "127.0.0.1"
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+// The only body this server accepts is three short strings.
+const MAX_BODY_BYTES = 16 * 1024
+
+function badRequest(message, statusCode = 400) {
+  const error = new Error(message)
+  error.statusCode = statusCode
+  return error
+}
+
+/** Takes a bare `host` header as readily as a full origin. */
+function isLoopbackHost(value) {
+  if (typeof value !== "string" || value.length === 0) return false
+  let host
+  try {
+    host = new URL(value.includes("://") ? value : `http://${value}`).hostname.replace(/^\[|\]$/g, "")
+  } catch {
+    return false
+  }
+  return host === "localhost" || host === "127.0.0.1" || host === "::1"
+}
+
+/**
+ * Mirrors `isLocalRequest` in server/routes.mjs, including the reason `"null"`
+ * is refused: that is the Origin a sandboxed iframe or a `data:`/`blob:`
+ * document sends, which are precisely the contexts an attacker controls. A
+ * genuinely absent header still passes — curl carries no ambient credentials.
+ * Not imported from there: that module builds the options store and the agent,
+ * and this server runs before there is a project to build either against.
+ */
+function isLocalRequest(req) {
+  if (!LOOPBACK_ADDRESSES.has(req.socket?.remoteAddress ?? "")) return false
+  if (!isLoopbackHost(req.headers.host)) return false
+  const origin = req.headers.origin
+  if (origin !== undefined && !isLoopbackHost(origin)) return false
+  return true
+}
+
+function send(res, statusCode, contentType, payload) {
+  const body = Buffer.from(payload)
+  res.writeHead(statusCode, {
+    "content-type": contentType,
+    "content-length": String(body.byteLength),
+    "cache-control": "no-store",
+  })
+  res.end(body)
+}
+
+const sendJson = (res, statusCode, payload) =>
+  send(res, statusCode, "application/json; charset=utf-8", JSON.stringify(payload))
+
+async function readJsonBody(req) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > MAX_BODY_BYTES) throw badRequest("Request body is too large", 413)
+    chunks.push(chunk)
+  }
+  if (size === 0) return null
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+  } catch {
+    throw badRequest("Request body is not valid JSON")
+  }
+}
+
+function parseAppUrl(value) {
+  if (typeof value !== "string" || value.trim() === "") throw badRequest("Choose an app, or type the address of the one to edit.")
+
+  let parsed
+  try {
+    parsed = new URL(value.trim())
+  } catch {
+    throw badRequest(`"${value.trim()}" is not an address. It should look like http://localhost:3000.`)
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw badRequest(`The editor opens http:// and https:// addresses, not ${parsed.protocol}//.`)
+  if (!isLoopbackHost(parsed.origin)) {
+    throw badRequest(
+      `${parsed.host} is somewhere else. The editor rewrites source files as it edits, so it only opens apps on this machine — localhost, 127.0.0.1 or ::1.`
+    )
+  }
+  return {
+    appUrl: parsed.origin,
+    appPort: Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80),
+  }
+}
+
+/**
+ * The vendored CLI also refuses a project without React, but it refuses AFTER
+ * boot from inside its own banner. Checking here is the difference between an
+ * inline message on the screen and a terminal that simply stops.
+ */
+function resolveProject(value) {
+  if (typeof value !== "string" || value.trim() === "") throw badRequest("Confirm the project folder before starting.")
+  if (!path.isAbsolute(value)) throw badRequest(`The project folder has to be a full path, and "${value}" is not one.`)
+
+  let projectRoot
+  try {
+    projectRoot = fs.realpathSync(value)
+  } catch {
+    throw badRequest(`There is no folder at ${value}.`)
+  }
+
+  if (!fs.statSync(projectRoot).isDirectory()) throw badRequest(`${value} is a file, not a project folder.`)
+
+  let text
+  try {
+    text = fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")
+  } catch {
+    throw badRequest(`${projectRoot} has no package.json, so it is not a project the editor can open. Pick the folder that holds it.`)
+  }
+  let manifest
+  try {
+    manifest = JSON.parse(text)
+  } catch {
+    throw badRequest(`The package.json in ${projectRoot} is not valid JSON, so the editor cannot read it.`)
+  }
+
+  const dependencies = { ...manifest.dependencies, ...manifest.devDependencies }
+  const name = manifest.name ?? path.basename(projectRoot)
+  if (typeof dependencies.react !== "string") {
+    throw badRequest(`${name} does not depend on React, and the editor only edits React components.`)
+  }
+
+  return { projectRoot, manifest }
+}
+
+/**
+ * `describeProject` offers the page a shortlist of likely dev scripts, but that
+ * list is a heuristic and this is a guard, so the name is checked against the
+ * manifest itself: nothing but a real `npm run` target can be handed on.
+ */
+function resolveDevScript(value, projectRoot, manifest) {
+  if (value === null || value === undefined) return null
+  if (typeof value !== "string" || typeof manifest.scripts?.[value] !== "string") {
+    throw badRequest(
+      `There is no "${value}" script in ${path.basename(projectRoot)}/package.json, so the editor cannot start the app that way.`
+    )
+  }
+  return value
+}
+
+/**
+ * The endpoint file is written by the launcher the moment the proxy binds, and
+ * it is all this server sees of the editor it handed off to. A file left by a
+ * previous run is indistinguishable from success and the page would redirect
+ * to a dead port, so the pid has to be ours.
+ */
+function readStatus(endpointFile) {
+  if (!endpointFile) return { ready: false }
+  let endpoint
+  try {
+    endpoint = JSON.parse(fs.readFileSync(endpointFile, "utf8"))
+  } catch {
+    return { ready: false }
+  }
+  if (endpoint?.pid !== process.pid || !endpoint.proxyPort) return { ready: false }
+  return { ready: true, url: `http://${LOOPBACK}:${endpoint.proxyPort}` }
+}
+
+/**
+ * Serves the start screen and resolves `chosen` once the user has picked. Port
+ * 0 lets the OS choose, which is what the CLI passes: the screen is transient
+ * and has no port worth reserving.
+ */
+export async function createStartScreen({ host = LOOPBACK, port = 0, log = console.log } = {}) {
+  if (!isLoopbackHost(host)) throw new Error(`The start screen is loopback-only and cannot bind ${host}`)
+
+  let endpointFile = null
+  let settled = false
+  let closed = false
+  let resolveChoice
+  let rejectChoice
+  const chosen = new Promise((resolve, reject) => {
+    resolveChoice = resolve
+    rejectChoice = reject
+  })
+  // `close()` rejects a choice nobody made. Marking the promise handled keeps
+  // that from surfacing as an unhandled rejection before the CLI reaches its
+  // await; the CLI still sees the rejection when it gets there.
+  chosen.catch(() => {})
+
+  // Read-only and stateless, all of them, except the last — which is the point.
+  const routes = {
+    "GET /": (_req, res) => send(res, 200, "text/html; charset=utf-8", startScreenPage()),
+    "GET /api/apps": async (_req, res) =>
+      sendJson(res, 200, { apps: await scanLocalApps({ ports: DEFAULT_SCAN_PORTS, host }) }),
+    "GET /api/project": (_req, res, url) => {
+      const dir = url.searchParams.get("path") ?? ""
+      if (!path.isAbsolute(dir)) throw badRequest("Ask for a folder by its full path.")
+      sendJson(res, 200, { project: describeProject(dir), listing: listDirectories(dir) })
+    },
+    "GET /api/status": (_req, res) => sendJson(res, 200, readStatus(endpointFile)),
+    "POST /api/start": async (req, res) => {
+      const body = await readJsonBody(req)
+      // A second press, or a page reloaded mid-boot. The first choice is the one
+      // the CLI is already acting on, and it cannot be taken back.
+      if (settled) throw badRequest("The editor is already starting. This page will move on by itself.")
+      if (!body) throw badRequest("Choose an app and a project folder before starting.")
+      const { appUrl, appPort } = parseAppUrl(body.url)
+      const { projectRoot, manifest } = resolveProject(body.projectRoot)
+      const devScript = resolveDevScript(body.devScript, projectRoot, manifest)
+      const choice = { appUrl, appPort, projectRoot, devScript }
+      settled = true
+      log(`[design-editor] editing ${choice.appUrl} from ${choice.projectRoot}`)
+      resolveChoice(choice)
+      sendJson(res, 200, { ok: true })
+    },
+  }
+
+  // The URL is parsed in here rather than in the listener so that a malformed
+  // request line answers through the one error path instead of throwing at the
+  // server, where an uncaught exception would take the CLI down with it.
+  async function route(req, res) {
+    const url = new URL(req.url ?? "/", `http://${LOOPBACK}`)
+    const handler = routes[`${req.method} ${url.pathname}`]
+    if (handler) return handler(req, res, url)
+    const known = Object.keys(routes).find((key) => key.endsWith(` ${url.pathname}`))
+    throw known
+      ? badRequest(`${url.pathname} accepts ${known.split(" ")[0]} only`, 405)
+      : badRequest(`No start screen route for ${url.pathname}`, 404)
+  }
+
+  const server = http.createServer((req, res) => {
+    if (!isLocalRequest(req)) {
+      sendJson(res, 403, { error: "The start screen is loopback-only" })
+      return
+    }
+
+    route(req, res).catch((error) => {
+      if (res.headersSent) {
+        res.end()
+        return
+      }
+      sendJson(res, Number(error?.statusCode) || 500, {
+        error: error?.message ?? "The start screen could not handle that request",
+      })
+    })
+  })
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(port, host, resolve)
+  })
+
+  return {
+    url: `http://${host}:${server.address().port}`,
+    chosen,
+
+    /** Where the launcher will write the proxy's ports, once one exists. */
+    reportEndpointFile(absolutePath) {
+      endpointFile = absolutePath
+    },
+
+    close() {
+      if (closed) return
+      closed = true
+      if (!settled) {
+        settled = true
+        rejectChoice(new Error("The start screen closed before an app was chosen"))
+      }
+      // The page holds a keep-alive socket open for its status poll, and
+      // `close()` alone waits for it — leaving the CLI on a screen nobody is
+      // looking at any more.
+      server.closeAllConnections()
+      server.close()
+    },
+  }
+}
