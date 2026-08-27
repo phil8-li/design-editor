@@ -16,6 +16,7 @@ import fs from "node:fs"
 import http from "node:http"
 import net from "node:net"
 import path from "node:path"
+import { spawnSync } from "node:child_process"
 import { createRequire, syncBuiltinESMExports } from "node:module"
 import { Readable } from "node:stream"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -101,7 +102,7 @@ function virtualNextConfig(config) {
   return path.join(config.projectRoot, "next.config.mjs")
 }
 
-function readChromeBundle() {
+export function readChromeBundle() {
   try {
     return fs.readFileSync(CHROME_BUNDLE, "utf8")
   } catch {
@@ -110,6 +111,63 @@ function readChromeBundle() {
     )
     return ""
   }
+}
+
+const BUILD_SCRIPT = fileURLToPath(new URL("../build.mjs", import.meta.url))
+
+/**
+ * `dist/` is gitignored, built by `build.mjs`, and read straight off disk by the
+ * function above — so the browser gets whatever happens to be sitting there. A
+ * MISSING bundle was loud. One that was merely BEHIND said nothing, and that is
+ * the worse of the two: the editor ran two commits older than its own source
+ * while `tsc` passed, every suite passed, and every source review was correct
+ * about a feature that simply was not in the browser. `build.mjs --check`
+ * already knew how to catch it; nothing on the path that actually serves the
+ * bundle ever asked it.
+ *
+ * So the serving path asks, once, before the vendor boots. It asks by running
+ * `build.mjs` in a child process rather than by calling esbuild inline, because
+ * there must be exactly one description of how this package compiles: a second
+ * copy of the target list here would drift from the real one and then either
+ * miss a stale bundle or cry stale over a fresh one. That costs ~75ms when
+ * everything matches and ~150ms when it does not, against a first host compile
+ * measured in seconds.
+ *
+ * Behind is rebuilt, not refused. The repair is one command, so refusing to
+ * start would only make the user type it; and a rebuild that said nothing would
+ * hide that the source had moved underneath them, which is precisely how this
+ * went unnoticed. Rebuild, then say so in a line that cannot be mistaken for
+ * routine output. When the rebuild is impossible — `esbuild` pruned from a
+ * published install, a source tree that does not compile — the editor still
+ * starts, because a prebuilt `dist/` with no rebuild wanted is a supported way
+ * to consume this package; it just starts behind a warning that the thing in
+ * the browser is not the source in this tree.
+ */
+export function ensureCurrentChromeBundle() {
+  const runBuild = (...args) =>
+    spawnSync(process.execPath, [BUILD_SCRIPT, ...args], {
+      cwd: path.dirname(BUILD_SCRIPT),
+      encoding: "utf8",
+    })
+
+  if (runBuild("--check").status === 0) return
+
+  const rebuilt = runBuild()
+  if (rebuilt.status === 0) {
+    console.warn("[design-editor] dist/ was behind src/ — rebuilt it before serving")
+    return
+  }
+
+  // Why it failed goes ABOVE the verdict, not below it. The reason is a compile
+  // error or a module resolution stack — tens of lines either way — and a
+  // warning printed on top of one is a warning nobody reads.
+  const reason = (rebuilt.stderr || rebuilt.error?.message || "").trim()
+  console.warn(
+    (reason ? `${reason}\n\n` : "") +
+      "[design-editor] dist/ does not match src/ and could not be rebuilt. The editor\n" +
+      "  in the browser is NOT the source in this tree — it is whatever was built last.\n" +
+      "  Run `npm run build` in the package to see your own changes."
+  )
 }
 
 async function loadRoutes(config) {
@@ -168,6 +226,10 @@ function writeEndpointFile(config, runtime) {
  * so every first-party flag has to be consumed before this point.
  */
 export async function launch(config, { appPort, host, open, verbose = false }) {
+  // Before anything binds a port: whatever is about to be concatenated onto the
+  // overlay has to be this tree's source, not a bundle left over from before it.
+  ensureCurrentChromeBundle()
+
   const vendor = resolveVendor(config)
 
   // The WebSocket patch below rewrites `WebSocket.prototype.on`, which only
