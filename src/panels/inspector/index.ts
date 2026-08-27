@@ -13,6 +13,7 @@
  * a footer that has to stay put while their body scrolls.
  */
 
+import { onPreviewOnlyChange } from "../../core/change-prompt"
 import { clear, el } from "../../core/dom"
 import { icon, type IconName } from "../../core/icons"
 import { createWriter, type Writer } from "../../core/writer"
@@ -310,6 +311,31 @@ export function installInspector(editor: EditorContext): void {
     invalidate()
   })
   editor.onRefresh(invalidate)
+  /*
+   * The ledger keeps its own time, and it is nobody else's.
+   *
+   * A write that turns out to have no file to land in reaches the ledger from
+   * `ensureSource(...).then(...)` in the writer, long after the store settled
+   * and long after the edit that caused it. Neither the subscription above nor
+   * `onRefresh` fires for that, so the Prompts tab could be sitting open,
+   * already rendered from an empty ledger, insisting there was nothing to hand
+   * over while the change was on screen behind it.
+   *
+   * Only when Prompts is the tab being looked at. `invalidate()` repaints
+   * whichever tab is active, and a ledger write says nothing whatsoever about
+   * the Design or Code views — repainting either of them on a write they do not
+   * show is exactly the hot-path cost `activate()` is written to avoid. A
+   * hidden Prompts pane needs nothing: switching to it updates it.
+   *
+   * Routed through `invalidate()` rather than rendering here so the repaint
+   * lands on the next frame. A commit carrying four properties records four
+   * times, and the recording happens mid-write — a synchronous render would
+   * rebuild the panel three times for nothing and do it inside the writer's own
+   * loop, with the element half-styled.
+   */
+  onPreviewOnlyChange(() => {
+    if (activeId === "prompts") invalidate()
+  })
   // Every tab once at boot, so a tab that is switched to before the first write
   // is not empty. After this, only the visible one is kept current.
   for (const definition of tabs) definition.tab.update()
