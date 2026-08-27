@@ -5,8 +5,8 @@
  * the port, the project root and the flag before anything appeared. This page
  * is the replacement, and it is served by the start-screen server before the
  * editing proxy exists, so it has to be one self-contained document: inline
- * style, inline module script, no fetches for anything but its own three JSON
- * routes.
+ * style, inline module script, no fetches for anything but its own loopback
+ * JSON routes.
  *
  * Everything the script renders from the server — a page title, a folder name,
  * an error sentence — arrives as untrusted string data and is written with
@@ -15,13 +15,6 @@
  */
 
 import { startScreenStyle } from "./start-screen-style.mjs"
-
-/**
- * Where the folder picker opens before the server has said where home is, and
- * if it never does. The filesystem root is the one path that is always there to
- * navigate down from.
- */
-const PICKER_FALLBACK = "/"
 
 /** How long the waiting state stays silent before it says what to check. */
 const SLOW_MS = 90_000
@@ -34,18 +27,15 @@ const $ = (id) => document.getElementById(id)
 const el = {
   form: $("form"), url: $("url"),
   apps: $("apps"), appsNote: $("apps-note"), appsError: $("apps-error"),
-  path: $("folder-path"), change: $("folder-change"), folderError: $("folder-error"),
-  picker: $("picker"), crumbs: $("crumbs"), dirs: $("dirs"),
-  cancel: $("picker-cancel"), use: $("picker-use"),
+  path: $("folder-path"), change: $("folder-change"),
+  folderNote: $("folder-note"), folderError: $("folder-error"),
   scriptRow: $("script-row"), script: $("script"),
   submit: $("submit"), hint: $("hint"), submitError: $("submit-error"),
   waiting: $("waiting"), progress: $("progress"), waitingNote: $("waiting-note"),
 }
 
 let apps = []
-let home = ${JSON.stringify(PICKER_FALLBACK)}
-let root = null      // { path, info } — the folder the editor will write source into
-let browsing = null  // { path, project } while the picker is open
+let root = null   // { path, info } — the folder the editor will write source into
 let devScript = null
 let busy = false
 let typing = 0
@@ -104,10 +94,10 @@ function render() {
   el.submit.disabled = busy || el.url.value.trim() === "" || !root || (!app && !devScript)
 }
 
-async function getJson(path, errorNode) {
+async function askServer(path, errorNode, init) {
   let response
   try {
-    response = await fetch(path)
+    response = await fetch(path, init)
   } catch (error) {
     show(errorNode, "Could not reach the start screen: " + error.message)
     return null
@@ -154,56 +144,42 @@ function appRow(app) {
 
 async function chooseApp(app) {
   clearErrors()
-  closePicker()
   el.url.value = app.url
   if (app.projectRoot) {
-    const data = await getJson("/api/project?path=" + encodeURIComponent(app.projectRoot), el.folderError)
+    const data = await askServer("/api/project?path=" + encodeURIComponent(app.projectRoot), el.folderError)
     if (data) adoptProject(data.project)
   }
   render()
 }
 
-function dirRow(name, path, isProject) {
-  const item = document.createElement("li")
-  const button = document.createElement("button")
-  button.type = "button"
-  button.className = "dir"
-  const label = document.createElement("span")
-  label.className = "dir-name"
-  label.textContent = name
-  button.append(label)
-  if (isProject) {
-    const tag = document.createElement("span")
-    tag.className = "dir-tag"
-    tag.textContent = "project"
-    button.append(tag)
-  }
-  button.addEventListener("click", () => browse(path))
-  item.append(button)
-  return item
-}
-
-async function browse(path) {
-  const data = await getJson("/api/project?path=" + encodeURIComponent(path), el.folderError)
-  if (!data) return
-  browsing = { path: data.listing.path, project: data.project }
-  el.picker.hidden = false
-  el.crumbs.textContent = tilde(data.listing.path)
-  el.dirs.replaceChildren()
-  if (data.listing.parent) el.dirs.append(dirRow("Up one level", data.listing.parent, false))
-  for (const entry of data.listing.entries) {
-    el.dirs.append(dirRow(entry.name, entry.path, entry.hasPackageJson))
-  }
-  // Focus follows the navigation, so the picker can be driven from the keyboard.
-  const first = el.dirs.querySelector(".dir")
-  if (first) first.focus()
-}
-
-function closePicker() {
-  if (el.picker.hidden) return
-  el.picker.hidden = true
-  browsing = null
+/*
+ * The machine's own folder dialog, opened by the server on the machine the
+ * files are on. It is Finder or Explorer, with the sidebar, the favourites and
+ * the search this page could never reproduce — so the page's job is only to say
+ * where to open, to stay out of the way while it is up, and to take the one
+ * path back. Dismissing it is not an error and leaves the field untouched.
+ */
+async function browse() {
+  clearErrors()
+  el.change.disabled = true
+  el.change.textContent = "Choosing…"
+  // The panel belongs to the server's process, not the browser's, so it opens
+  // as a window of its own and can land behind this one. Without this line a
+  // lost panel is a button stuck on "Choosing…" beside an empty field, which
+  // reads as a press that did nothing rather than a dialog waiting offscreen.
+  show(el.folderNote, "The folder panel is open — it may be behind this window.")
+  const data = await askServer("/api/browse", el.folderError, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ startIn: el.path.value.trim() }),
+  })
+  show(el.folderNote, "")
+  el.change.disabled = false
+  el.change.textContent = "Browse"
   el.change.focus()
+  if (!data || data.canceled) return
+  adoptProject(data.project)
+  render()
 }
 
 /*
@@ -221,7 +197,7 @@ async function resolveTyped() {
     show(el.folderError, "Paste the folder's full path — the one starting at /.")
     return
   }
-  const data = await getJson("/api/project?path=" + encodeURIComponent(value), el.folderError)
+  const data = await askServer("/api/project?path=" + encodeURIComponent(value), el.folderError)
   // Typed on while that was in flight; the later keystroke owns the field.
   if (!data || el.path.value.trim() !== value) return
   if (!data.project.isDirectory) {
@@ -243,20 +219,7 @@ el.path.addEventListener("input", () => {
   typing = setTimeout(resolveTyped, ${TYPING_MS})
 })
 
-el.change.addEventListener("click", () => {
-  clearErrors()
-  browse(el.path.value.trim() || home)
-})
-el.cancel.addEventListener("click", closePicker)
-el.use.addEventListener("click", () => {
-  if (!browsing) return
-  adoptProject(browsing.project)
-  closePicker()
-  render()
-})
-el.picker.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closePicker()
-})
+el.change.addEventListener("click", browse)
 
 el.url.addEventListener("input", () => {
   clearErrors()
@@ -328,9 +291,8 @@ function waitForEditor(script) {
 }
 
 async function boot() {
-  const data = await getJson("/api/apps", el.appsError)
+  const data = await askServer("/api/apps", el.appsError)
   apps = (data && data.apps) || []
-  home = (data && data.home) || home
   el.apps.replaceChildren(...apps.map(appRow))
   show(
     el.appsNote,
@@ -383,14 +345,7 @@ export function startScreenPage() {
                placeholder="Paste a folder path, or browse">
         <button type="button" class="ghost" id="folder-change">Browse</button>
       </div>
-      <div class="picker" id="picker" hidden>
-        <p class="crumbs" id="crumbs"></p>
-        <ul class="dirs" id="dirs"></ul>
-        <div class="picker-actions">
-          <button type="button" class="ghost" id="picker-cancel">Cancel</button>
-          <button type="button" class="ghost strong" id="picker-use">Use this folder</button>
-        </div>
-      </div>
+      <p class="note" id="folder-note" hidden></p>
       <p class="error" id="folder-error" hidden></p>
     </div>
 

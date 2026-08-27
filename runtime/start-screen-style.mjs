@@ -199,7 +199,9 @@ button { font: inherit; cursor: pointer; }
   font-size: var(--size-label);
   transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
 }
-.ghost:hover, .ghost.strong { color: var(--text); border-color: var(--accent); }
+.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+/* While the machine's folder dialog is up, this button is only a label for it. */
+.ghost:disabled { color: var(--text-dim); cursor: default; }
 
 select {
   align-self: flex-start;
@@ -210,35 +212,6 @@ select {
   border: 1px solid var(--border-interactive);
   border-radius: var(--radius-sm);
 }
-
-.picker {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.crumbs { font-family: var(--mono); font-size: var(--size-label); color: var(--text-dim); word-break: break-all; }
-.dirs { margin: 0; padding: 0; list-style: none; max-height: 168px; overflow-y: auto; }
-.dir {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  text-align: left;
-  color: var(--text);
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-sm);
-  font-size: var(--size-body);
-}
-.dir:hover { background: var(--field); }
-.dir-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dir-tag { font-size: var(--size-label); color: var(--accent); }
-.picker-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
 
 .primary {
   padding: 11px 16px;

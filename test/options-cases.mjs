@@ -365,6 +365,38 @@ async function sourceDefaultCases() {
     assert.equal(resolved.projectRoot, path.resolve(PACKAGE_DIR))
   })
 
+  /*
+   * A host writes `src/lib/…` in its config meaning its own src. Resolved
+   * against `process.cwd()` that became a path inside whatever directory the
+   * command was typed in — outside the project by definition, and refused as
+   * such. The start screen made this the normal case: it can be answered from
+   * any folder on the machine, so the whole options panel and the AI handoff
+   * went dark on projects that had done nothing wrong.
+   */
+  check("a relative source-default file is the project's, not the caller's", () => {
+    const relative = resolveConfig(
+      {
+        projectRoot: PACKAGE_DIR,
+        source: { roots: ["test/.control-default-fixture"], extensions: [".ts"] },
+        controls: {
+          leva: {
+            storeGlobal: "__STORE",
+            sourceDefaults: { file: "test/.control-default-fixture/defaults.ts", exportName: "DEFAULTS" },
+            bindings: [],
+          },
+        },
+      },
+      { cwd: PACKAGE_DIR }
+    )
+    const elsewhere = process.cwd()
+    process.chdir(os.tmpdir())
+    try {
+      assert.equal(createControlDefaults(relative).configured, true)
+    } finally {
+      process.chdir(elsewhere)
+    }
+  })
+
   check("the browser prelude excludes source-default file and export details", () => {
     const prelude = browserPrelude(config)
     assert.match(prelude, /"storeGlobal":"__STORE"/)

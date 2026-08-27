@@ -32,9 +32,28 @@ export const DEFAULT_SCAN_PORTS = [
   3000, 3001, 3002, 3003, 3004, 3005, 5173, 5174, 5175, 4321, 4200, 8080, 8000,
 ]
 
-/** How much of a document is read looking for a title, before giving up. */
-const MAX_TITLE_BYTES = 8 * 1024
+/**
+ * How much of a document is read before giving up on it. The title sits in the
+ * head; the project root sits further down among the script tags, measured at
+ * ~18KB into a Next dev page. Reading stops the moment both are in hand, so the
+ * ceiling only applies to a page that never names itself.
+ */
+const MAX_PAGE_BYTES = 256 * 1024
 const TITLE_PATTERN = /<title[^>]*>([\s\S]*?)<\/title>/i
+
+/**
+ * An absolute path with a build directory under it, as a dev server writes into
+ * the page it serves. Next puts server chunk paths in its dev stack traces —
+ * `at BailoutToCSR (/Users/someone/app/.next/dev/server/...)` — and everything
+ * above `.next` is the directory it was started in.
+ *
+ * Delimited by quotes and parens rather than whitespace, because real project
+ * paths have spaces in them. Nothing rests on the pattern being exact: every
+ * candidate has to survive `nearestProjectRoot`, so a bad guess is one that
+ * finds no package.json and is dropped.
+ */
+const ROOT_PATTERN = /((?:\/|[A-Za-z]:\\)[^"'`()\n\r]*?)[/\\](?:\.next|\.nuxt|\.svelte-kit)[/\\]/g
+const buildDirSeen = (text) => /[/\\](?:\.next|\.nuxt|\.svelte-kit)[/\\]/.test(text)
 // Titles carry entities, and the picker prints what it is given.
 const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", "#39": "'" }
 
@@ -52,7 +71,6 @@ const DEV_SCRIPT_FAMILY = /^(dev|develop|start|serve)([:_-]|$)/
 const NEXT_CONFIGS = ["next.config.js", "next.config.ts", "next.config.mjs"]
 const VITE_CONFIGS = ["vite.config.js", "vite.config.ts"]
 
-/** Missing and denied are the same answer to every question asked here. */
 function statOf(target) {
   try {
     return fs.statSync(target)
@@ -61,8 +79,38 @@ function statOf(target) {
   }
 }
 
-const isDirectory = (target) => statOf(target)?.isDirectory() ?? false
-const hasFile = (dir, name) => statOf(path.join(dir, name))?.isFile() ?? false
+/**
+ * Denied is not missing.
+ *
+ * A protected folder on macOS can refuse `stat` on every path inside it and
+ * still open, list and read perfectly — measured on this machine against a real
+ * Next.js checkout, where `statSync` was EPERM and `readdirSync` was fine. Read
+ * as "there is no folder there", that turns an openable project into a dead end
+ * on the start screen, so both probes fall back to the weaker syscall that the
+ * same folder does answer.
+ */
+export function isDirectory(target) {
+  const stat = statOf(target)
+  if (stat) return stat.isDirectory()
+  try {
+    fs.opendirSync(target).closeSync()
+    return true
+  } catch {
+    return false
+  }
+}
+
+function hasFile(dir, name) {
+  const target = path.join(dir, name)
+  const stat = statOf(target)
+  if (stat) return stat.isFile()
+  try {
+    fs.accessSync(target, fs.constants.R_OK)
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** The parsed `package.json`, or null for missing, unreadable and malformed alike. */
 function readPackageJson(dir) {
@@ -145,41 +193,78 @@ export function projectRootForPort(port) {
   return nearestProjectRoot(isDirectory(cwd) ? cwd : path.dirname(cwd))
 }
 
+/**
+ * The project root a dev server names in its own page, for when `lsof` has no
+ * answer.
+ *
+ * It usually has none. A managed Mac refuses `-d cwd` for the user's own dev
+ * servers — the field comes back "Operation not permitted" — so every app row
+ * arrives with no folder and the person is sent to a file picker to find a path
+ * their machine already knows. The page is the way around that: it is served by
+ * the process being asked about, so it needs no permission at all.
+ *
+ * Percent-encoding is undone because the same path appears both plain and
+ * inside a `file://` URL, and a candidate only counts once an ancestor of it
+ * holds a package.json. A `file://` URL also brings its own leading slashes:
+ * the match starts at the first one of the three, and `///Users/...` is a path
+ * nothing on disk answers to.
+ */
+export function projectRootFromPage(html) {
+  const tried = new Set()
+  for (const [, candidate] of String(html).matchAll(ROOT_PATTERN)) {
+    let dir = candidate.replace(/^\/{2,}/, "/")
+    if (dir.includes("%")) {
+      try {
+        dir = decodeURIComponent(dir)
+      } catch {
+        // A stray percent is not an encoding; the raw path is still worth a look.
+      }
+    }
+    if (tried.has(dir)) continue
+    tried.add(dir)
+    if (!path.isAbsolute(dir)) continue
+    const root = nearestProjectRoot(dir)
+    if (root) return root
+  }
+  return null
+}
+
 function decodeEntities(text) {
   return text.replace(/&(#39|[a-z]+);/gi, (whole, name) => ENTITIES[name.toLowerCase()] ?? whole)
 }
 
 /**
- * The first `MAX_TITLE_BYTES` of the response. Bounded, and matched rather than
- * parsed: all that is wanted is the `<title>`, and a dev server's index page is
- * a megabyte of inlined bundle below the fold.
+ * As much of the response as the two questions need. Bounded, and matched
+ * rather than parsed: all that is wanted is the `<title>` and a path, and a dev
+ * server's index page is a megabyte of inlined bundle below them both.
  */
-async function readHead(response) {
+async function readPage(response) {
   if (!response.body) return ""
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
-  let head = ""
+  let page = ""
   try {
-    while (head.length < MAX_TITLE_BYTES) {
+    while (page.length < MAX_PAGE_BYTES) {
       const { done, value } = await reader.read()
       if (done) break
-      head += decoder.decode(value, { stream: true })
-      if (TITLE_PATTERN.test(head)) break
+      page += decoder.decode(value, { stream: true })
+      if (TITLE_PATTERN.test(page) && buildDirSeen(page)) break
     }
   } catch {
     // A truncated read is still worth a regex.
   }
   reader.cancel().catch(() => {})
-  return head
+  return page
 }
 
 /**
- * The page title at `url`, `""` for a web page with no usable title, and null
- * when there is no app here. Content type carries the "is this an app" half of
- * the question, so a Postgres port or a bare JSON API drops out here, and a
- * closed port is refused before that — hence no separate TCP probe in front.
+ * What the app at `url` will say about itself — its title, and the project root
+ * if the page names one — or null when there is no app here. Content type
+ * carries the "is this an app" half of the question, so a Postgres port or a
+ * bare JSON API drops out here, and a closed port is refused before that —
+ * hence no separate TCP probe in front.
  */
-async function probeTitle(url, timeoutMs) {
+async function probeApp(url, timeoutMs) {
   let response
   try {
     response = await fetch(url, {
@@ -191,7 +276,7 @@ async function probeTitle(url, timeoutMs) {
     // not silence: something accepted and is still thinking, which is a dev
     // server compiling its first page — the row the user came for. It counts as
     // a hit with no title rather than being dropped for being slow.
-    return error?.name === "TimeoutError" ? "" : null
+    return error?.name === "TimeoutError" ? { title: "", projectRoot: null } : null
   }
 
   if (!(response.headers.get("content-type") ?? "").includes("text/html")) {
@@ -199,8 +284,12 @@ async function probeTitle(url, timeoutMs) {
     return null
   }
 
-  const title = TITLE_PATTERN.exec(await readHead(response))?.[1] ?? ""
-  return decodeEntities(title).replace(/\s+/g, " ").trim()
+  const page = await readPage(response)
+  const title = TITLE_PATTERN.exec(page)?.[1] ?? ""
+  return {
+    title: decodeEntities(title).replace(/\s+/g, " ").trim(),
+    projectRoot: projectRootFromPage(page),
+  }
 }
 
 /**
@@ -225,10 +314,10 @@ export async function scanLocalApps({
   const probed = await Promise.all(
     ports.map(async (port) => {
       const url = `http://${host}:${port}`
-      const title = await probeTitle(`${url}/`, timeoutMs)
+      const app = await probeApp(`${url}/`, timeoutMs)
       // An untitled page is still an app worth offering; the address is the
       // only honest label left for it.
-      return title === null ? null : { port, url, title: title || `${host}:${port}` }
+      return app === null ? null : { port, url, title: app.title || `${host}:${port}`, said: app.projectRoot }
     })
   )
 
@@ -237,8 +326,12 @@ export async function scanLocalApps({
   return probed
     .filter((hit) => hit !== null)
     .sort((a, b) => a.port - b.port)
-    .map((hit) => {
-      const projectRoot = projectRootForPort(hit.port)
+    .map(({ said, ...hit }) => {
+      // What the page said first: those paths are the app's own build output,
+      // so they name the project being served. A cwd is only where the command
+      // was typed, which `npm --prefix` and a monorepo root both get wrong —
+      // it is the fallback, for servers that write no path into their page.
+      const projectRoot = said ?? projectRootForPort(hit.port)
       return {
         ...hit,
         projectRoot,
@@ -289,40 +382,4 @@ export function describeProject(dir) {
   else if (dependencies["react-scripts"]) result.framework = "cra"
 
   return result
-}
-
-/**
- * The folder picker's one screen: where it is, where up is, and what it can
- * descend into, each subdirectory flagged so the picker can mark real projects
- * without a second round trip.
- *
- * A missing or unreadable directory is an empty listing, never a throw. This
- * walks a stranger's home directory on a machine that puts a TCC prompt in
- * front of Desktop, Documents and Downloads: denial is the normal case, and it
- * has to look like an empty folder rather than a broken picker.
- */
-export function listDirectories(dir) {
-  const target = path.resolve(dir)
-  const parent = path.dirname(target)
-
-  let names = []
-  try {
-    // Dotfiles are noise and node_modules is a project's interior; neither is a
-    // folder anyone is looking for. `isDirectory` stats, so a checkout reached
-    // through a symlink still counts as one.
-    names = fs
-      .readdirSync(target, { withFileTypes: true })
-      .filter((entry) => !entry.name.startsWith(".") && entry.name !== "node_modules")
-      .map((entry) => entry.name)
-  } catch {
-    // Denied, missing, or not a directory. All three are an empty folder here.
-  }
-
-  const entries = names
-    .map((name) => ({ name, path: path.join(target, name) }))
-    .filter((entry) => isDirectory(entry.path))
-    .map((entry) => ({ ...entry, hasPackageJson: hasFile(entry.path, "package.json") }))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
-
-  return { path: target, parent: parent === target ? null : parent, entries }
 }

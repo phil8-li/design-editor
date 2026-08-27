@@ -214,6 +214,7 @@ export async function main(argv = process.argv.slice(2)) {
     // twice, one of them orphaned.
     open: screen ? false : config.app.open,
     verbose: options.verbose,
+    onReady: (url) => screen?.reportReady(url),
   })
 }
 

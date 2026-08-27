@@ -182,6 +182,15 @@ async function loadRoutes(config) {
   }
 }
 
+/** The working directory, or `null` where the machine will not name it. */
+function currentDirectory() {
+  try {
+    return path.resolve(process.cwd())
+  } catch {
+    return null
+  }
+}
+
 function decodeSourcePath(value) {
   if (typeof value !== "string" || !value.includes("%")) return value
   try {
@@ -224,8 +233,13 @@ function writeEndpointFile(config, runtime) {
  * `argv` must already be in the vendor's own shape: commander parses
  * `process.argv` at module scope and aborts on any flag it does not declare,
  * so every first-party flag has to be consumed before this point.
+ *
+ * `onReady` is called with the editing URL the moment the proxy binds. It is
+ * how the start screen learns to move the browser on, and it is deliberately
+ * not the endpoint file: that write goes into the project folder, which is not
+ * always a folder this process is allowed to write to.
  */
-export async function launch(config, { appPort, host, open, verbose = false }) {
+export async function launch(config, { appPort, host, open, verbose = false, onReady = () => {} }) {
   // Before anything binds a port: whatever is about to be concatenated onto the
   // overlay has to be this tree's source, not a bundle left over from before it.
   ensureCurrentChromeBundle()
@@ -368,6 +382,7 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
       else if (runtime.proxyPort === null) {
         runtime.proxyPort = address.port
         writeEndpointFile(config, runtime)
+        onReady(`http://${LOOPBACK}:${runtime.proxyPort}`)
         // The vendor's own banner reports the port it asked for, not the one it
         // got, so this line has to land after it to be the one a reader trusts.
         setImmediate(() => {
@@ -432,7 +447,14 @@ export async function launch(config, { appPort, host, open, verbose = false }) {
   // The vendor derives its own project root from `process.cwd()`. Aligning the
   // two derivations is what keeps its "outside the project root" refusal and
   // ours from ever disagreeing about which files are in scope.
-  if (path.resolve(process.cwd()) !== config.projectRoot) process.chdir(config.projectRoot)
+  //
+  // `chdir` into a TCC-protected folder succeeds and then `cwd` cannot read it
+  // back: `uv_cwd` stats, and stat is the one call a managed Mac refuses for a
+  // protected Documents subtree — while opening, listing and reading all work.
+  // A cwd nothing can name takes down `path.resolve` and every library that
+  // asks, so the answer is supplied from the config the chdir came from.
+  if (currentDirectory() !== config.projectRoot) process.chdir(config.projectRoot)
+  if (currentDirectory() === null) process.cwd = () => config.projectRoot
 
   const virtualConfig = virtualNextConfig(config)
   if (virtualConfig) {

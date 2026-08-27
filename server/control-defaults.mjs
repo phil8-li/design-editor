@@ -198,7 +198,12 @@ export function createControlDefaults(config) {
     }
   }
 
-  const file = path.resolve(target.file)
+  // Against the project root, not the working directory. A host writes
+  // `src/lib/…` meaning its own src, and the start screen can be answered from
+  // any folder at all — resolving against cwd put the path in whatever
+  // directory the command was typed in, which is outside the project by
+  // definition and refused as such.
+  const file = path.resolve(config.projectRoot, target.file)
   const relative = path.relative(config.projectRoot, file)
   if (relative.startsWith("..") || path.isAbsolute(relative) || !isEditableSourcePath(config, file, relative)) {
     throw refusal("Configured control-default file is outside editable source roots", 403)

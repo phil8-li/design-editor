@@ -28,11 +28,12 @@ import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 
+import { folderDialog } from "../runtime/folder-dialog.mjs"
 import {
   DEFAULT_SCAN_PORTS,
   describeProject,
-  listDirectories,
   projectRootForPort,
+  projectRootFromPage,
   scanLocalApps,
 } from "../runtime/local-apps.mjs"
 import { createStartScreen } from "../runtime/start-screen.mjs"
@@ -75,10 +76,10 @@ function reactProject(extra = {}) {
 }
 
 /** A page server standing in for someone's dev server. */
-function pageServer(title) {
+function pageServer(title, body = "hi") {
   const server = http.createServer((request, response) => {
     response.writeHead(200, { "content-type": "text/html" })
-    response.end(`<!doctype html><html><head><title>${title}</title></head><body>hi</body></html>`)
+    response.end(`<!doctype html><html><head><title>${title}</title></head><body>${body}</body></html>`)
   })
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () =>
@@ -126,6 +127,51 @@ await check("a port nobody is on is not an error", async () => {
   assert.deepEqual(await scanLocalApps({ ports: [await freePort()] }), [])
 })
 
+/*
+ * The folder an app row carries. `lsof -d cwd` is the direct answer and a
+ * managed Mac refuses it for the user's own dev servers, which left every row
+ * with no folder and sent the person to a file picker for a path the machine
+ * already knew. A dev server writes absolute paths into its own page, so the
+ * page is the way around a permission the process cannot get.
+ */
+await check("a dev server that names itself in its page needs no permission", () => {
+  const root = reactProject()
+  fs.mkdirSync(path.join(root, ".next"), { recursive: true })
+  const trace = `at Layout (${root}/.next/dev/server/chunks/ssr/app_page_tsx.js:35:28)`
+  assert.equal(projectRootFromPage(`<script>x=${JSON.stringify(trace)}</script>`), root)
+})
+
+await check("a path with spaces in it survives the page and the URL alike", () => {
+  const root = path.join(fixture("IG Projects Local"), "Workspaces app")
+  fs.mkdirSync(root, { recursive: true })
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "workspaces" }))
+  assert.equal(projectRootFromPage(`at Boot (${root}/.next/dev/server/x.js:1:1)`), root)
+  // The same path also arrives percent-encoded, inside a file:// URL.
+  const encoded = root.split("/").map(encodeURIComponent).join("/")
+  assert.equal(projectRootFromPage(`"file://${encoded}/.next/dev/server/x.js"`), root)
+})
+
+await check("a path in a page that leads nowhere is not a project folder", () => {
+  assert.equal(projectRootFromPage("<html>nothing here</html>"), null)
+  assert.equal(projectRootFromPage("at X (/no/such/place/.next/dev/server/x.js:1:1)"), null)
+  assert.equal(projectRootFromPage("at X (relative/.next/dev/x.js:1:1)"), null)
+})
+
+await check("the folder reaches the app row the page came from", async () => {
+  const root = reactProject()
+  fs.mkdirSync(path.join(root, ".next"), { recursive: true })
+  // Past where a title lives, so the read has to keep going to find it.
+  const app = await pageServer("Workspaces", `${"<p>filler</p>".repeat(1200)}
+    <script>window.__t = "at Layout (${root}/.next/dev/server/chunks/ssr/page.js:1:1)"</script>`)
+  try {
+    const [found] = await scanLocalApps({ ports: [app.port] })
+    assert.equal(found.projectRoot, root)
+    assert.equal(found.packageName, "fixture-app")
+  } finally {
+    app.close()
+  }
+})
+
 await check("the cwd probe answers, or answers null — it never throws", async () => {
   const app = await pageServer("probe")
   try {
@@ -168,30 +214,40 @@ await check("a directory that is not there still answers every field", () => {
   assert.deepEqual(project.devScripts, [])
 })
 
-await check("the picker lists real folders and skips the noise", () => {
-  const dir = fixture("listing")
-  fs.mkdirSync(path.join(dir, "app"))
-  fs.writeFileSync(path.join(dir, "app", "package.json"), "{}")
-  fs.mkdirSync(path.join(dir, "docs"))
-  fs.mkdirSync(path.join(dir, "node_modules"))
-  fs.mkdirSync(path.join(dir, ".git"))
-  fs.writeFileSync(path.join(dir, "readme.md"), "")
+console.log("\nThe folder dialog")
 
-  const listing = listDirectories(dir)
-  assert.equal(listing.path, dir)
-  assert.ok(listing.parent && listing.parent !== dir)
-  assert.deepEqual(
-    listing.entries.map((entry) => entry.name),
-    ["app", "docs"]
-  )
-  assert.equal(listing.entries[0].hasPackageJson, true)
-  assert.equal(listing.entries[1].hasPackageJson, false)
-  assert.equal(listing.entries[0].path, path.join(dir, "app"))
+// The dialog itself is a window a person has to answer, so what is pinned here
+// is the command built for it — the part that is wrong silently.
+await check("each desktop gets its own native picker, opened where it was told", () => {
+  const mac = folderDialog("darwin", "/Users/someone/code")
+  assert.equal(mac.command, "osascript")
+  // NSOpenPanel rather than `choose folder`: the AppleScript command answers
+  // with an alias, which cannot be built for a folder macOS protects.
+  assert.match(mac.args.join(" "), /NSOpenPanel/)
+  assert.match(mac.args.join(" "), /\/Users\/someone\/code/)
+
+  const windows = folderDialog("win32", "C:\\Users\\someone")
+  assert.equal(windows.command, "powershell.exe")
+  assert.match(windows.args.join(" "), /FolderBrowserDialog/)
+  // Without an apartment of its own the dialog never appears.
+  assert.ok(windows.args.includes("-STA"))
+
+  const linux = folderDialog("linux", "/home/someone")
+  assert.equal(linux.command, "zenity")
+  assert.ok(linux.args.includes("--directory"))
+  // zenity opens the parent unless the path ends in a separator.
+  assert.ok(linux.args.includes("--filename=/home/someone/"))
 })
 
-await check("an unreadable folder is an empty list, not a crash", () => {
-  const listing = listDirectories(path.join(os.tmpdir(), "design-editor-not-a-folder"))
-  assert.deepEqual(listing.entries, [])
+await check("a quote in a path cannot break out of the script it is written into", () => {
+  const mac = folderDialog("darwin", '/tmp/it"s here')
+  assert.match(mac.args.at(-1), /\\"s here/)
+  const windows = folderDialog("win32", "C:\\it's here")
+  assert.match(windows.args.at(-1), /it''s here/)
+})
+
+await check("a platform with no known picker says so instead of guessing", () => {
+  assert.equal(folderDialog("aix", "/"), null)
 })
 
 console.log("\nThe screen")
@@ -212,21 +268,18 @@ await check("it binds on loopback and serves one page", async () => {
   assert.match(html, /<input id="folder-path"/)
 })
 
-await check("it reports what is running, and where the picker should open", async () => {
+await check("it reports what is running", async () => {
   const { status, body } = await json(`${screen.url}/api/apps`)
   assert.equal(status, 200)
   assert.ok(Array.isArray(body.apps))
-  // The browser cannot name a path on the machine it is talking to.
-  assert.equal(body.home, os.homedir())
 })
 
-await check("it describes a folder and lists its children", async () => {
+await check("it describes a folder", async () => {
   const { status, body } = await json(
     `${screen.url}/api/project?path=${encodeURIComponent(project)}`
   )
   assert.equal(status, 200)
   assert.equal(body.project.hasReact, true)
-  assert.ok(Array.isArray(body.listing.entries))
 })
 
 await check("a relative path is refused", async () => {
@@ -240,6 +293,100 @@ await check("a pasted ~ is the home directory, not a relative path", async () =>
   const { status, body } = await json(`${screen.url}/api/project?path=${encodeURIComponent("~")}`)
   assert.equal(status, 200)
   assert.equal(body.project.path, os.homedir())
+  assert.equal(body.project.isDirectory, true)
+})
+
+/*
+ * The dialog is a window a person has to answer, so the route is driven with a
+ * stand-in for it. What is worth pinning is the three things the page depends
+ * on: where the dialog is told to open, what a choice turns into, and that
+ * dismissing it is an ordinary answer rather than an error.
+ */
+async function withBrowseScreen(openFolderDialog, run) {
+  const stub = await createStartScreen({ host: "127.0.0.1", port: 0, log: () => {}, openFolderDialog })
+  const browse = (payload) =>
+    json(`${stub.url}/api/browse`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+  try {
+    await run(browse)
+  } finally {
+    stub.close()
+  }
+}
+
+await check("browsing opens the dialog where the field points, and describes what comes back", async () => {
+  let openedAt = null
+  await withBrowseScreen(
+    async ({ startIn }) => {
+      openedAt = startIn
+      return { canceled: false, path: project }
+    },
+    async (browse) => {
+      const { status, body } = await browse({ startIn: "~" })
+      assert.equal(status, 200)
+      // The page may send `~`, or nothing at all; neither reaches the dialog raw.
+      assert.equal(openedAt, os.homedir())
+      assert.equal(body.canceled, false)
+      assert.equal(body.project.path, project)
+      assert.equal(body.project.hasReact, true)
+    }
+  )
+})
+
+await check("a dismissed dialog leaves the field alone instead of erroring", async () => {
+  await withBrowseScreen(
+    async () => ({ canceled: true }),
+    async (browse) => {
+      const { status, body } = await browse({})
+      assert.equal(status, 200)
+      assert.equal(body.canceled, true)
+      assert.equal(body.project, undefined)
+    }
+  )
+})
+
+// The dialog can end up behind the browser window, and the second press has to
+// say that rather than queue another one behind the first.
+await check("a second press while the dialog is open says where the first one went", async () => {
+  let release
+  await withBrowseScreen(
+    () => new Promise((resolve) => (release = () => resolve({ canceled: true }))),
+    async (browse) => {
+      const first = browse({})
+      // The route only holds the flag once the dialog call is under way.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const { status, body } = await browse({})
+      assert.equal(status, 409)
+      assert.match(body.error, /already open/i)
+      release()
+      assert.equal((await first).status, 200)
+    }
+  )
+})
+
+// Dragging a folder onto a terminal is the most direct way to get a path out of
+// the Finder, and it writes the shell's escaping along with it.
+await check("a path pasted with shell escaping still finds the folder", async () => {
+  const dir = fixture("with space")
+  const spaced = path.join(dir, "IG Projects Local")
+  fs.mkdirSync(spaced)
+  const escaped = spaced.replace(/ /g, "\\ ")
+
+  const { status, body } = await json(`${screen.url}/api/project?path=${encodeURIComponent(escaped)}`)
+  assert.equal(status, 200)
+  assert.equal(body.project.path, spaced)
+  assert.equal(body.project.isDirectory, true)
+})
+
+await check("a folder whose name really has a backslash is not unescaped away", async () => {
+  const dir = fixture("backslash")
+  const odd = path.join(dir, "a\\ b")
+  fs.mkdirSync(odd)
+  const { body } = await json(`${screen.url}/api/project?path=${encodeURIComponent(odd)}`)
+  assert.equal(body.project.path, odd)
   assert.equal(body.project.isDirectory, true)
 })
 
@@ -324,6 +471,26 @@ await check("this run's endpoint file flips it to ready, with the proxy URL", as
   const { body } = await json(`${screen.url}/api/status`)
   assert.equal(body.ready, true)
   assert.equal(body.url, "http://127.0.0.1:4312")
+})
+
+/*
+ * The launcher runs in this same process, so the endpoint file was never the
+ * fact — only a way of carrying it, and one that fails whenever the project
+ * folder refuses to be written to. When it does, the proxy is up, the page is
+ * still polling, and "Starting the editor…" stays on screen forever.
+ */
+await check("the proxy being up is not a file the project folder has to accept", async () => {
+  const deaf = await createStartScreen({ host: "127.0.0.1", port: 0, log: () => {} })
+  try {
+    // No endpoint file was ever reported: the write it would have come from failed.
+    assert.equal((await json(`${deaf.url}/api/status`)).body.ready, false)
+    deaf.reportReady("http://127.0.0.1:4344")
+    const { body } = await json(`${deaf.url}/api/status`)
+    assert.equal(body.ready, true)
+    assert.equal(body.url, "http://127.0.0.1:4344")
+  } finally {
+    deaf.close()
+  }
 })
 
 await check("a valid choice resolves the handoff the CLI is waiting on", async () => {

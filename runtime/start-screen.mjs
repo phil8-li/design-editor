@@ -19,12 +19,8 @@ import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 
-import {
-  DEFAULT_SCAN_PORTS,
-  describeProject,
-  listDirectories,
-  scanLocalApps,
-} from "./local-apps.mjs"
+import { chooseFolder } from "./folder-dialog.mjs"
+import { DEFAULT_SCAN_PORTS, describeProject, isDirectory, scanLocalApps } from "./local-apps.mjs"
 import { startScreenPage } from "./start-screen-page.mjs"
 
 const LOOPBACK = "127.0.0.1"
@@ -64,6 +60,27 @@ function expandHome(value) {
   if (value !== "~" && !value.startsWith("~/")) return value
   return path.join(os.homedir(), value.slice(1))
 }
+
+/**
+ * The other thing a pasted path may be: shell-escaped.
+ *
+ * Dragging a folder onto a terminal — the most direct way there is to get a
+ * path out of the Finder and into a field — writes `IG\ Projects\ Local`, and
+ * `\ ` is the shell's escaping, not a folder called `IG\`. Copying the command
+ * line of a running dev server produces the same thing. A path that exists
+ * exactly as typed always wins, so the rare real backslash in a filename is
+ * still reachable; only a path that is otherwise not there is unescaped.
+ *
+ * Windows paths are exempt, where a backslash IS the separator.
+ */
+function unescapePastedPath(value) {
+  if (!value.startsWith("/") || !value.includes("\\") || fs.existsSync(value)) return value
+  return value.replace(/\\(.)/g, "$1")
+}
+
+/** Everything done to a path between the text field and the filesystem. */
+const pastedPath = (value) =>
+  typeof value === "string" ? unescapePastedPath(expandHome(value.trim())) : value
 
 /**
  * Mirrors `isLocalRequest` in server/routes.mjs, including the reason `"null"`
@@ -138,17 +155,20 @@ function parseAppUrl(value) {
  */
 function resolveProject(raw) {
   if (typeof raw !== "string" || raw.trim() === "") throw badRequest("Confirm the project folder before starting.")
-  const value = expandHome(raw.trim())
+  const value = pastedPath(raw)
   if (!path.isAbsolute(value)) throw badRequest(`The project folder has to be a full path, and "${raw}" is not one.`)
 
   let projectRoot
   try {
     projectRoot = fs.realpathSync(value)
-  } catch {
-    throw badRequest(`There is no folder at ${value}.`)
+  } catch (error) {
+    // A protected folder refuses `realpath` along with `stat` while still
+    // opening and reading; the path as pasted is then the best name it has.
+    if (error.code !== "EPERM" || !isDirectory(value)) throw badRequest(`There is no folder at ${value}.`)
+    projectRoot = value
   }
 
-  if (!fs.statSync(projectRoot).isDirectory()) throw badRequest(`${value} is a file, not a project folder.`)
+  if (!isDirectory(projectRoot)) throw badRequest(`${value} is a file, not a project folder.`)
 
   let text
   try {
@@ -188,10 +208,13 @@ function resolveDevScript(value, projectRoot, manifest) {
 }
 
 /**
- * The endpoint file is written by the launcher the moment the proxy binds, and
- * it is all this server sees of the editor it handed off to. A file left by a
- * previous run is indistinguishable from success and the page would redirect
- * to a dead port, so the pid has to be ours.
+ * The endpoint file is written by the launcher, and it is the only thing this
+ * server sees of the editor it handed off to on the runs where the launcher is
+ * a separate process. A file left by a previous run is indistinguishable from
+ * success and the page would redirect to a dead port, so the pid has to be
+ * ours.
+ *
+ * It is the second answer, not the first — see `reportReady`.
  */
 function readStatus(endpointFile) {
   if (!endpointFile) return { ready: false }
@@ -210,10 +233,19 @@ function readStatus(endpointFile) {
  * 0 lets the OS choose, which is what the CLI passes: the screen is transient
  * and has no port worth reserving.
  */
-export async function createStartScreen({ host = LOOPBACK, port = 0, log = console.log } = {}) {
+export async function createStartScreen({
+  host = LOOPBACK,
+  port = 0,
+  log = console.log,
+  // The one route that puts a window on the user's screen, so it is the one
+  // piece a test can stand in for rather than drive.
+  openFolderDialog = chooseFolder,
+} = {}) {
   if (!isLoopbackHost(host)) throw new Error(`The start screen is loopback-only and cannot bind ${host}`)
 
   let endpointFile = null
+  let readyUrl = null
+  let picking = false
   let settled = false
   let closed = false
   let resolveChoice
@@ -231,19 +263,43 @@ export async function createStartScreen({ host = LOOPBACK, port = 0, log = conso
   const routes = {
     "GET /": (_req, res) => send(res, 200, "text/html; charset=utf-8", startScreenPage()),
     "GET /api/apps": async (_req, res) =>
-      sendJson(res, 200, {
-        apps: await scanLocalApps({ ports: DEFAULT_SCAN_PORTS, host }),
-        // Where the folder picker should open when nothing was detected. The
-        // browser cannot name a single path on the machine it is talking to,
-        // and the alternative starting point is `/`.
-        home: os.homedir(),
-      }),
+      sendJson(res, 200, { apps: await scanLocalApps({ ports: DEFAULT_SCAN_PORTS, host }) }),
     "GET /api/project": (_req, res, url) => {
-      const dir = expandHome(url.searchParams.get("path") ?? "")
+      const dir = pastedPath(url.searchParams.get("path") ?? "")
       if (!path.isAbsolute(dir)) throw badRequest("Ask for a folder by its full path.")
-      sendJson(res, 200, { project: describeProject(dir), listing: listDirectories(dir) })
+      sendJson(res, 200, { project: describeProject(dir) })
     },
-    "GET /api/status": (_req, res) => sendJson(res, 200, readStatus(endpointFile)),
+    /*
+     * The native folder dialog, opened on the machine the files are on. It is a
+     * POST because it is the one read-only-looking route that has an effect: a
+     * window appears in front of whatever the user is doing.
+     *
+     * The dialog is modal to itself but not to this server, and it can end up
+     * behind the browser window — so a second press has to say where the first
+     * one went rather than stack another panel behind the same one.
+     */
+    "POST /api/browse": async (req, res) => {
+      if (picking) throw badRequest("The folder picker is already open — it may be behind this window.", 409)
+      const body = await readJsonBody(req)
+      const startIn = pastedPath(body?.startIn ?? "")
+      picking = true
+      let result
+      try {
+        result = await openFolderDialog({ startIn: path.isAbsolute(startIn) ? startIn : os.homedir() })
+      } catch (error) {
+        // The page will say this too, under the field. It is said here as well
+        // because a picker that fails on someone else's machine is reported as
+        // "nothing happened", and this is the line that makes it a bug report.
+        log(`[design-editor] ${error.message}`)
+        throw error
+      } finally {
+        picking = false
+      }
+      if (result.canceled) sendJson(res, 200, { canceled: true })
+      else sendJson(res, 200, { canceled: false, project: describeProject(result.path) })
+    },
+    "GET /api/status": (_req, res) =>
+      sendJson(res, 200, readyUrl ? { ready: true, url: readyUrl } : readStatus(endpointFile)),
     "POST /api/start": async (req, res) => {
       const body = await readJsonBody(req)
       // A second press, or a page reloaded mid-boot. The first choice is the one
@@ -303,6 +359,19 @@ export async function createStartScreen({ host = LOOPBACK, port = 0, log = conso
     /** Where the launcher will write the proxy's ports, once one exists. */
     reportEndpointFile(absolutePath) {
       endpointFile = absolutePath
+    },
+
+    /**
+     * The proxy is up, said in memory rather than through the endpoint file.
+     *
+     * The launcher runs in this same process, so the file was never the fact —
+     * only a way of carrying it. And it is a way that can fail: a project
+     * folder the machine will not let this process write to leaves the proxy
+     * running, the page polling, and "Starting the editor…" on screen forever.
+     * Said directly, the page moves on whether or not the disk cooperated.
+     */
+    reportReady(url) {
+      readyUrl = url
     },
 
     close() {

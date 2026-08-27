@@ -301,6 +301,42 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
   })
 }
 
+// A specifier in the config's own source that has to be re-based when the
+// module is evaluated from somewhere other than its own folder.
+const RELATIVE_SPECIFIER = /(\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)(["'])(\.\.?\/[^"']*)\2/g
+
+/**
+ * The config file, evaluated from its source rather than from its path.
+ *
+ * Node's ESM resolver `stat`s a specifier before reading it, and on a managed
+ * Mac `stat` is the one call TCC refuses for a protected folder — `readFileSync`
+ * on the very same file succeeds. So a project living under, say, a protected
+ * Documents subtree gets `ERR_MODULE_NOT_FOUND` for a file that is plainly
+ * there, and the CLI dies a second after the start screen hands off.
+ *
+ * Reading the bytes and evaluating them as a module sidesteps the resolver
+ * entirely. Relative specifiers inside the config are re-based to absolute
+ * `file://` URLs first, since a `data:` module has no folder to be relative to.
+ */
+async function importConfigModule(found) {
+  try {
+    return await import(pathToFileURL(found).href)
+  } catch (error) {
+    if (error?.code !== "ERR_MODULE_NOT_FOUND") throw error
+    const base = pathToFileURL(found)
+    const source = fs
+      .readFileSync(found, "utf8")
+      .replace(RELATIVE_SPECIFIER, (whole, lead, quote, specifier) => {
+        try {
+          return `${lead}${quote}${new URL(specifier, base).href}${quote}`
+        } catch {
+          return whole
+        }
+      })
+    return await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`)
+  }
+}
+
 /** Loads `design-editor.config.mjs` if the host has one, else pure defaults. */
 export async function loadConfig({ configPath, cwd = process.cwd(), overrides = {} } = {}) {
   const found = configPath ? path.resolve(cwd, configPath) : findConfigFile(cwd)
@@ -310,7 +346,7 @@ export async function loadConfig({ configPath, cwd = process.cwd(), overrides = 
 
   let raw = {}
   if (found) {
-    const loaded = await import(pathToFileURL(found).href)
+    const loaded = await importConfigModule(found)
     const exported = loaded.default ?? loaded.config ?? {}
     raw = typeof exported === "function" ? await exported() : exported
   }
@@ -372,20 +408,36 @@ function wsPortPin(wsPort) {
   )
 }
 
+/**
+ * A path with its symlinks resolved, or `null` for one that cannot be reached.
+ *
+ * `realpath` lstats, and lstat is the call a managed Mac refuses for a
+ * protected folder while reading and listing it perfectly. Answering "not
+ * editable" to that refusal means every source file in such a project is
+ * refused and the editor can change nothing at all, which is why a path the
+ * machine will not resolve but will still confirm falls back to its lexical
+ * form. Only for EPERM: a path that is genuinely absent stays refused, and a
+ * lexical path is a weaker containment check — it cannot see a symlink out of
+ * the project — so it is the fallback and never the first answer.
+ */
+function canonicalPath(target) {
+  try {
+    return fs.realpathSync(target)
+  } catch (error) {
+    if (error?.code !== "EPERM") return null
+    return fs.existsSync(target) ? path.resolve(target) : null
+  }
+}
+
 /** True when the agent is allowed to read/write this path. */
 export function isEditableSourcePath(config, absolutePath, relativePath) {
   const lexicalProbe = relativePath ?? absolutePath
   if (SOURCE_DENY_PATTERNS.some((pattern) => pattern.test(lexicalProbe))) return false
   if (!config.source.extensions.includes(path.extname(absolutePath).toLowerCase())) return false
 
-  let target
-  let projectRoot
-  try {
-    target = fs.realpathSync(absolutePath)
-    projectRoot = fs.realpathSync(config.projectRoot)
-  } catch {
-    return false
-  }
+  const target = canonicalPath(absolutePath)
+  const projectRoot = canonicalPath(config.projectRoot)
+  if (target === null || projectRoot === null) return false
 
   const projectRelative = path.relative(projectRoot, target)
   if (
@@ -400,12 +452,8 @@ export function isEditableSourcePath(config, absolutePath, relativePath) {
 
   const roots = config.source.roots.length === 0 ? [config.projectRoot] : config.source.roots
   return roots.some((root) => {
-    let canonicalRoot
-    try {
-      canonicalRoot = fs.realpathSync(root)
-    } catch {
-      return false
-    }
+    const canonicalRoot = canonicalPath(root)
+    if (canonicalRoot === null) return false
     const rel = path.relative(canonicalRoot, target)
     return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)
   })
