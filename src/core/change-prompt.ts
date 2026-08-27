@@ -44,6 +44,40 @@ export interface PreviewOnlyChange {
  */
 const ledger: PreviewOnlyChange[] = []
 
+/**
+ * Who to tell when the ledger moves, because nothing else will.
+ *
+ * The two paths that fill this list run on different clocks. A property the
+ * translator cannot spell is recorded inside the commit, in the same task as
+ * the keystroke. A property it CAN spell but that turns out to have no file to
+ * land in is recorded from `ensureSource(...).then(...)` in `writer.ts` —
+ * behind a sourcemap fetch and sometimes a grep, so hundreds of milliseconds
+ * after the edit that caused it, and sometimes seconds.
+ *
+ * The panel had no way to hear about the second one. The inspector repaints
+ * from a store subscription and from `refresh()`, and a write to this array is
+ * neither. A user who opened the Prompts tab while resolution was still in
+ * flight got it rendered from an empty ledger, read "Nothing to hand over yet"
+ * over a change that was plainly on screen, and had no action left that would
+ * ever correct it — the tab stayed wrong for the rest of the session. So the
+ * ledger announces itself, and whoever is showing it listens.
+ */
+const listeners = new Set<() => void>()
+
+export function onPreviewOnlyChange(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
+/**
+ * Copied before it is walked: a listener is free to drop its subscription the
+ * moment it hears from us, and deleting from a Set mid-iteration would skip
+ * whoever was queued behind it.
+ */
+function announce(): void {
+  for (const listener of [...listeners]) listener()
+}
+
 /** Same element, same property — one entry, keeping the original `from`. */
 function identityOf(change: PreviewOnlyChange): string {
   return [change.componentName, change.tagName, change.className, change.property].join("|")
@@ -65,9 +99,11 @@ export function recordPreviewOnly(change: PreviewOnlyChange): PreviewOnlyChange 
     if (!existing.filePath) existing.filePath = change.filePath
     ledger.splice(index, 1)
     ledger.unshift(existing)
+    announce()
     return existing
   }
   ledger.unshift(change)
+  announce()
   return change
 }
 
@@ -78,6 +114,7 @@ export function previewOnlyChanges(): PreviewOnlyChange[] {
 
 export function clearPreviewOnly(): void {
   ledger.length = 0
+  announce()
 }
 
 /**
@@ -95,6 +132,7 @@ export function removePreviewOnly(change: PreviewOnlyChange): boolean {
   const index = ledger.findIndex((entry) => identityOf(entry) === identity)
   if (index === -1) return false
   ledger.splice(index, 1)
+  announce()
   return true
 }
 
