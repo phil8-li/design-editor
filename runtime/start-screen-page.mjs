@@ -32,6 +32,9 @@ const el = {
   scriptRow: $("script-row"), script: $("script"),
   submit: $("submit"), hint: $("hint"), submitError: $("submit-error"),
   waiting: $("waiting"), progress: $("progress"), waitingNote: $("waiting-note"),
+  current: $("current"), currentName: $("current-name"), currentWhere: $("current-where"),
+  currentOpen: $("current-open"), currentChange: $("current-change"),
+  stopped: $("stopped"),
 }
 
 let apps = []
@@ -39,6 +42,9 @@ let root = null   // { path, info } — the folder the editor will write source 
 let devScript = null
 let busy = false
 let typing = 0
+// The editor this tab knows is up, if any. Only ever read to decide whether a
+// press is a start or a switch — the server is the authority on what is running.
+let runningUrl = null
 
 /*
  * The browser is never told the server's home directory and the API contract is
@@ -230,6 +236,41 @@ el.script.addEventListener("change", () => {
   render()
 })
 
+/** What the server says is running right now, or null if it would not say. */
+async function readStatus() {
+  const response = await fetch("/api/status").catch(() => null)
+  return response && response.ok ? await response.json().catch(() => null) : null
+}
+
+/*
+ * The two faces of this card. Only one is ever up: what is running, or the form
+ * for choosing what should be. The form stays built underneath either way, so
+ * "Choose a different app" is one click rather than a second boot.
+ */
+function showCurrent(status) {
+  runningUrl = status.url
+  const editing = status.editing
+  el.currentName.textContent =
+    (editing && (editing.packageName || editing.appUrl)) || "An app is open in the editor"
+  show(el.currentWhere, editing ? editing.appUrl + " — source in " + tilde(editing.projectRoot) : "")
+  el.currentOpen.href = status.url
+  el.form.hidden = true
+  el.waiting.hidden = true
+  el.current.hidden = false
+}
+
+function showChooser() {
+  el.current.hidden = true
+  el.waiting.hidden = true
+  el.form.hidden = false
+  el.url.focus()
+}
+
+el.currentChange.addEventListener("click", () => {
+  show(el.stopped, "")
+  showChooser()
+})
+
 el.form.addEventListener("submit", async (event) => {
   event.preventDefault()
   if (el.submit.disabled) return
@@ -259,24 +300,46 @@ el.form.addEventListener("submit", async (event) => {
     show(el.submitError, (data && data.error) || "The start screen answered " + response.status + ".")
     return
   }
-  waitForEditor(script)
+  waitForEditor(script, runningUrl !== null)
 })
 
 /*
  * A first Next.js compile routinely runs past thirty seconds, so this state has
  * no deadline. It keeps polling forever and, once it is clearly slow, says
  * where to look instead of failing into a dead end.
+ *
+ * This is also the one path that still moves the tab by itself, and it should:
+ * whoever pressed Start asked to go there. A tab that merely loaded this URL
+ * gets the card above instead.
  */
-function waitForEditor(script) {
+function waitForEditor(script, switching) {
   el.form.hidden = true
+  el.current.hidden = true
+  show(el.stopped, "")
   el.waiting.hidden = false
-  el.progress.textContent = script ? "Starting your app…" : "Starting the editor…"
+  el.progress.textContent = switching
+    ? "Switching…"
+    : script
+      ? "Starting your app…"
+      : "Starting the editor…"
   const startedAt = Date.now()
   const poll = async () => {
-    const response = await fetch("/api/status").catch(() => null)
-    const data = response && response.ok ? await response.json().catch(() => null) : null
+    const data = await readStatus()
+    // The editor that was up is cleared the moment a choice is accepted, so
+    // a ready answer here can only be the one this press asked for, which matters
+    // because a switch usually lands back on the very same port.
     if (data && data.ready) {
       location.replace(data.url)
+      return
+    }
+    // It died on the way up. The chooser is still here, so this is a sentence
+    // to read and another go, not a page that polls for a process nobody runs.
+    if (data && data.stopped) {
+      busy = false
+      runningUrl = null
+      render()
+      showChooser()
+      show(el.stopped, data.stopped)
       return
     }
     if (Date.now() - startedAt > ${SLOW_MS}) {
@@ -291,6 +354,12 @@ function waitForEditor(script) {
 }
 
 async function boot() {
+  // Asked before the scan, which costs a second and a half: a tab that comes
+  // back to this URL to reach a running editor should not wait on discovery.
+  const status = await readStatus()
+  if (status && status.ready) showCurrent(status)
+  else if (status && status.stopped) show(el.stopped, status.stopped)
+
   const data = await askServer("/api/apps", el.appsError)
   apps = (data && data.apps) || []
   el.apps.replaceChildren(...apps.map(appRow))
@@ -323,6 +392,23 @@ export function startScreenPage() {
     <p class="brand">design-editor</p>
     <p class="lede">Open a running dev server and edit the page straight into its source.</p>
   </header>
+
+  <!--
+    What is running, for a tab that arrived here rather than one that pressed
+    Start. This used to be a redirect, which is why there was no way back to the
+    chooser at all: the URL bounced to the editor and the session was over.
+  -->
+  <div class="section" id="current" hidden>
+    <p class="label">Now editing</p>
+    <p class="lede" id="current-name"></p>
+    <p class="note" id="current-where"></p>
+    <div class="actions">
+      <a class="primary" id="current-open">Open the editor</a>
+      <button type="button" class="ghost" id="current-change">Choose a different app</button>
+    </div>
+  </div>
+
+  <p class="note" id="stopped" hidden></p>
 
   <form id="form" autocomplete="off">
     <div class="section">

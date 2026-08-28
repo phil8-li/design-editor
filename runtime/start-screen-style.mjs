@@ -226,6 +226,15 @@ select {
 .primary:hover:not(:disabled) { background: var(--accent-surface-hover); }
 .primary:disabled { background: var(--field); color: var(--text-dim); cursor: default; }
 
+/*
+ * The pair under "Now editing": go to what is running, or go and pick something
+ * else. The first is an anchor rather than a button because it goes to a URL,
+ * and an anchor is the control a browser already knows how to open in a new tab
+ * — which is exactly what someone with two apps in flight will want to do.
+ */
+.actions { display: flex; align-items: center; gap: 8px; }
+a.primary { text-decoration: none; text-align: center; }
+
 .waiting { display: flex; flex-direction: column; gap: 8px; }
 .progress { margin: 0; display: flex; align-items: center; gap: 10px; font-size: var(--size-lede); }
 .pulse {
