@@ -17,6 +17,13 @@ leaves no trace in your source tree.
   `next.config` file. The overlay can inspect any Next app; durable layout and
   appearance edits currently write Tailwind utilities, so full visual editing
   requires Tailwind. Text edits do not.
+- A project under a folder macOS guards — Documents, Desktop, iCloud Drive — is
+  supported. Such a folder can read perfectly and still refuse `stat`,
+  `realpath`, `mkdir` and `write` to this process, which is enough to break a
+  tool that assumes a readable path is a fully usable one. The config is read as
+  source rather than imported, the working directory is taken from config rather
+  than read back from the OS, and the containment guard and control defaults
+  degrade instead of refusing.
 - The package installs `react-rewrite-cli@0.1.1` exactly. The runtime patches
   that build's minified bundle at serve time against 23 pinned anchors; a
   different version will not patch, and the launcher tells you so instead.
@@ -54,6 +61,12 @@ browser bundle when installing from source.
    npm run build
    ```
 
+   You will rarely have to. The launcher compares `dist/` against `src/` at
+   startup and rebuilds a bundle that has fallen behind, saying so in a line you
+   cannot miss — an editor that silently served last week's `src/` is the kind
+   of thing that gets debugged for an hour. Installing a prebuilt `dist/` with
+   no `esbuild` present is still supported: it starts, and serves what it has.
+
 4. Ignore the state directory:
 
    ```
@@ -66,25 +79,47 @@ browser bundle when installing from source.
 npx design-editor
 ```
 
-With no arguments it opens a start screen in your browser and asks two
-questions: which app, and where its source is.
+With no arguments it opens a start screen in your browser and asks which app to
+edit, which page of it to open, and where its source is.
 
 - **Which app.** It scans the usual dev-server ports and lists what answered, by
   page title, so `Workspaces` is what you click rather than `127.0.0.1:3000`.
   Nothing running yet is fine — type the URL you want and it will start the app
-  for you.
-- **Where its source is.** Paste a folder path, or browse to one. It reads that
-  folder's `package.json` to confirm it is the right project and to find the dev
-  script, and tells you what it is about to run before you commit to it.
+  for you. A running app usually knows its own folder, so picking a row fills
+  the folder in for you; a row that cannot work its folder out clears the field
+  and says so, rather than leaving the previous row's folder standing.
+- **Which page.** The URL is where you say it. Type `127.0.0.1:3000/pricing` and
+  that is the page you land on, not the app's `/`.
+- **Where its source is.** Paste a folder path, or browse to one — "Browse"
+  opens the machine's own dialog, so Finder's sidebar, favourites and search are
+  all there rather than a list this tool drew. It reads that folder's
+  `package.json` to confirm it is the right project and to find the dev script,
+  and tells you what it is about to run before you commit to it.
 
 Press the button and it does the rest: starts the dev server if it has to, waits
 for the app to answer, mounts the editing proxy in front of it, and puts the tab
 you are already in onto the editor. The page you land on is your app — the
 editor is the chrome around it.
 
-The two answers are the whole flow, so nothing about your project has to change
-first. There is no config file to write, no script to add, and no dependency to
-install into the app you are editing.
+An app that is throwing still opens. A dev server answering 500 has plainly been
+found, and a broken render is exactly when you want the overlay in front of it.
+
+That is the whole flow, so nothing about your project has to change first. There
+is no config file to write, no script to add, and no dependency to install into
+the app you are editing.
+
+### Switching apps
+
+The chooser lasts as long as the session, not as long as the first app you pick.
+The command you ran stays a supervisor on 3455 and never becomes an editor
+itself; each app you choose is a child process it starts, watches, and can
+replace. So designing a second app is not a quit and a restart.
+
+From inside the editor, the **Choose app** pill in the toolbar is the way back.
+Unapplied changes and uncopied prompts live only in that tab, so the first click
+arms the control rather than leaving — it asks, and reverts on its own if you
+walk away. An editor started any other way has no such pill, because there is no
+chooser behind it to return to.
 
 ### From the command line instead
 
@@ -108,11 +143,13 @@ reports the ports it asked for rather than the ones it bound.
 design-editor [appPort] [options]
 
   (no arguments)          Open the start screen: pick a running app and its folder
-  appPort                 Dev server port
+  appPort                 Dev server port (default: app.port, else framework detection)
   --start / --no-start    Force or skip the start screen (default: when no port is known)
   --dev                   Start the app's dev server too, and attach when it is up
   --dev-script <name>     npm script --dev runs (default: app.devScript, "dev")
   --config <path>         Config file (default: nearest one above cwd)
+  --project-root <path>   Project the config loads against (default: the current folder)
+  --start-screen-port <n> Port for the start screen (default: 3455, else any free port)
   --proxy-port <n>        Port for the editing proxy the browser loads
   --ws-port <n>           Port for the source-edit WebSocket
   --host <host>           Dev server host (default: 127.0.0.1)
@@ -138,6 +175,11 @@ run the same call. The timeline lives on the writer rather than on the panels,
 so a section added later is undoable without being wired up for it, and it
 covers the preview and the queued source operation together: undoing a change
 also takes back what "Apply to code" would have written.
+
+Dragging and resizing on the canvas go through that same writer, so a gesture is
+one undo step, one row in the Prompts tab, and — for the width and height a
+resize settles on — a queued operation "Apply to code" can write. A gesture that
+moved and resized at once is a single step, not three.
 
 ## Configure
 
@@ -375,6 +417,31 @@ Activating “Show affected” dispatches
 `{ path, relationship, selectors, elements }`; a canvas integration may draw
 those elements without coupling the options inventory to canvas state.
 
+## Where a change ends up
+
+Two surfaces catch an edit, and between them nothing is dropped.
+
+- **"Apply to code"** writes the changes the codemod can spell, into the
+  component source it resolved them to.
+- **The Prompts tab** catches the rest, as a written instruction you hand to an
+  agent. A change can land here because the property is one the writer cannot
+  express — but also because the *file* could not be found: under React 19 the
+  fibre walk can answer with no path at all, and the async resolver can come
+  back with a bundler chunk rather than your component.
+
+That second case used to be a hole. The edit was on screen, and no surface in
+the editor admitted it existed: it was dropped on its way to the queue, "Apply
+to code" stayed disabled, and the Prompts tab said there was nothing to hand
+over. Now a write that cannot reach source falls back to the tab, carrying the
+value it read *before* the element changed, so the instruction says what to
+change it from. A change reaching the queue stays out of the tab, so an agent is
+never asked to redo what the codemod is about to write.
+
+The tab repaints as the ledger moves, so an edit made while it is open appears
+in it. Only while it is the tab being looked at — a hidden pane is read when you
+switch to it, which is what keeps both it and the Code view off the hot path of
+a drag.
+
 ## What it writes, and where
 
 - **Your component source**, only through an explicit edit, and only for files
@@ -384,7 +451,9 @@ those elements without coupling the options inventory to canvas state.
 - **`<stateDir>/options.json`** — saved option sets, written atomically.
 - **`<stateDir>/requests/`** — AI handoff files, when no Claude CLI is on PATH.
 - **`<stateDir>/endpoint.json`** — the ports actually bound, so tooling can find
-  a running instance without guessing.
+  a running instance without guessing. Best-effort: the start screen learns that
+  an editor is up over IPC from the child that bound the ports, so a project
+  folder that refuses the write still starts.
 
 ## Security model
 
@@ -428,7 +497,11 @@ this one. With neither present they print a skip and exit 0, so a bare clone is
 green and a skip never reads as a pass.
 
 The package suite covers its npm-bin entry point, options, selection, shell,
-hydration readiness, and offline source translation.
+hydration readiness, and offline source translation. It also covers the paths
+this tool is judged on and cannot watch itself: the start screen and its folder
+dialog, bundle freshness, whole drag gestures driven through jsdom — pinning the
+value each one records as its "from" — and the two ways a write can fail to
+reach source, which must land in the Prompts tab rather than vanish.
 `test/host-agnostic-cases.mjs` is the decoupling proof: three synthetic hosts
 under `test/fixtures` — a Tailwind v4 app whose `@theme` namespaces are spelled
 differently from this repo's, a Tailwind v3 app with a classic config scale and
@@ -445,13 +518,14 @@ Ports and the API prefix come from the launcher's `endpoint.json`.
 ## Layout
 
 ```
-cli.mjs                     argv contract and entry point
+cli.mjs                     argv contract, entry point, and the app supervisor
 config.mjs                  defaults, discovery, resolution, browser prelude
 build.mjs                   bundles src/ into dist/design-editor.js and dist/tokens.mjs
 runtime/start-screen.mjs    the loopback server behind the no-arguments flow
 runtime/start-screen-page.mjs   its document, and the script that drives it
 runtime/start-screen-style.mjs  its stylesheet, built from the editor's tokens
 runtime/local-apps.mjs      port scan, project inspection, folder listing
+runtime/folder-dialog.mjs   the machine's own folder picker, one entry per platform
 runtime/launcher.mjs        vendor resolution, monkey-patches, route mount
 runtime/vendor-patch.mjs    the 23 splices against react-rewrite-cli 0.1.1
 server/design-system-config.mjs token manifest and authored-alias normalization
