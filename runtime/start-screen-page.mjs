@@ -148,13 +148,35 @@ function appRow(app) {
   return row
 }
 
+/*
+ * The row says nothing about where its source is, so whatever folder is in the
+ * field belongs to the app that was picked before it. Left standing, Start is
+ * enabled and the editor boots pointed at THIS server with THAT app's source
+ * tree — every edit written into the wrong project. Clearing it costs a trip to
+ * the picker; leaving it costs the other project.
+ *
+ * The sentence is only said when something was actually taken away. A field
+ * that was already empty is the ordinary first-load state, and the hint under
+ * the button already asks for the folder.
+ */
+function forgetProject(app) {
+  const had = root !== null || el.path.value.trim() !== ""
+  root = null
+  devScript = null
+  el.path.value = ""
+  if (had) show(el.folderError, "The editor cannot work out where " + app.title + " keeps its source. Choose its folder.")
+}
+
 async function chooseApp(app) {
   clearErrors()
-  el.url.value = app.url
+  // A path in the field is the page the user asked for, and it is theirs to
+  // keep as long as it is a page of the app being clicked. Row to row it is a
+  // page of the app they just left, so it goes with the origin.
+  if (matchedApp() !== app) el.url.value = app.url
   if (app.projectRoot) {
     const data = await askServer("/api/project?path=" + encodeURIComponent(app.projectRoot), el.folderError)
     if (data) adoptProject(data.project)
-  }
+  } else forgetProject(app)
   render()
 }
 

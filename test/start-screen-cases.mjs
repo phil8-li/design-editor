@@ -32,6 +32,8 @@ import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 
+import { JSDOM } from "jsdom"
+
 import { folderDialog } from "../runtime/folder-dialog.mjs"
 import {
   DEFAULT_SCAN_PORTS,
@@ -40,6 +42,7 @@ import {
   projectRootFromPage,
   scanLocalApps,
 } from "../runtime/local-apps.mjs"
+import { startScreenPage } from "../runtime/start-screen-page.mjs"
 import { PREFERRED_START_SCREEN_PORT, createStartScreen } from "../runtime/start-screen.mjs"
 
 let passed = 0
@@ -673,6 +676,225 @@ await check("the screen prefers one port, and steps aside when it is taken", asy
   const port = Number(new URL(preferred.url).port)
   preferred.close()
   assert.equal(port, PREFERRED_START_SCREEN_PORT)
+})
+
+console.log("\nThe page you asked for")
+
+/*
+ * The chooser is where you say which app AND which page, and only the first
+ * half used to survive: `http://127.0.0.1:3000/ds` started the right editor and
+ * landed the browser on the app's "/".
+ *
+ * The path never reaches the child, and it should not — the proxy serves the
+ * whole app, so one page is the same process on a different address. It has to
+ * survive from the press to the moment the page is told where to go, which is
+ * `/api/status` and nowhere else.
+ */
+async function withScreen(run) {
+  const screen = await createStartScreen({ host: "127.0.0.1", port: 0, log: () => {} })
+  const press = (url) =>
+    json(`${screen.url}/api/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url, projectRoot: project, devScript: null }),
+    })
+  const status = async () => (await json(`${screen.url}/api/status`)).body
+  try {
+    await run({ screen, press, status })
+  } finally {
+    screen.close()
+  }
+}
+
+await check("the page the address named is the page the browser is sent to", async () => {
+  await withScreen(async ({ screen, press, status }) => {
+    assert.equal((await press(`http://127.0.0.1:${app.port}/ds`)).status, 200)
+    screen.reportReady("http://127.0.0.1:3456", { appUrl: `http://127.0.0.1:${app.port}` })
+    assert.equal((await status()).url, "http://127.0.0.1:3456/ds")
+    // The app is still the whole app. Only the browser's destination differs,
+    // so what the launcher was handed has to be the origin, unchanged.
+    assert.equal((await screen.chosen).appUrl, `http://127.0.0.1:${app.port}`)
+    assert.equal((await screen.chosen).appPort, app.port)
+  })
+})
+
+// Every URL this server has ever reported was a bare origin, and the page and
+// the tests alike compare it as a string.
+await check("a choice with no page reports exactly the URL it always did", async () => {
+  for (const typed of [`http://127.0.0.1:${app.port}`, `http://127.0.0.1:${app.port}/`]) {
+    await withScreen(async ({ screen, press, status }) => {
+      assert.equal((await press(typed)).status, 200)
+      screen.reportReady("http://127.0.0.1:3456")
+      assert.equal((await status()).url, "http://127.0.0.1:3456")
+    })
+  }
+})
+
+// A query string is how a page says which of itself to show. A fragment is not
+// sent to a server at all, and nothing downstream of here could act on one.
+await check("a query string is part of the page; a fragment is not", async () => {
+  await withScreen(async ({ screen, press, status }) => {
+    assert.equal((await press(`http://127.0.0.1:${app.port}/ds?theme=dark#row-4`)).status, 200)
+    screen.reportReady("http://127.0.0.1:3456")
+    assert.equal((await status()).url, "http://127.0.0.1:3456/ds?theme=dark")
+  })
+})
+
+// The endpoint file is the other way readiness arrives, on the runs where the
+// launcher is a separate process. It names a port, never a page.
+await check("the page is on the end of the endpoint file's URL too", async () => {
+  await withScreen(async ({ screen, press, status }) => {
+    const file = path.join(fixture("state"), "endpoint.json")
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid, proxyPort: 4312 }))
+    screen.reportEndpointFile(file)
+    assert.equal((await press(`http://127.0.0.1:${app.port}/ds`)).status, 200)
+    assert.equal((await status()).url, "http://127.0.0.1:4312/ds")
+  })
+})
+
+/*
+ * A switch lands the new proxy on the very port the old one had, so the page is
+ * the only thing left that could tell the two apart — and a remembered one from
+ * the app before would send the browser to a page this app may not have.
+ */
+await check("the next app's page replaces the last one's", async () => {
+  await withScreen(async ({ screen, press, status }) => {
+    await press(`http://127.0.0.1:${app.port}/ds`)
+    screen.reportReady("http://127.0.0.1:3456")
+    assert.equal((await status()).url, "http://127.0.0.1:3456/ds")
+
+    screen.nextChoice()
+    await press(`http://127.0.0.1:${app.port}`)
+    // Cleared with the URL it belonged to, before the new editor answers.
+    assert.equal((await status()).ready, false)
+    screen.reportReady("http://127.0.0.1:3456")
+    assert.equal((await status()).url, "http://127.0.0.1:3456")
+  })
+})
+
+await check("a page does not outlive the editor it belonged to", async () => {
+  await withScreen(async ({ screen, press, status }) => {
+    await press(`http://127.0.0.1:${app.port}/ds`)
+    screen.reportReady("http://127.0.0.1:3456")
+    screen.reportStopped("The editor for fixture-app stopped with code 1.")
+    assert.equal((await status()).ready, false)
+    // Whatever comes up next is not the app that asked for /ds.
+    screen.reportReady("http://127.0.0.1:3456")
+    assert.equal((await status()).url, "http://127.0.0.1:3456")
+  })
+})
+
+console.log("\nPicking a row")
+
+/*
+ * The page's own script, over the page's own markup, with the loopback routes
+ * answered from a table.
+ *
+ * Which folder a row leaves behind is a decision the page makes and the server
+ * never sees, so this is the only place it can be pinned. The routes are canned
+ * rather than served because the row that matters is the one a real machine has
+ * to be coaxed into producing: an app whose source folder nobody can work out.
+ */
+const CLIENT = /<script type="module">([\s\S]*)<\/script>/.exec(startScreenPage())[1]
+
+async function mountPage(apps, projects) {
+  const dom = new JSDOM(startScreenPage(), { runScripts: "outside-only", url: "http://127.0.0.1:3455/" })
+  dom.window.fetch = async (target) => {
+    const url = new URL(target, "http://127.0.0.1:3455")
+    const body =
+      url.pathname === "/api/status"
+        ? { ready: false, editing: null, stopped: null }
+        : url.pathname === "/api/apps"
+          ? { apps }
+          : url.pathname === "/api/project"
+            ? { project: projects[url.searchParams.get("path")] }
+            : null
+    return { ok: body !== null, status: body === null ? 404 : 200, json: async () => body }
+  }
+  dom.window.eval(CLIENT)
+  // `boot()` is several awaits deep before the first row is on screen.
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  return dom
+}
+
+/** What `describeProject` would say about a folder that is fine. */
+const projectSaid = (dir) => ({
+  path: dir,
+  name: path.basename(dir),
+  exists: true,
+  isDirectory: true,
+  hasPackageJson: true,
+  packageName: path.basename(dir),
+  hasReact: true,
+  devScripts: ["dev"],
+  framework: "nextjs",
+})
+
+const KNOWN = "/Users/someone/Projects/Workspaces app"
+const ROWS = [
+  { port: 3000, url: "http://127.0.0.1:3000", title: "Workspaces", projectRoot: KNOWN, packageName: "workspaces" },
+  // The 500 page a broken dev server serves carries no absolute path, and the
+  // same machine refuses `lsof -d cwd` for its owner's processes. Between them
+  // there is nothing left to work the folder out from.
+  { port: 3001, url: "http://127.0.0.1:3001", title: "127.0.0.1:3001", projectRoot: null, packageName: null },
+]
+
+/*
+ * The dangerous one. Picking the second row used to leave the first row's
+ * folder standing, so Start was enabled with THIS server and THAT app's source
+ * tree — every edit written into the wrong project.
+ */
+await check("a row whose folder is unknown never inherits the last row's", async () => {
+  const dom = await mountPage(ROWS, { [KNOWN]: projectSaid(KNOWN) })
+  try {
+    const $ = (id) => dom.window.document.getElementById(id)
+    const rows = [...$("apps").children]
+    assert.equal(rows.length, 2)
+
+    rows[0].click()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal($("url").value, "http://127.0.0.1:3000")
+    assert.equal($("folder-path").value, KNOWN)
+    assert.equal($("submit").disabled, false)
+
+    rows[1].click()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal($("url").value, "http://127.0.0.1:3001")
+    assert.equal($("folder-path").value, "", "the other app's source tree is still in the field")
+    assert.equal($("submit").disabled, true)
+    // Said plainly, where the field it emptied is, rather than left to be noticed.
+    assert.equal($("folder-error").hidden, false)
+    assert.match($("folder-error").textContent, /could not|cannot/i)
+    assert.match($("folder-error").textContent, /3001/)
+
+    // And back: the row that does know its folder fills it in again.
+    rows[0].click()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal($("folder-path").value, KNOWN)
+    assert.equal($("folder-error").hidden, true)
+  } finally {
+    dom.window.close()
+  }
+})
+
+// A path in the field is the page the user asked for, and picking the row it
+// already belongs to must not throw it away.
+await check("clicking the row you are already on keeps the page you typed", async () => {
+  const dom = await mountPage(ROWS, { [KNOWN]: projectSaid(KNOWN) })
+  try {
+    const $ = (id) => dom.window.document.getElementById(id)
+    $("url").value = "http://127.0.0.1:3000/ds?theme=dark"
+    ;[...$("apps").children][0].click()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal($("url").value, "http://127.0.0.1:3000/ds?theme=dark")
+
+    // A different row is a different app, so the page goes with the origin.
+    ;[...$("apps").children][1].click()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal($("url").value, "http://127.0.0.1:3001")
+  } finally {
+    dom.window.close()
+  }
 })
 
 app.close()
