@@ -11,20 +11,28 @@
  *    rather than as the port timeout it would otherwise look like 60s later;
  *  - `--dev-script` implies `--dev`, and the CLI still refuses every flag it
  *    does not declare — the vendor's commander aborts on anything that leaks
- *    through, so an accepted-but-ignored flag is a broken launch.
+ *    through, so an accepted-but-ignored flag is a broken launch;
+ *  - an app that answers 500 is an app that is running. The vendor's health
+ *    check disagrees, so these run the vendor's own `healthCheck` against real
+ *    listeners to pin both halves: a broken app is attachable, a dead port is
+ *    still dead.
  *
  * Usage: node design-editor/test/dev-flow-cases.mjs
  */
 
 import assert from "node:assert/strict"
 import fs from "node:fs"
+import http from "node:http"
 import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 
+import { healthCheck } from "react-rewrite-cli/dist/detect.js"
+
 import { parseArgs } from "../cli.mjs"
 import { DEFAULT_CONFIG } from "../config.mjs"
 import { ensureAppRunning, probePort } from "../runtime/dev-server.mjs"
+import { acceptErroringDevServer } from "../runtime/launcher.mjs"
 
 let passed = 0
 let failed = 0
@@ -46,6 +54,24 @@ function listen() {
     const server = net.createServer((socket) => socket.end())
     server.listen(0, "127.0.0.1", () => resolve({ server, port: server.address().port }))
   })
+}
+
+/** A listener standing in for an app, answering every request the same way. */
+function serve(status, body) {
+  return new Promise((resolve) => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(status, { "content-type": "text/html" })
+      res.end(body)
+    })
+    server.listen(0, "127.0.0.1", () => resolve({ server, port: server.address().port }))
+  })
+}
+
+/** A port that answered once and does not any more. */
+async function deadPort() {
+  const { server, port } = await listen()
+  await new Promise((resolve) => server.close(resolve))
+  return port
 }
 
 const quiet = () => {}
@@ -146,6 +172,87 @@ await check("a dev script that exits is reported as such, not as a timeout", asy
   } finally {
     fs.rmSync(fixture, { recursive: true, force: true })
   }
+})
+
+console.log("\nAttaching to an app that is throwing")
+
+await check("the vendor alone walks away from a dev server that answers 500", async () => {
+  const { server, port } = await serve(500, "<html><body>Turbopack error</body></html>")
+  try {
+    await assert.rejects(healthCheck(port, "127.0.0.1"), /No dev server found on 127\.0\.0\.1/)
+  } finally {
+    server.close()
+  }
+})
+
+await check("with the patch, a 500 is a server that was found", async () => {
+  const { server, port } = await serve(500, "<html><body>Turbopack error</body></html>")
+  const restore = acceptErroringDevServer("127.0.0.1", port)
+  try {
+    await healthCheck(port, "127.0.0.1")
+  } finally {
+    restore()
+    server.close()
+  }
+})
+
+await check("a port with nothing on it is still a port with nothing on it", async () => {
+  const port = await deadPort()
+  const restore = acceptErroringDevServer("127.0.0.1", port)
+  try {
+    await assert.rejects(fetch(`http://127.0.0.1:${port}`))
+    await assert.rejects(healthCheck(port, "127.0.0.1"), /No dev server found on 127\.0\.0\.1/)
+  } finally {
+    restore()
+  }
+})
+
+await check("a healthy app is handed back exactly as it came", async () => {
+  const { server, port } = await serve(200, "<html><body>fine</body></html>")
+  const restore = acceptErroringDevServer("127.0.0.1", port)
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}`)
+    assert.ok(response instanceof Response)
+    assert.equal(response.ok, true)
+    assert.equal(await response.text(), "<html><body>fine</body></html>")
+  } finally {
+    restore()
+    server.close()
+  }
+})
+
+// The window belongs to one origin root. Another app's 500, and this app's own
+// 500 on any other path, are somebody else's business.
+await check("nothing else fetched during the window is touched", async () => {
+  const root = await serve(500, "<html><body>Turbopack error</body></html>")
+  const other = await serve(500, "<html><body>someone else</body></html>")
+  const restore = acceptErroringDevServer("127.0.0.1", root.port)
+  try {
+    for (const url of [
+      `http://127.0.0.1:${other.port}`,
+      `http://127.0.0.1:${root.port}/api/things`,
+    ]) {
+      const response = await fetch(url)
+      assert.ok(response instanceof Response, url)
+      assert.equal(response.ok, false, url)
+      assert.equal(response.status, 500, url)
+    }
+  } finally {
+    restore()
+    root.server.close()
+    other.server.close()
+  }
+})
+
+await check("the window closes and leaves the original fetch behind", async () => {
+  const original = globalThis.fetch
+  const restore = acceptErroringDevServer("127.0.0.1", 4321)
+  assert.notEqual(globalThis.fetch, original)
+  restore()
+  assert.equal(globalThis.fetch, original)
+  // Undoing twice is what happens when a launch binds more than one port.
+  restore()
+  assert.equal(globalThis.fetch, original)
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)
