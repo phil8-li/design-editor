@@ -1,11 +1,12 @@
 /**
- * Runtime launcher: five monkey-patches over `react-rewrite-cli@0.1.1`, the
+ * Runtime launcher: six monkey-patches over `react-rewrite-cli@0.1.1`, the
  * overlay+chrome concatenation, and the loopback route mount.
  *
  * The patches fix defects in the pinned vendor build — an unauthenticated
  * all-interfaces bind, a `content-length` + `transfer-encoding` conflict
- * browsers reject, and React 19's percent-encoded owner-stack paths. None of
- * them know anything about the host app, so they ship verbatim.
+ * browsers reject, React 19's percent-encoded owner-stack paths, and a health
+ * check that walks away from a dev server whose app is throwing. None of them
+ * know anything about the host app, so they ship verbatim.
  *
  * Everything that DID know about one host is now read from the resolved config:
  * the project root, the ports, the API prefix, and the chrome selectors handed
@@ -48,6 +49,63 @@ function isLoopbackOrigin(value) {
     return host === "localhost" || host === "127.0.0.1" || host === "::1"
   } catch {
     return false
+  }
+}
+
+/** The absolute URL a `fetch` argument names, or null when it names none. */
+function requestedUrl(input) {
+  const value =
+    typeof input === "string" ? input : input instanceof URL ? input.href : input?.url
+  try {
+    return new URL(value).href
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Lets the vendor's health check attach to a dev server that answers 500.
+ *
+ * `healthCheck` in the pinned build accepts a response only when
+ * `response.ok || response.status < 500`, and otherwise reports "No dev server
+ * found". That conflates two different facts about the world: a server nothing
+ * can reach, and a server that was reached and spoke HTTP and said something
+ * the vendor dislikes. The second one has plainly been found — and an app
+ * throwing on every render is exactly when a designer wants the editor open,
+ * because the error overlay is the thing they are trying to look at.
+ *
+ * `globalThis.fetch` is the only seam: the vendor's `healthCheck` is an ESM
+ * live binding, read-only from out here. So the patch is kept as narrow as the
+ * defect. Only a response to THIS launch's dev server root is reinterpreted,
+ * only when the server really answered, and only its verdict — no body and no
+ * status is invented, so a refused connection, a DNS failure and a timeout all
+ * still reject and a port with nothing on it is still reported as empty.
+ *
+ * Returns the undo, which the caller owes the proxy: the proxy polls the same
+ * origin to decide whether the app came back, and it must see a 500 as a 500.
+ */
+export function acceptErroringDevServer(host, appPort) {
+  // Without a port there is no origin to be narrow about — the vendor is about
+  // to guess one from its framework detection, and guessing alongside it would
+  // put this patch on some other server's traffic.
+  if (!appPort) return () => {}
+
+  const root = new URL(`http://${host || "localhost"}:${appPort}`).href
+  const originalFetch = globalThis.fetch
+
+  const patched = async (input, ...rest) => {
+    const response = await originalFetch(input, ...rest)
+    if (response.status < 500 || requestedUrl(input) !== root) return response
+    // Deliberately not a Response. The vendor reads `.ok` and `.status` and
+    // discards the rest, and handing back a synthesized 200 would claim a page
+    // the server never sent. This says only what was learned: reached, and
+    // still broken.
+    return { ok: true, status: response.status }
+  }
+
+  globalThis.fetch = patched
+  return () => {
+    if (globalThis.fetch === patched) globalThis.fetch = originalFetch
   }
 }
 
@@ -395,6 +453,8 @@ export async function launch(config, { appPort, host, open, verbose = false, onR
     return originalWriteHead.call(this, statusCode, ...args)
   }
 
+  const restoreFetch = acceptErroringDevServer(host, appPort)
+
   function configuredPort(port) {
     if (config.ports.ws !== "auto" && port === VENDOR_WS_PORT) return config.ports.ws
     if (config.ports.proxy !== "auto" && port === VENDOR_PROXY_PORT) return config.ports.proxy
@@ -433,6 +493,10 @@ export async function launch(config, { appPort, host, open, verbose = false, onR
   // and WebSocket to every interface. Keep both servers local until upstream adds
   // an authenticated, loopback-only binding option.
   net.Server.prototype.listen = function listenOnLoopback(...args) {
+    // The vendor binds nothing until its health check has returned, so the
+    // first bind of the run is where that window closes. Everything past it —
+    // the proxy above all — gets the unpatched fetch back.
+    restoreFetch()
     recordBoundPort(this)
 
     if (typeof args[0] === "number") {
