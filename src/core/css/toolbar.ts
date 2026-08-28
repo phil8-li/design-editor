@@ -59,14 +59,20 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
  * to it is a bare square — nothing has to be drawn between those two for the
  * eye to see the break. Space says it.
  *
- * The one seam space cannot carry alone is the second, where two icon squares
- * meet two more. Four identical squares in a row read as one run of four however
- * the gaps are set, because likeness groups faster than distance separates. That
+ * The one seam space cannot carry alone is the one where two icon squares meet
+ * two more. Four identical squares in a row read as one run of four however the
+ * gaps are set, because likeness groups faster than distance separates. That
  * seam keeps a single hairline, and it is inset to half the button's height so
  * it parts the glyphs without slicing the pill in two.
+ *
+ * The seam is NAMED by the group that needs it rather than counted to. It used
+ * to be "the third group and any after it", which was true while the bar always
+ * had exactly three; the chooser link arrives as a fourth at the FRONT, and a
+ * positional rule would have answered that by drawing a second hairline in a
+ * place nobody asked for one.
  */
 .de-toolbar-group + .de-toolbar-group { margin-left: 8px; }
-.de-toolbar-group + .de-toolbar-group + .de-toolbar-group::before {
+.de-toolbar-group--seam::before {
   content: "";
   width: 1px;
   height: ${TOOL / 2}px;
@@ -175,6 +181,14 @@ export const toolbarCss = `/* ---------- toolbar ---------- */
 .de-button[aria-pressed="true"]:hover { box-shadow: inset 0 0 0 2px ${t.color.accent}; }
 .de-button[disabled] { opacity: 0.4; cursor: default; background: ${t.color.bgRaised}; }
 .de-button:focus-visible { outline: 2px solid ${t.color.accent}; outline-offset: 1px; }
+
+/*
+ * The chooser link wears the plain pill, and has to be told twice that it is not
+ * a link: an anchor arrives underlined and in the user agent's own link colour,
+ * both of which would make the one control in this strip that leaves the page
+ * look like a stray piece of the app that had got into the chrome.
+ */
+.de-toolbar a.de-button { text-decoration: none; color: ${t.color.text}; }
 
 /*
  * A button that leads with a glyph pulls its leading padding in by the optical

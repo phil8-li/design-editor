@@ -52,6 +52,29 @@ function isLoopbackOrigin(value) {
 }
 
 /**
+ * The chooser screen this editor was started from, or null when there is none.
+ *
+ * A supervisor that keeps its chooser alive for the whole session sets
+ * `DESIGN_EDITOR_CHOOSER_URL` on the editor process, and that is the ONLY way
+ * this value arrives. Started any other way — a plain `node cli.mjs 3000`, or
+ * `--dev` — there is no second screen in existence, so there is nothing to
+ * guess at and no default worth inventing: the toolbar simply carries no way
+ * back, which is the truth about that session.
+ *
+ * The value ends up as an `href` inside the page, so it is held to the same
+ * rule as every other origin this package accepts: loopback, and http. The
+ * parsed form is what is handed on rather than the raw environment string,
+ * because the URL parser tolerates leading control characters and whitespace
+ * that the injected copy should not carry.
+ */
+export function chooserUrlFromEnv(env = process.env) {
+  const value = env.DESIGN_EDITOR_CHOOSER_URL
+  if (!isLoopbackOrigin(value)) return null
+  const url = new URL(value)
+  return url.protocol === "http:" ? url.href : null
+}
+
+/**
  * Prefers the HOST's copy of the vendor, so an app that already pins
  * `react-rewrite-cli` wins over the one installed beside this package. The 22
  * splices are only valid against 0.1.1 either way, which is why the dependency
@@ -277,7 +300,15 @@ export async function launch(config, { appPort, host, open, verbose = false, onR
   const originalWebSocketOn = WebSocket.prototype.on
   const originalHandleUpgrade = WebSocketServer.prototype.handleUpgrade
 
-  const runtime = { appPort, proxyPort: null, wsPort: null }
+  // Read once, at launch, and carried in `runtime` beside the ports: the
+  // prelude is rebuilt on every overlay request, and an environment variable
+  // re-read per request could hand two tabs of one session different answers.
+  const runtime = {
+    appPort,
+    proxyPort: null,
+    wsPort: null,
+    chooserUrl: chooserUrlFromEnv(),
+  }
   let patchedOverlay
 
   // Keep the package immutable on disk. The pinned bundle is patched only when

@@ -385,6 +385,16 @@ export function browserPrelude(config, runtime = {}) {
         : null,
     },
     ports: { proxy: runtime.proxyPort ?? null, ws: runtime.wsPort ?? null },
+    // The screen this editor was chosen from, so the chrome can offer a way
+    // back to it. Null for every session that had no such screen, and the
+    // launcher has already refused anything that is not a loopback http URL —
+    // this one is injected into the page and then navigated to, which is a
+    // stronger claim than the rest of this payload makes.
+    //
+    // A URL is all that crosses. Nothing about the host's own files does: the
+    // prelude has never named a source path, and the chooser knowing which
+    // folder it started is not a reason for the browser to.
+    chooserUrl: typeof runtime.chooserUrl === "string" ? runtime.chooserUrl : null,
   }
 
   return `window.__DESIGN_EDITOR_CONFIG__=${JSON.stringify(payload)};${wsPortPin(runtime.wsPort)}`
