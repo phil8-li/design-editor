@@ -81,6 +81,17 @@ await check("--dev is documented", () => {
   assert.match(usage, /^ {2}--dev-script <name>/m)
 })
 
+// The two flags the supervisor puts on its children's command lines. A child
+// cannot read its own working directory when the project is somewhere macOS
+// protects, so `--project-root` is the only way it learns which project it is.
+await check("the supervisor's flags are taken, and documented like the rest", () => {
+  assert.equal(parseArgs(["--project-root", "/tmp/app"]).projectRoot, "/tmp/app")
+  assert.equal(parseArgs(["--start-screen-port", "3455"]).startScreenPort, 3455)
+  const usage = fs.readFileSync(new URL("../cli.mjs", import.meta.url), "utf8")
+  assert.match(usage, /^ {2}--project-root <path> {3}Project the config loads against/m)
+  assert.match(usage, /^ {2}--start-screen-port <n> Port for the start screen/m)
+})
+
 console.log("\nAttaching")
 
 await check("attaches to a port that already answers, and starts nothing", async () => {

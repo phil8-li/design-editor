@@ -7,11 +7,18 @@
  * scope with commander and aborts on anything it does not declare, so argv is
  * rewritten into exactly its shape before it is imported — that reshape is what
  * makes first-party flags possible at all.
+ *
+ * With the start screen, this command runs in one of two roles. The SUPERVISOR
+ * owns the chooser for the whole session and never boots an editor itself; each
+ * app the user picks is a CHILD of it, started by re-running this same file with
+ * `--no-start` and a port. The two are the same code because they are the same
+ * command; `wantsStartScreen` is the whole fork.
  */
 
 import net from "node:net"
 import fs from "node:fs"
 import path from "node:path"
+import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { loadConfig } from "./config.mjs"
@@ -29,6 +36,8 @@ const USAGE = `Usage: design-editor [appPort] [options]
   --dev                   Start the app's dev server too, and attach when it is up
   --dev-script <name>     npm script --dev runs (default: config app.devScript, "dev")
   --config <path>         Config file (default: nearest design-editor.config.mjs above cwd)
+  --project-root <path>   Project the config loads against (default: the current folder)
+  --start-screen-port <n> Port for the start screen (default: 3455, else any free port)
   --proxy-port <n>        Port for the editing proxy the browser loads
   --ws-port <n>           Port for the source-edit WebSocket
   --host <host>           Dev server host (default: 127.0.0.1)
@@ -37,6 +46,9 @@ const USAGE = `Usage: design-editor [appPort] [options]
   --print-config          Print the resolved config as JSON, then exit
   --help
 `
+
+/** This file, as the supervisor has to name it when it re-runs it as a child. */
+const CLI_PATH = fileURLToPath(import.meta.url)
 
 /**
  * The port `--dev` starts the app on when neither the flag nor the config names
@@ -66,6 +78,8 @@ export function parseArgs(argv) {
     }
 
     if (arg === "--config") options.configPath = next()
+    else if (arg === "--project-root") options.projectRoot = next()
+    else if (arg === "--start-screen-port") options.startScreenPort = Number(next())
     else if (arg === "--dev") options.dev = true
     // Naming the script is asking for it to be run, so it implies the flag.
     else if (arg === "--dev-script") {
@@ -134,7 +148,18 @@ export async function main(argv = process.argv.slice(2)) {
     app: { port: options.appPort, host: options.host, open: options.open },
     ports: { proxy: options.proxyPort, ws: options.wsPort },
   }
-  let config = await loadConfig({ configPath: options.configPath, overrides })
+  /*
+   * `--project-root` rather than a working directory. A child spawned with
+   * `cwd: projectRoot` cannot read its own cwd back when that folder is one
+   * macOS protects — `chdir` succeeds and every later `process.cwd()` fails
+   * with EPERM — so the root travels as an argument the child never has to ask
+   * the OS about.
+   */
+  const config = await loadConfig({
+    cwd: options.projectRoot,
+    configPath: options.configPath,
+    overrides,
+  })
 
   if (options.printConfig) {
     process.stdout.write(`${JSON.stringify(config, null, 2)}\n`)
@@ -155,31 +180,18 @@ export async function main(argv = process.argv.slice(2)) {
     return
   }
 
-  // With `--dev` the port can no longer be left to the vendor's framework
-  // detection: a dev server has to be told one before it can be asked.
-  let appPort = options.appPort ?? config.app.port ?? (options.dev ? DEFAULT_APP_PORT : null)
-  let devScript = options.dev ? options.devScript ?? config.app.devScript : null
-
   /*
    * The start screen answers the three questions this command used to require
    * on the line — which app, which folder, and whether to start it — from a
-   * page, before anything else has bound a port. Its choice can name a project
-   * anywhere on the machine, so the config is loaded a second time against THAT
-   * root: the first load only ever saw the directory the command was run in.
+   * page, before anything else has bound a port. Answering them is a job of its
+   * own: nothing below this line runs in the process that serves it.
    */
-  const screen = wantsStartScreen(options, config) ? await createStartScreen() : null
-  if (screen) {
-    holdUntilExit(screen.close)
-    console.log(`[design-editor] open ${screen.url} to choose an app`)
-    openBrowser(screen.url)
+  if (wantsStartScreen(options, config)) return supervise(options)
 
-    const choice = await screen.chosen
-    config = await loadConfig({ cwd: choice.projectRoot, configPath: options.configPath, overrides })
-    appPort = choice.appPort
-    devScript = choice.devScript
-    // How the page learns the proxy is up and where to send the browser next.
-    screen.reportEndpointFile(config.endpointFile)
-  }
+  // With `--dev` the port can no longer be left to the vendor's framework
+  // detection: a dev server has to be told one before it can be asked.
+  const appPort = options.appPort ?? config.app.port ?? (options.dev ? DEFAULT_APP_PORT : null)
+  const devScript = options.dev ? options.devScript ?? config.app.devScript : null
 
   for (const [port, label] of [
     [config.ports.ws, "WebSocket"],
@@ -209,13 +221,130 @@ export async function main(argv = process.argv.slice(2)) {
   await launch(config, {
     appPort,
     host: config.app.host,
-    // The browser is already on the start screen, which polls for the proxy and
-    // moves itself. A second window opened underneath it would be the same page
-    // twice, one of them orphaned.
-    open: screen ? false : config.app.open,
+    open: config.app.open,
     verbose: options.verbose,
-    onReady: (url) => screen?.reportReady(url),
+    /*
+     * How a supervised child tells its parent where the editor is. `process.send`
+     * exists only when this process was spawned with an IPC channel, so an
+     * ordinary run passes a function that does nothing.
+     *
+     * IPC rather than the endpoint file: that file is written inside the
+     * project folder, and the write fails outright on the folders macOS
+     * protects — which is where a great many people keep their projects. The
+     * proxy comes up fine there; only the note about it does not.
+     */
+    onReady: (url) => process.send?.({ type: "ready", url }),
   })
+}
+
+/**
+ * The supervisor: the chooser is the session, and each chosen app is a process
+ * under it.
+ *
+ * A fresh process per app is not ceremony. The vendored CLI is a one-shot
+ * `await import(...)` that reads the project root, the source roots, the routes
+ * and the browser prelude at module scope, and it binds 3456/3457 as it goes.
+ * There is no in-process way to point it at a second app, so switching apps
+ * means a second process — and the only honest way to have a chooser that
+ * outlives the choice is for the chooser not to be in that process at all.
+ */
+async function supervise(options) {
+  const screen = await createStartScreen({ port: options.startScreenPort })
+  holdUntilExit(screen.close)
+
+  let running = null
+  // Ctrl+C here is Ctrl+C for the editor too. The child is a process of its
+  // own, so nothing takes it down on the way out unless this line does.
+  holdUntilExit(() => running?.child.kill("SIGTERM"))
+
+  console.log(`[design-editor] open ${screen.url} to choose an app`)
+  if (options.open !== false) openBrowser(screen.url)
+
+  for (;;) {
+    let choice
+    try {
+      choice = await screen.nextChoice()
+    } catch {
+      // `close()` rejects the round nobody answered — the process is exiting.
+      return
+    }
+
+    if (running) {
+      // The editor that is up is about to be replaced, so its exit is expected
+      // and must not be reported to the page as a failure. Waiting for it also
+      // frees 3456 before the next one asks for it.
+      running.replaced = true
+      running.child.kill("SIGTERM")
+      await running.exited
+    }
+    running = startEditor(options, choice, screen)
+  }
+}
+
+/** The argv that turns this command into the single-app child of a supervisor. */
+function childArgv(options, choice) {
+  return [
+    CLI_PATH,
+    "--project-root",
+    choice.projectRoot,
+    // The chooser is the parent's, and there is only one of it.
+    "--no-start",
+    // The tab that pressed Start moves itself to the editor. A window opened
+    // from here would be the same page a second time, one of them orphaned.
+    "--no-open",
+    String(choice.appPort),
+    ...(choice.devScript ? ["--dev-script", choice.devScript] : []),
+    ...(options.proxyPort ? ["--proxy-port", String(options.proxyPort)] : []),
+    ...(options.wsPort ? ["--ws-port", String(options.wsPort)] : []),
+    ...(options.host ? ["--host", options.host] : []),
+    ...(options.configPath ? ["--config", options.configPath] : []),
+    ...(options.verbose ? ["--verbose"] : []),
+  ]
+}
+
+/** The sentence the chooser shows where the editor used to be. */
+function farewell(choice, code, signal) {
+  const name = choice.packageName ?? path.basename(choice.projectRoot)
+  if (signal) return `The editor for ${name} was stopped (${signal}). Choose an app to start again.`
+  if (code === 0) return `The editor for ${name} closed. Choose an app to start again.`
+  return `The editor for ${name} stopped with code ${code}. Its output is in the terminal running design-editor.`
+}
+
+function startEditor(options, choice, screen) {
+  const child = spawn(process.execPath, childArgv(options, choice), {
+    // The child's banner and the app's compile output are what the person in
+    // the terminal came to read, so they stay on the terminal unedited. The
+    // fourth stream is the IPC channel `onReady` answers on.
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
+    // Deliberately no `cwd`. See `--project-root`.
+    env: { ...process.env, DESIGN_EDITOR_CHOOSER_URL: screen.url },
+  })
+
+  const running = { child, replaced: false }
+  child.on("message", (message) => {
+    if (message?.type !== "ready") return
+    screen.reportReady(message.url, {
+      appUrl: choice.appUrl,
+      projectRoot: choice.projectRoot,
+      packageName: choice.packageName,
+    })
+    console.log(`[design-editor] editing at ${message.url} — ${screen.url} to switch apps`)
+  })
+
+  // A child that dies on its own — a crash, a port clash, a project the vendor
+  // refuses — must not take the supervisor with it. The chooser is still up, so
+  // it is where the explanation goes and where the next attempt starts.
+  running.exited = new Promise((resolve) => {
+    child.once("exit", (code, signal) => {
+      if (!running.replaced) {
+        const reason = farewell(choice, code, signal)
+        screen.reportStopped(reason)
+        console.log(`[design-editor] ${reason}`)
+      }
+      resolve()
+    })
+  })
+  return running
 }
 
 /**

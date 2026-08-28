@@ -17,7 +17,11 @@
  *    launch, with a sentence the page can show;
  *  - `ready` means the proxy this process started is up. A stale endpoint file
  *    from a previous run parses perfectly and would redirect the browser to a
- *    dead port, so the pid is what the check is really on.
+ *    dead port, so the pid is what the check is really on;
+ *  - the screen outlives every editor it starts. It used to latch shut on the
+ *    first press, which is what made the whole command a one-way door: the only
+ *    way to design a second app was to kill the process. A second choice being
+ *    accepted is the point of the supervisor, so it is pinned here.
  *
  * Usage: node design-editor/test/start-screen-cases.mjs
  */
@@ -36,7 +40,7 @@ import {
   projectRootFromPage,
   scanLocalApps,
 } from "../runtime/local-apps.mjs"
-import { createStartScreen } from "../runtime/start-screen.mjs"
+import { PREFERRED_START_SCREEN_PORT, createStartScreen } from "../runtime/start-screen.mjs"
 
 let passed = 0
 let failed = 0
@@ -510,9 +514,167 @@ await check("a valid choice resolves the handoff the CLI is waiting on", async (
   assert.equal(choice.projectRoot, project)
   assert.equal(choice.devScript, "dev")
   assert.match(choice.appUrl, new RegExp(`:${app.port}$`))
+  // The supervisor names the running editor on the page, and this is where the
+  // name comes from — the manifest it just read to validate the folder.
+  assert.equal(choice.packageName, "fixture-app")
+})
+
+// The press before this one is still on its way up, and the supervisor has not
+// spawned anything yet. Acting on a second would kill a child the first is
+// waiting on, so it is refused — and refused in words, on the screen.
+await check("a second press before the editor answers is the same press", async () => {
+  const { status, body } = await start({
+    url: `http://127.0.0.1:${app.port}`,
+    projectRoot: project,
+    devScript: "dev",
+  })
+  assert.equal(status, 400)
+  assert.match(body.error, /already starting/i)
 })
 
 screen.close()
+
+console.log("\nSwitching apps")
+
+/*
+ * The whole point of the supervisor. Before it, `/api/start` latched shut on
+ * the first press for the life of the process: the page bounced to the editor
+ * forever, and designing a second app meant Ctrl+C and starting over.
+ */
+await check("a second choice is accepted once the first editor is up", async () => {
+  const second = await pageServer("Second")
+  const screen = await createStartScreen({ host: "127.0.0.1", port: 0, log: () => {} })
+  const press = (port) =>
+    json(`${screen.url}/api/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: `http://127.0.0.1:${port}`, projectRoot: project, devScript: null }),
+    })
+  try {
+    const first = screen.nextChoice()
+    assert.equal((await press(app.port)).status, 200)
+    assert.equal((await first).appPort, app.port)
+
+    // The supervisor's loop: ask again the moment the child is spawned, then
+    // report the URL it answered with.
+    const next = screen.nextChoice()
+    screen.reportReady("http://127.0.0.1:3456", {
+      appUrl: `http://127.0.0.1:${app.port}`,
+      projectRoot: project,
+      packageName: "fixture-app",
+    })
+
+    assert.equal((await press(second.port)).status, 200)
+    const choice = await Promise.race([
+      next,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("the second choice never arrived")), 2000)),
+    ])
+    assert.equal(choice.appPort, second.port)
+    // `chosen` is still the first choice, for the callers that only ever want one.
+    assert.equal((await screen.chosen).appPort, app.port)
+  } finally {
+    screen.close()
+    second.close()
+  }
+})
+
+/*
+ * A switch usually lands the new proxy on the very port the old one had, so a
+ * page that kept the old URL and waited for it to change would follow the
+ * corpse. Accepting a choice is what clears the old editor from the answer.
+ */
+await check("status says what is being edited, and forgets it the moment a switch is asked for", async () => {
+  const screen = await createStartScreen({ host: "127.0.0.1", port: 0, log: () => {} })
+  try {
+    const idle = (await json(`${screen.url}/api/status`)).body
+    assert.deepEqual(idle, { ready: false, editing: null, stopped: null })
+
+    screen.reportReady("http://127.0.0.1:3456", {
+      appUrl: "http://127.0.0.1:3000",
+      projectRoot: project,
+      packageName: "fixture-app",
+    })
+    const running = (await json(`${screen.url}/api/status`)).body
+    assert.equal(running.ready, true)
+    assert.equal(running.url, "http://127.0.0.1:3456")
+    assert.equal(running.editing.appUrl, "http://127.0.0.1:3000")
+    assert.equal(running.editing.packageName, "fixture-app")
+    assert.equal(running.editing.projectRoot, project)
+    assert.equal(running.stopped, null)
+
+    screen.nextChoice()
+    const accepted = await json(`${screen.url}/api/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: `http://127.0.0.1:${app.port}`, projectRoot: project, devScript: null }),
+    })
+    assert.equal(accepted.status, 200)
+    const switching = (await json(`${screen.url}/api/status`)).body
+    assert.equal(switching.ready, false)
+    assert.equal(switching.editing, null)
+  } finally {
+    screen.close()
+  }
+})
+
+// A child that dies on its own must not be a dead terminal. The screen is still
+// up, so it is where the explanation goes and where the next attempt starts.
+await check("an editor that stops clears readiness and leaves a sentence behind", async () => {
+  const screen = await createStartScreen({ host: "127.0.0.1", port: 0, log: () => {} })
+  try {
+    screen.reportReady("http://127.0.0.1:3456", {
+      appUrl: "http://127.0.0.1:3000",
+      projectRoot: project,
+      packageName: "fixture-app",
+    })
+    screen.reportStopped("The editor for fixture-app stopped with code 1.")
+    const { body } = await json(`${screen.url}/api/status`)
+    assert.equal(body.ready, false)
+    assert.equal(body.url, undefined)
+    assert.equal(body.editing, null)
+    assert.match(body.stopped, /stopped with code 1/)
+
+    // And the screen is a chooser again: the round the stopped child closed is
+    // open, so the next press is accepted rather than refused as a double.
+    const next = screen.nextChoice()
+    const { status } = await json(`${screen.url}/api/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: `http://127.0.0.1:${app.port}`, projectRoot: project, devScript: null }),
+    })
+    assert.equal(status, 200)
+    assert.equal((await next).appPort, app.port)
+  } finally {
+    screen.close()
+  }
+})
+
+/*
+ * The URL has to be one the user can come back to, all session, without reading
+ * it off a terminal — so it is a port next to the proxy's rather than whatever
+ * the OS handed out. Preferred, though: something else on 3455 moves the screen
+ * aside instead of stopping the command.
+ */
+await check("the screen prefers one port, and steps aside when it is taken", async () => {
+  const squatter = http.createServer()
+  await new Promise((resolve, reject) => {
+    squatter.once("error", reject)
+    squatter.listen(PREFERRED_START_SCREEN_PORT, "127.0.0.1", resolve)
+  })
+
+  const moved = await createStartScreen({ host: "127.0.0.1", log: () => {} })
+  const movedPort = Number(new URL(moved.url).port)
+  moved.close()
+  assert.notEqual(movedPort, PREFERRED_START_SCREEN_PORT)
+  assert.ok(movedPort > 0)
+
+  await new Promise((resolve) => squatter.close(resolve))
+  const preferred = await createStartScreen({ host: "127.0.0.1", log: () => {} })
+  const port = Number(new URL(preferred.url).port)
+  preferred.close()
+  assert.equal(port, PREFERRED_START_SCREEN_PORT)
+})
+
 app.close()
 for (const dir of temporary) fs.rmSync(dir, { recursive: true, force: true })
 

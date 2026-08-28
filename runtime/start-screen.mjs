@@ -8,6 +8,13 @@
  * `chosen` IS that handoff — the CLI awaits it, then loads that project's
  * config and boots the proxy.
  *
+ * One choice used to be all there was: `/api/start` latched shut after the
+ * first press and the page redirected to the editor forever after, so the only
+ * way to design a different app was to kill the process. The handoff is a
+ * sequence now — `nextChoice()` for each round, `reportReady` and
+ * `reportStopped` for what became of it — and this server outlives every editor
+ * it hands off to.
+ *
  * The page is untrusted input like any other client, so the refusals on
  * `/api/start` are the safety story of the feature, not a formality: this
  * process rewrites source files and proxies whatever origin it is handed. Each
@@ -25,6 +32,21 @@ import { startScreenPage } from "./start-screen-page.mjs"
 
 const LOOPBACK = "127.0.0.1"
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+
+/**
+ * The port the chooser asks for first.
+ *
+ * It used to take whatever the OS handed out, which was fine while the screen
+ * was transient — it existed for one press and then the browser left it. Now it
+ * is the address the user comes back to all session, to see what is running or
+ * to switch apps, so it has to be one they can guess: 3455 sits directly under
+ * the proxy's 3456 and the edit socket's 3457.
+ *
+ * Preferred, not required. Something else on 3455 — a second design-editor, or
+ * an unrelated server — is no reason to refuse to start, so the OS picks
+ * instead and the banner says where it landed.
+ */
+export const PREFERRED_START_SCREEN_PORT = 3455
 // The only body this server accepts is three short strings.
 const MAX_BODY_BYTES = 16 * 1024
 
@@ -189,7 +211,7 @@ function resolveProject(raw) {
     throw badRequest(`${name} does not depend on React, and the editor only edits React components.`)
   }
 
-  return { projectRoot, manifest }
+  return { projectRoot, manifest, packageName: name }
 }
 
 /**
@@ -229,13 +251,35 @@ function readStatus(endpointFile) {
 }
 
 /**
- * Serves the start screen and resolves `chosen` once the user has picked. Port
- * 0 lets the OS choose, which is what the CLI passes: the screen is transient
- * and has no port worth reserving.
+ * One round of the handoff: the promise a caller waits on for the next choice.
+ *
+ * A round is created before anyone asks for it, and the supervisor is usually
+ * still busy spawning the last editor when the next one is made, so nothing may
+ * be attached to it when `close()` rejects it. Marking it handled here keeps
+ * that from surfacing as an unhandled rejection; whoever does await it still
+ * sees the rejection when they get there.
+ */
+function openRound() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  promise.catch(() => {})
+  return { promise, resolve, reject }
+}
+
+/**
+ * Serves the start screen and hands over each choice the user makes.
+ *
+ * The port defaults to the preferred one rather than to 0, because the caller
+ * that matters — the supervisor in cli.mjs — keeps this screen up for the whole
+ * session and prints its URL as somewhere to come back to.
  */
 export async function createStartScreen({
   host = LOOPBACK,
-  port = 0,
+  port = PREFERRED_START_SCREEN_PORT,
   log = console.log,
   // The one route that puts a window on the user's screen, so it is the one
   // piece a test can stand in for rather than drive.
@@ -245,19 +289,23 @@ export async function createStartScreen({
 
   let endpointFile = null
   let readyUrl = null
+  let editing = null
+  let stopped = null
   let picking = false
-  let settled = false
   let closed = false
-  let resolveChoice
-  let rejectChoice
-  const chosen = new Promise((resolve, reject) => {
-    resolveChoice = resolve
-    rejectChoice = reject
-  })
-  // `close()` rejects a choice nobody made. Marking the promise handled keeps
-  // that from surfacing as an unhandled rejection before the CLI reaches its
-  // await; the CLI still sees the rejection when it gets there.
-  chosen.catch(() => {})
+  /*
+   * Per round, not per session.
+   *
+   * The latch this replaces was permanent: one press and `/api/start` refused
+   * everything after it for as long as the process lived. It still has to
+   * refuse a SECOND press in the same round — two presses before the editor
+   * answers are one intention, and acting on both would kill a child the first
+   * press is still waiting on. So it closes on a choice and opens again on the
+   * report of what became of it.
+   */
+  let starting = false
+  let pending = openRound()
+  const chosen = pending.promise
 
   // Read-only and stateless, all of them, except the last — which is the point.
   const routes = {
@@ -298,21 +346,44 @@ export async function createStartScreen({
       if (result.canceled) sendJson(res, 200, { canceled: true })
       else sendJson(res, 200, { canceled: false, project: describeProject(result.path) })
     },
+    /*
+     * What the page needs to decide which face to show: the editor's URL if one
+     * is up, what it is editing so a tab that merely arrived here can be told,
+     * and the sentence explaining an editor that is gone. `ready` and `url`
+     * keep the shape they had when readiness was the only question.
+     */
     "GET /api/status": (_req, res) =>
-      sendJson(res, 200, readyUrl ? { ready: true, url: readyUrl } : readStatus(endpointFile)),
+      sendJson(res, 200, {
+        ...(readyUrl ? { ready: true, url: readyUrl } : readStatus(endpointFile)),
+        editing,
+        stopped,
+      }),
     "POST /api/start": async (req, res) => {
       const body = await readJsonBody(req)
-      // A second press, or a page reloaded mid-boot. The first choice is the one
-      // the CLI is already acting on, and it cannot be taken back.
-      if (settled) throw badRequest("The editor is already starting. This page will move on by itself.")
+      // A second press, or a page reloaded mid-boot. The choice already made is
+      // the one the supervisor is acting on, and it cannot be taken back until
+      // the editor it asked for has either answered or died.
+      if (starting) throw badRequest("The editor is already starting. This page will move on by itself.")
       if (!body) throw badRequest("Choose an app and a project folder before starting.")
       const { appUrl, appPort } = parseAppUrl(body.url)
-      const { projectRoot, manifest } = resolveProject(body.projectRoot)
+      const { projectRoot, manifest, packageName } = resolveProject(body.projectRoot)
       const devScript = resolveDevScript(body.devScript, projectRoot, manifest)
-      const choice = { appUrl, appPort, projectRoot, devScript }
-      settled = true
+      const choice = { appUrl, appPort, projectRoot, devScript, packageName }
+      starting = true
+      /*
+       * Whatever was running is being taken down to make room for this, and the
+       * two can land on the same proxy port — 3456 both times is the normal
+       * case, not the exception. So a page waiting for the NEW editor cannot
+       * tell them apart by URL, and would follow the old one's the instant it
+       * asked. Clearing here is what makes the wait mean the new one.
+       */
+      readyUrl = null
+      editing = null
+      stopped = null
       log(`[design-editor] editing ${choice.appUrl} from ${choice.projectRoot}`)
-      resolveChoice(choice)
+      const round = pending
+      pending = openRound()
+      round.resolve(choice)
       sendJson(res, 200, { ok: true })
     },
   }
@@ -347,14 +418,42 @@ export async function createStartScreen({
     })
   })
 
-  await new Promise((resolve, reject) => {
-    server.once("error", reject)
-    server.listen(port, host, resolve)
-  })
+  function listenOn(candidate) {
+    return new Promise((resolve, reject) => {
+      const onError = (error) => reject(error)
+      server.once("error", onError)
+      server.listen(candidate, host, () => {
+        server.removeListener("error", onError)
+        resolve()
+      })
+    })
+  }
+
+  try {
+    await listenOn(port)
+  } catch (error) {
+    // Only the preferred port steps aside. A port asked for by name is a port
+    // somebody is pointing something else at, so a silent move would be worse
+    // than the refusal.
+    if (error.code !== "EADDRINUSE" || port !== PREFERRED_START_SCREEN_PORT) throw error
+    await listenOn(0)
+  }
 
   return {
     url: `http://${host}:${server.address().port}`,
     chosen,
+
+    /**
+     * The next choice the user makes, whenever they make it.
+     *
+     * `chosen` is the first of these and keeps its own name, because for the
+     * one-app callers that is the entire handoff. The supervisor asks again
+     * after every spawn, which is what keeps this screen answering all session
+     * instead of latching shut on the first press.
+     */
+    nextChoice() {
+      return pending.promise
+    },
 
     /** Where the launcher will write the proxy's ports, once one exists. */
     reportEndpointFile(absolutePath) {
@@ -364,23 +463,41 @@ export async function createStartScreen({
     /**
      * The proxy is up, said in memory rather than through the endpoint file.
      *
-     * The launcher runs in this same process, so the file was never the fact —
-     * only a way of carrying it. And it is a way that can fail: a project
-     * folder the machine will not let this process write to leaves the proxy
-     * running, the page polling, and "Starting the editor…" on screen forever.
-     * Said directly, the page moves on whether or not the disk cooperated.
+     * The file was never the fact — only a way of carrying it, and one that
+     * fails outright when the project folder is somewhere macOS will not let
+     * this process write. That leaves the proxy running, the page polling, and
+     * "Starting the editor…" on screen forever. Said directly, the page moves
+     * on whether or not the disk cooperated.
+     *
+     * `current` is what the editor is editing, for the tab that arrives here
+     * later and has to be told what is already running rather than bounced into
+     * it. Callers with nothing to say about it pass nothing.
      */
-    reportReady(url) {
+    reportReady(url, current = null) {
       readyUrl = url
+      editing = current
+      stopped = null
+      starting = false
+    },
+
+    /**
+     * The editor is gone — it crashed, its port was taken, its project turned
+     * out not to be one. A dead child must not be a dead terminal, so the
+     * screen goes back to being a chooser and carries the sentence explaining
+     * what happened, rather than leaving a page that polls forever for a
+     * process nobody is running.
+     */
+    reportStopped(reason) {
+      readyUrl = null
+      editing = null
+      stopped = reason
+      starting = false
     },
 
     close() {
       if (closed) return
       closed = true
-      if (!settled) {
-        settled = true
-        rejectChoice(new Error("The start screen closed before an app was chosen"))
-      }
+      pending.reject(new Error("The start screen closed before an app was chosen"))
       // The page holds a keep-alive socket open for its status poll, and
       // `close()` alone waits for it — leaving the CLI on a screen nobody is
       // looking at any more.
