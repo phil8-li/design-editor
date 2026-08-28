@@ -167,7 +167,29 @@ function parseAppUrl(value) {
   return {
     appUrl: parsed.origin,
     appPort: Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80),
+    appPath: appPathOf(parsed),
   }
+}
+
+/**
+ * The page half of the address, kept apart from the origin the editor is aimed
+ * at.
+ *
+ * The chooser is where you say which app AND which page, and the two answers
+ * have different destinations: the origin picks the child process, the page
+ * picks where the browser lands on the proxy that child puts up. Nothing about
+ * the child differs by one page — the proxy serves the whole app — so the path
+ * never travels with the choice, only alongside it.
+ *
+ * A bare origin has to stay bare. `pathname` is "/" even for a URL that was
+ * typed without one, and turning `http://127.0.0.1:3456` into
+ * `http://127.0.0.1:3456/` would change every URL this server has ever
+ * reported. The fragment is dropped because it is never sent to a server and
+ * nothing downstream of here could act on it.
+ */
+function appPathOf(parsed) {
+  const page = `${parsed.pathname}${parsed.search}`
+  return page === "/" ? "" : page
 }
 
 /**
@@ -289,6 +311,17 @@ export async function createStartScreen({
 
   let endpointFile = null
   let readyUrl = null
+  /*
+   * The page the last choice asked for, "" for a choice that asked for none.
+   *
+   * It lives here rather than travelling to the launcher because the launcher
+   * has no use for it: the proxy serves the whole app either way. It belongs to
+   * one editor, so it is set as that editor's choice is accepted and dropped
+   * when that editor dies — the same lifecycle as `readyUrl`, for the same
+   * reason. A path outliving its editor would send the next one's browser to a
+   * page the next app may not have.
+   */
+  let readyPath = ""
   let editing = null
   let stopped = null
   let picking = false
@@ -352,12 +385,15 @@ export async function createStartScreen({
      * and the sentence explaining an editor that is gone. `ready` and `url`
      * keep the shape they had when readiness was the only question.
      */
-    "GET /api/status": (_req, res) =>
-      sendJson(res, 200, {
-        ...(readyUrl ? { ready: true, url: readyUrl } : readStatus(endpointFile)),
-        editing,
-        stopped,
-      }),
+    "GET /api/status": (_req, res) => {
+      const proxy = readyUrl ? { ready: true, url: readyUrl } : readStatus(endpointFile)
+      // Both answers name the proxy's origin, and neither knows which page was
+      // asked for — the proxy serves all of them. This is where the two halves
+      // of the typed address are put back together, so the tab that presses
+      // Start and the card's "Open the editor" link both go to the same place.
+      if (proxy.ready) proxy.url += readyPath
+      sendJson(res, 200, { ...proxy, editing, stopped })
+    },
     "POST /api/start": async (req, res) => {
       const body = await readJsonBody(req)
       // A second press, or a page reloaded mid-boot. The choice already made is
@@ -365,7 +401,7 @@ export async function createStartScreen({
       // the editor it asked for has either answered or died.
       if (starting) throw badRequest("The editor is already starting. This page will move on by itself.")
       if (!body) throw badRequest("Choose an app and a project folder before starting.")
-      const { appUrl, appPort } = parseAppUrl(body.url)
+      const { appUrl, appPort, appPath } = parseAppUrl(body.url)
       const { projectRoot, manifest, packageName } = resolveProject(body.projectRoot)
       const devScript = resolveDevScript(body.devScript, projectRoot, manifest)
       const choice = { appUrl, appPort, projectRoot, devScript, packageName }
@@ -378,9 +414,10 @@ export async function createStartScreen({
        * asked. Clearing here is what makes the wait mean the new one.
        */
       readyUrl = null
+      readyPath = appPath
       editing = null
       stopped = null
-      log(`[design-editor] editing ${choice.appUrl} from ${choice.projectRoot}`)
+      log(`[design-editor] editing ${choice.appUrl}${appPath} from ${choice.projectRoot}`)
       const round = pending
       pending = openRound()
       round.resolve(choice)
@@ -489,6 +526,7 @@ export async function createStartScreen({
      */
     reportStopped(reason) {
       readyUrl = null
+      readyPath = ""
       editing = null
       stopped = reason
       starting = false
