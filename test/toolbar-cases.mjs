@@ -12,8 +12,11 @@
  */
 
 import assert from "node:assert/strict"
+import vm from "node:vm"
 import { JSDOM } from "jsdom"
 
+import { browserPrelude, resolveConfig } from "../config.mjs"
+import { chooserUrlFromEnv } from "../runtime/launcher.mjs"
 import { PACKAGE_DIR } from "./host.mjs"
 
 let passed = 0
@@ -642,6 +645,275 @@ check("the toolbar no longer draws it — the Prompts tab does", () => {
   )
   assert.ok(inPanel, "the button left the toolbar without arriving in the panel")
 })
+
+// ── The way back to the chooser ────────────────────────────────────────────
+
+console.log("\nThe chooser link")
+
+/**
+ * A whole second toolbar, built against a prologue of our choosing.
+ *
+ * `core/config.ts` reads `__DESIGN_EDITOR_CONFIG__` ONCE at module load. That
+ * is right for a page whose prologue cannot change its mind mid-session and
+ * useless to a test that needs the bar built both ways, so each answer gets its
+ * own module graph: the registry is keyed by the data: URL, so the bundles have
+ * to differ in their TEXT. `marker` is exported rather than written as a
+ * comment because esbuild drops the comment, and four byte-identical bundles
+ * are one cached module wearing the first lane's config — which passes three of
+ * these cases for entirely the wrong reason. Everything downstream — the store,
+ * the ledger, the toolbar — is that graph's own.
+ *
+ * `globalThis`, not `window`: jsdom's global object and this process's are two
+ * objects, and `config.ts` reads the one the bundle actually runs on.
+ */
+async function toolbarWith(chooserUrl, marker) {
+  globalThis.__DESIGN_EDITOR_CONFIG__ = chooserUrl === null ? undefined : { chooserUrl }
+  const lane = await build({
+    stdin: {
+      contents: `
+        export const marker = ${JSON.stringify(marker)}
+        export { createContext } from "./src/core/context"
+        export { installToolbar } from "./src/shell/toolbar"
+        export { recordPreviewOnly, clearPreviewOnly } from "./src/core/change-prompt"
+      `,
+      resolveDir: PACKAGE_DIR,
+      loader: "ts",
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+    logLevel: "silent",
+  })
+  const module = await import(
+    `data:text/javascript;base64,${Buffer.from(lane.outputFiles[0].text).toString("base64")}`
+  )
+  globalThis.__DESIGN_EDITOR_CONFIG__ = undefined
+
+  const toasts = []
+  let pending = false
+  const bar = slot()
+  const laneBridge = {
+    ...bridge,
+    toast: (message, kind) => toasts.push({ message, kind }),
+    store: { ...bridge.store, hasChanges: () => pending },
+  }
+  module.installToolbar(
+    module.createContext(laneBridge, {
+      overlay: slot(),
+      toolbar: bar,
+      left: slot(),
+      right: slot(),
+    })
+  )
+  return {
+    bar,
+    module,
+    toasts,
+    link: bar.querySelector("a"),
+    setPending: (value) => {
+      pending = value
+    },
+  }
+}
+
+/*
+ * jsdom implements no navigation, and the "Not implemented" it logs when an
+ * anchor is followed is noise rather than a result. Every click in this section
+ * is cancelled at the document — in the BUBBLE phase, so it lands after the
+ * link's own handler has decided and after the reader below has taken the flag
+ * it asserts on.
+ */
+window.document.addEventListener("click", (event) => event.preventDefault())
+
+/** Clicks a link for real and reports whether the link itself held it back. */
+const clickLink = (link, init = {}) => {
+  const event = new window.MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    ...init,
+  })
+  let held = null
+  link.parentElement.addEventListener("click", () => { held = event.defaultPrevented }, { once: true })
+  link.dispatchEvent(event)
+  return held
+}
+
+// The editor takes over the URL the chooser was on, so the way back has to be
+// drawn INSIDE the editor. Most sessions have no chooser behind them, though —
+// a plain `node cli.mjs 3000` has nothing to go back to — and a link to a
+// screen that is not running is worse than no link, because it costs the page
+// to find out.
+check("a session with no chooser behind it carries no way out at all", () => {
+  assert.equal(toolbar.querySelector("a"), null, "the strip grew a link nobody asked for")
+  assert.doesNotMatch(toolbar.textContent, /Choose app/)
+  assert.doesNotMatch(toolbar.textContent, /Leave/)
+})
+
+const chooser = await toolbarWith("http://127.0.0.1:3455", "chooser-loopback")
+
+check("a chooser that is alive is linked, in the same tab, leading the strip", () => {
+  const link = chooser.link
+  assert.ok(link, "no link to the chooser was drawn")
+  // Normalized by the launcher and again here, so the trailing slash is the
+  // form the page is expected to carry.
+  assert.equal(link.getAttribute("href"), "http://127.0.0.1:3455/")
+  // The whole point is to LEAVE the editor. A second tab would leave a stale
+  // overlay running behind the chooser, pinned to an app already moved on from.
+  assert.equal(link.getAttribute("target"), null)
+  assert.equal(link.textContent.trim(), "Choose app")
+  assert.equal(link.getAttribute("aria-label"), "Choose app")
+  assert.ok(link.getAttribute("data-de-tip"), "an icon-free control still needs its hint")
+  // It wears the strip's own pill rather than a shape invented for it.
+  assert.ok(link.classList.contains("de-button"))
+  assert.ok(!link.classList.contains("de-button--primary"), "Apply is the primary action")
+})
+
+// Leaving is not a step in the commit path, and trailing the strip is exactly
+// where it would read as one. It sits ahead of everything instead, because it
+// is the only control here that is one level up from the page.
+check("the link leads the bar and the editing controls keep their own order", () => {
+  const groups = Array.from(chooser.bar.querySelectorAll(".de-toolbar-group"))
+  assert.equal(groups.length, 4, "chooser, mode, panels, commit path")
+  assert.equal(groups.indexOf(chooser.link.closest(".de-toolbar-group")), 0)
+  assert.equal(chooser.bar.firstElementChild, groups[0])
+  assert.equal(groups.indexOf(chooser.bar.querySelector(".de-button--mode").closest(".de-toolbar-group")), 1)
+  assert.equal(groups.indexOf(chooser.bar.querySelector('[aria-label="Undo"]').closest(".de-toolbar-group")), 3)
+})
+
+// The hairline used to be "the third group and any after it". A fourth group at
+// the FRONT would have drawn a second one, between the mode and the panels,
+// which is the one seam the file says air already carries.
+check("the fourth group does not conjure a second hairline", () => {
+  const seams = Array.from(chooser.bar.querySelectorAll(".de-toolbar-group--seam"))
+  assert.equal(seams.length, 1, `expected one seam, saw ${seams.length}`)
+  assert.ok(seams[0].contains(chooser.bar.querySelector('[aria-label="Undo"]')))
+  assert.match(editor.toolbarCss, /\.de-toolbar-group--seam::before/)
+  const hairlines = editor.toolbarCss.match(/\.de-toolbar-group[^{]*::before\s*\{/g) ?? []
+  assert.equal(hairlines.length, 1)
+})
+
+// An anchor arrives underlined and in the user agent's link colour, either of
+// which would read as a piece of the app that had got into the chrome.
+check("the link is not drawn as one", () => {
+  const rule = editor.toolbarCss.match(/\.de-toolbar a\.de-button \{[^}]*\}/s)?.[0]
+  assert.ok(rule, "the anchor rule must exist")
+  assert.match(rule, /text-decoration: none/)
+  assert.match(rule, new RegExp(`color: ${editor.tokens.color.text}`))
+})
+
+check("with nothing pending it goes on the first click", () => {
+  chooser.setPending(false)
+  assert.equal(clickLink(chooser.link), false, "a clean editor held the click back")
+  assert.equal(chooser.link.textContent.trim(), "Choose app")
+})
+
+/*
+ * Unapplied operations exist only in this tab: the engine holds them until
+ * "Apply to code" sends them, and a navigation drops them without a sound. The
+ * control asks once, in place, and names what it would be costing — a dialog
+ * would be a second surface for a question this button can ask itself.
+ */
+check("unapplied changes are named on the first click, not discarded", () => {
+  chooser.setPending(true)
+  assert.equal(clickLink(chooser.link), true, "the first click walked off with the work")
+  assert.equal(chooser.link.textContent.trim(), "Leave anyway?")
+  assert.equal(chooser.link.getAttribute("aria-label"), "Leave anyway?", "the name follows the word")
+  assert.match(chooser.toasts.at(-1).message, /changes you have not applied/)
+  assert.equal(chooser.toasts.at(-1).kind, "error")
+  // Asked and answered: the second click leaves.
+  assert.equal(clickLink(chooser.link), false, "the confirmation confirmed nothing")
+})
+
+const stranded = await toolbarWith("http://localhost:3455/", "chooser-stranded")
+
+/*
+ * The other losable thing is the ledger. A change the writer could not put into
+ * source is on screen and nowhere else, and the Prompts tab is the only copy —
+ * one nobody has taken until they press the button under it.
+ */
+check("prompts nobody has copied are worth asking about too", () => {
+  stranded.module.recordPreviewOnly({
+    filePath: null,
+    componentName: "Hero",
+    tagName: "section",
+    className: "p-4",
+    property: "backdrop-filter",
+    from: "none",
+    to: "blur(4px)",
+  })
+  // A modified click opens a second tab and leaves this one standing, so there
+  // is nothing to lose and nothing to ask about.
+  assert.equal(clickLink(stranded.link, { metaKey: true }), false, "a Cmd-click was held back")
+  assert.equal(stranded.link.textContent.trim(), "Choose app", "a Cmd-click armed the control")
+
+  assert.equal(clickLink(stranded.link), true)
+  assert.match(stranded.toasts.at(-1).message, /prompts you have not copied/)
+  assert.equal(clickLink(stranded.link), false)
+  stranded.module.clearPreviewOnly()
+})
+
+// The launcher is the gate: `DESIGN_EDITOR_CHOOSER_URL` comes from a supervisor
+// on this machine, and what it says ends up as an href in a page that can write
+// source. Loopback and http, or nothing at all.
+check("only a loopback http chooser survives the launcher", () => {
+  assert.equal(
+    chooserUrlFromEnv({ DESIGN_EDITOR_CHOOSER_URL: "http://127.0.0.1:3455" }),
+    "http://127.0.0.1:3455/"
+  )
+  assert.equal(
+    chooserUrlFromEnv({ DESIGN_EDITOR_CHOOSER_URL: "http://localhost:3455/" }),
+    "http://localhost:3455/"
+  )
+  for (const refused of [
+    "https://example.com/",
+    "http://example.com/",
+    "http://127.0.0.1.evil.test/",
+    "https://127.0.0.1:3455/",
+    "javascript:alert(1)",
+    "file:///etc/passwd",
+    "not a url",
+    "",
+  ]) {
+    assert.equal(chooserUrlFromEnv({ DESIGN_EDITOR_CHOOSER_URL: refused }), null, refused)
+  }
+  // Started any other way — `node cli.mjs 3000`, or `--dev` — there is no
+  // chooser in existence and no default worth inventing.
+  assert.equal(chooserUrlFromEnv({}), null)
+})
+
+check("the prelude carries the chooser through, and null when there is none", () => {
+  const host = resolveConfig({}, { cwd: PACKAGE_DIR })
+  const payload = (runtime) => {
+    const sandbox = { window: {} }
+    vm.runInNewContext(browserPrelude(host, runtime), sandbox)
+    return sandbox.window.__DESIGN_EDITOR_CONFIG__
+  }
+  assert.equal(payload({ proxyPort: 4567 }).chooserUrl, null)
+  assert.equal(
+    payload({ proxyPort: 4567, chooserUrl: "http://127.0.0.1:3455/" }).chooserUrl,
+    "http://127.0.0.1:3455/"
+  )
+  // The prelude has never named a host source path and must not start now: the
+  // chooser knowing which folder it launched is not a reason for the browser to.
+  assert.doesNotMatch(JSON.stringify(payload({ proxyPort: 4567 })), /projectRoot|\.tsx|\/Users\//)
+})
+
+// Whatever the prologue says, this string becomes an href — the one value in
+// the payload that turns into a navigation. A stale `dist/`, or a prologue
+// written by something other than this launcher, must not be how a designer
+// ends up off the machine.
+for (const [name, url] of [
+  ["an off-machine origin", "https://example.com/chooser"],
+  ["a javascript: URL", "javascript:alert(1)"],
+]) {
+  const refused = await toolbarWith(url, `chooser-refused-${name}`)
+  check(`${name} in the prologue draws no link at all`, () => {
+    assert.equal(refused.link, null, `the bar linked ${url}`)
+    assert.doesNotMatch(refused.bar.textContent, /Choose app/)
+    assert.equal(refused.bar.querySelectorAll(".de-toolbar-group").length, 3)
+  })
+}
 
 console.log(`\n${passed} passed, ${failed} failed`)
 // Installed DOM listeners intentionally live for the editor session.

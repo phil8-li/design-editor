@@ -38,11 +38,19 @@
  * now sits under the list it copies, in the right panel's Prompts tab, where a
  * count is not the only thing it can tell you.
  *
+ * One thing did arrive, and it is not a tool: the way back to the chooser. The
+ * editor takes over the URL the chooser was on, so a designer who wanted a
+ * different app had no door except the terminal. It is drawn only for the
+ * sessions that have a chooser to go back to, which is why the strip most
+ * people see is unchanged.
+ *
  * The remaining tool state is still mirrored into the vendor engine so its
  * selection mode stays in sync with ours — two sources of truth for "what does a
  * click do" is the fastest way to make a direct-manipulation tool feel broken.
  */
 
+import { previewOnlyChanges } from "../core/change-prompt"
+import { config } from "../core/config"
 import { el } from "../core/dom"
 import { canRedo, canUndo, onHistoryChange, redo, undo } from "../core/history"
 import { icon, type IconName } from "../core/icons"
@@ -101,6 +109,21 @@ function hint(label: string, detail: string): Record<string, string> {
  * in the corner of the eye at `GLYPH`, and a mode told apart by hue alone is not
  * told apart at all.
  */
+/**
+ * The two things the chooser link can say, and how long it stays asking.
+ *
+ * The second string is not a dialog in disguise — it is the same control,
+ * saying what pressing it now means. It reverts on its own, because an armed
+ * button that stayed armed would let a click ten minutes later leave without a
+ * word, which is the exact silence the arming exists to break.
+ */
+const CHOOSER = {
+  label: "Choose app",
+  detail: "Leave the editor and pick another app to design",
+  confirm: "Leave anyway?",
+  armedMs: 6000,
+} as const
+
 const MODES = {
   inspecting: {
     label: "Inspecting",
@@ -293,16 +316,123 @@ export function installToolbar(context: EditorContext): void {
     (next) => context.setState({ inspectorOpen: next })
   )
 
+  /**
+   * The way back to the screen that chose this app — when there is one.
+   *
+   * Once the editor is up, the browser sits on the proxy with the overlay over
+   * the app, and until this control existed that was a one-way door: the URL
+   * that used to show the chooser now shows the editor, so the only way to
+   * design a different app was to kill the process. The supervisor that keeps
+   * a chooser alive for the session says so in `chooserUrl`; every other way of
+   * starting leaves it null and draws nothing, because a link to a screen that
+   * is not running is worse than no link at all.
+   *
+   * An anchor, not a button. This is a real navigation, and an anchor is what
+   * hands the browser back its own vocabulary for one: the target in the status
+   * bar before you commit, Cmd-click for a second tab, and a back button that
+   * works afterwards. None of that survives a click handler on a `<button>`,
+   * and all of it is worth more here than anywhere else in this strip, because
+   * this is the only control that ends the page.
+   *
+   * Same tab by default: the editor is the thing being left. A second tab would
+   * leave a stale overlay running behind the chooser, pinned to an app the
+   * designer has already moved on from, and two live editors is exactly the
+   * confusion this control exists to end.
+   */
+  const chooserLabel = el("span", {}, [CHOOSER.label])
+  let armed = 0
+
+  /**
+   * What leaving would throw away, in words rather than counts.
+   *
+   * Both kinds of work exist only in this tab. The engine holds applied-but-
+   * unsent operations until "Apply to code" commits them, and the ledger in
+   * `change-prompt.ts` holds every change that could NOT be written as a class
+   * — icon swaps, untranslatable properties, and (since the writer learned to
+   * strand them) class lists whose file never resolved. The Prompts tab is the
+   * only copy of that second list, and it is a copy nobody has taken until they
+   * press the button under it. A navigation drops both without a sound, so the
+   * control asks first and says which one it would be costing.
+   */
+  const pendingWork = (): string[] => {
+    const kinds: string[] = []
+    if (bridge.store.hasChanges()) kinds.push("changes you have not applied")
+    if (previewOnlyChanges().length > 0) kinds.push("prompts you have not copied")
+    return kinds
+  }
+
+  const disarm = () => {
+    if (armed === 0) return
+    window.clearTimeout(armed)
+    armed = 0
+    chooserLabel.textContent = CHOOSER.label
+    chooserLink?.setAttribute("aria-label", CHOOSER.label)
+  }
+
+  const chooserLink = config.chooserUrl
+    ? el(
+        "a",
+        {
+          class: "de-button",
+          href: config.chooserUrl,
+          ...hint(CHOOSER.label, CHOOSER.detail),
+          onclick: (event: Event) => {
+            const click = event as MouseEvent
+            // A modified click opens a second tab and leaves this one standing,
+            // so there is nothing to lose and nothing to ask about. Holding one
+            // back would be guarding against a navigation that is not happening.
+            if (click.metaKey || click.ctrlKey || click.shiftKey || click.altKey) return
+            // Armed: this is the second click, so it goes. The timer is dropped
+            // but the flag is left standing — the label must not snap back to
+            // "Choose app" while the page it is drawn on is unloading.
+            if (armed !== 0) {
+              window.clearTimeout(armed)
+              return
+            }
+            const losing = pendingWork()
+            if (losing.length === 0) return
+            click.preventDefault()
+            chooserLabel.textContent = CHOOSER.confirm
+            // The name follows the word, for the reason the mode switch does:
+            // a control that says one thing on screen and another to a screen
+            // reader is two controls.
+            ;(click.currentTarget as HTMLElement).setAttribute("aria-label", CHOOSER.confirm)
+            armed = window.setTimeout(disarm, CHOOSER.armedMs)
+            context.toast(
+              `Leaving loses ${losing.join(" and ")} — click again to leave anyway`,
+              "error"
+            )
+          },
+        },
+        [chooserLabel]
+      )
+    : null
+
   // UI3 keeps one slim, stable strip at the bottom. Selection never moves it.
   //
-  // The mode leads and the commit path closes: read left to right the strip is
-  // "what a click does", then "which surfaces are up", then "what has been done
-  // with them". The mode is first because it is the question every other
-  // control's answer depends on.
+  // The mode leads the EDITING controls and the commit path closes them: read
+  // left to right that run is "what a click does", then "which surfaces are
+  // up", then "what has been done with them". The mode is first among them
+  // because it is the question every other control's answer depends on.
+  //
+  // The chooser link sits outside that reading, ahead of all of it, because it
+  // is not a thing you do to this page — it is the way out of it, one level up
+  // from every other control here. Trailing the strip it would read as the last
+  // step of the commit path, which is the one thing it must not be mistaken for.
+  //
+  // The hairline between clusters is asked for by name rather than counted:
+  // `--seam` marks the one seam air cannot carry, four icon squares meeting in
+  // a row, and a fourth group appearing at the front must not conjure a second
+  // rule somewhere else in the bar.
   slots.toolbar.append(
+    ...(chooserLink ? [el("div", { class: "de-toolbar-group" }, [chooserLink])] : []),
     el("div", { class: "de-toolbar-group" }, [interactiveButton]),
     el("div", { class: "de-toolbar-group" }, [layersToggle.button, inspectorToggle.button]),
-    el("div", { class: "de-toolbar-group" }, [undoButton, redoButton, applyButton])
+    el("div", { class: "de-toolbar-group de-toolbar-group--seam" }, [
+      undoButton,
+      redoButton,
+      applyButton,
+    ])
   )
 
   const syncPressed = () => {

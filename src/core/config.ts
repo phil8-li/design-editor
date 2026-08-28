@@ -104,6 +104,13 @@ export interface DesignSystemCatalog {
 
 export interface DesignEditorConfig {
   apiBase: string
+  /**
+   * The chooser screen this editor was started from, or null when it was not
+   * started from one — which is most sessions. Nothing in the chrome may
+   * invent a value for it: a link to a screen that is not running is worse
+   * than no link, because it takes the designer off the page to find out.
+   */
+  chooserUrl: string | null
   chrome: {
     /** Comma-joined selector list. Empty means the host has no extra dev chrome. */
     trustedSelector: string
@@ -167,6 +174,7 @@ function emptyDesignSystem(
 
 const FALLBACK: DesignEditorConfig = {
   apiBase: "/__design-editor",
+  chooserUrl: null,
   chrome: {
     trustedSelector: "",
     dockedPanel: {
@@ -244,6 +252,30 @@ function readDesignSystem(
   }
 }
 
+/**
+ * The chooser's URL, checked again on this side of the wire.
+ *
+ * The launcher already refuses anything that is not a loopback http URL, so
+ * this is a second pass over a value that should already be clean — and it is
+ * here anyway because this is the ONE string in the payload that becomes a
+ * navigation. Everything else lands in a selector, a class name or a number;
+ * this lands in an `href`, where `javascript:` is code and an off-machine host
+ * is a page that is not the editor's. A bundle served from a stale `dist/`, or
+ * loaded with a prologue written by something other than this package's
+ * launcher, must not be the reason a designer leaves the machine.
+ */
+function readChooserUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  try {
+    const url = new URL(value)
+    if (url.protocol !== "http:") return null
+    const host = url.hostname.replace(/^\[|\]$/g, "")
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" ? url.href : null
+  } catch {
+    return null
+  }
+}
+
 function readIconSet(value: unknown): IconSetConfig {
   if (!isRecord(value)) return FALLBACK.icons
   const attribute = typeof value.attribute === "string" ? value.attribute : ""
@@ -279,6 +311,7 @@ function read(): DesignEditorConfig {
 
   return {
     apiBase: str(raw.apiBase, FALLBACK.apiBase),
+    chooserUrl: readChooserUrl(raw.chooserUrl),
     chrome: {
       // Not `str()`: an empty list is a documented, meaningful answer ("this
       // host has no dev chrome"), so only an absent key falls back. Treating
