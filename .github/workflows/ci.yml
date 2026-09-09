@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ["20.9", "22", "24"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Runs the prepare script, which bundles src/ into dist/.
+      - run: npm ci
+
+      # Proves the committed source and the built bundle agree, and that the
+      # CLI's own argv contract holds.
+      - run: npm run verify
+
+      # No host app exists on a runner, so the four host-pinned suites print a
+      # skip and exit 0 — the same green a contributor sees on a bare clone.
+      - run: npm test

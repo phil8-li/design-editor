@@ -3,6 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "description": "A standalone visual editor for running Next.js development servers.",
+  "license": "MIT",
+  "author": "Haoyang Li",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/phil8-li/design-editor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/phil8-li/design-editor/issues"
+  },
+  "homepage": "https://github.com/phil8-li/design-editor#readme",
+  "keywords": [
+    "nextjs",
+    "tailwindcss",
+    "visual-editor",
+    "design-tools",
+    "devtools",
+    "react"
+  ],
   "type": "module",
   "bin": {
     "design-editor": "./cli.mjs"
@@ -11,6 +29,8 @@
     "./config": "./config.mjs"
   },
   "files": [
+    "LICENSE",
+    "README.md",
     "build.mjs",
     "cli.mjs",
     "config.mjs",
@@ -19,8 +39,7 @@
     "runtime/",
     "server/",
     "src/",
-    "tsconfig.json",
-    "README.md"
+    "tsconfig.json"
   ],
   "engines": {
     "node": ">=20.9.0"

@@ -30,13 +30,13 @@ leaves no trace in your source tree.
 
 ## Install
 
-The package is currently distributed privately. Install the directory or a
-packed tarball as a development dependency; its prepare script builds the
-browser bundle when installing from source.
+The package is not on npm. Install it from source as a development
+dependency; its prepare script builds the browser bundle on install.
 
-1. Install it from a sibling checkout:
+1. Clone it beside your app and install the checkout:
 
    ```sh
+   git clone https://github.com/phil8-li/design-editor.git
    npm i -D ../design-editor
    ```
 
@@ -542,3 +542,20 @@ test/ui-change-cases.mjs    the harness
 `runtime/` is the only part that knows the vendored CLI exists. Everything the
 patches need about your app arrives as resolved config, so replacing the vendor
 later is a change confined to those two files.
+
+## Contributing
+
+Contributions are welcome, and a bare clone is green — the four suites that
+pin a real app's catalog skip themselves when no host app is on disk, so you
+are not expected to supply one. [CONTRIBUTING.md](CONTRIBUTING.md) covers
+setup, what the skips mean, the file that owns what, and how a change is
+expected to be shaped. Participation is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+To report a vulnerability, read [SECURITY.md](SECURITY.md) first — this is a
+development tool with write access to your project by design, so it says what
+counts as one — and report it privately rather than in an issue.
+
+## License
+
+[MIT](LICENSE) © Haoyang Li
