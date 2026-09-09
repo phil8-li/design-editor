@@ -11,8 +11,17 @@ By contributing you agree that your work is licensed under the
 
 ## Getting set up
 
-You need Node >= 20.9 and nothing else. There is no database, no service, and
+You need Node >= 20.19 and nothing else. There is no database, no service, and
 no account.
+
+That floor is the test harness's, not the tool's. `design-editor` itself
+supports Node >= 20.9 and package.json says so; `jsdom`, which the suite runs
+the editor UI under, declares `^20.19.0 || ^22.13.0 || >=24.0.0` because it
+reaches a dependency that `require()`s an ES module. On Node 20.9 through
+20.18 the tool builds and runs fine and `npm test` dies with
+`ERR_REQUIRE_ESM` before the first assertion. CI keeps both promises honest:
+the suite runs on 20.19, 22 and 24, and a separate job builds and verifies the
+tool on 20.9.
 
 ```sh
 git clone https://github.com/phil8-li/design-editor.git
