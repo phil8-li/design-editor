@@ -657,12 +657,19 @@ await check("an editor that stops clears readiness and leaves a sentence behind"
  * it off a terminal — so it is a port next to the proxy's rather than whatever
  * the OS handed out. Preferred, though: something else on 3455 moves the screen
  * aside instead of stopping the command.
+ *
+ * The squatter below plays that "something else". On a machine where the port
+ * is ALREADY spoken for — a corporate SSH agent parked on it is a real case —
+ * the bind fails, and this used to take the suite down with EADDRINUSE while
+ * testing the one behavior that was working perfectly. So a failed bind is now
+ * read as what it is: the contended case, already set up for us. The half that
+ * needs the port free cannot run there, and says so instead of failing.
  */
 await check("the screen prefers one port, and steps aside when it is taken", async () => {
   const squatter = http.createServer()
-  await new Promise((resolve, reject) => {
-    squatter.once("error", reject)
-    squatter.listen(PREFERRED_START_SCREEN_PORT, "127.0.0.1", resolve)
+  const ours = await new Promise((resolve) => {
+    squatter.once("error", () => resolve(false))
+    squatter.listen(PREFERRED_START_SCREEN_PORT, "127.0.0.1", () => resolve(true))
   })
 
   const moved = await createStartScreen({ host: "127.0.0.1", log: () => {} })
@@ -670,6 +677,14 @@ await check("the screen prefers one port, and steps aside when it is taken", asy
   moved.close()
   assert.notEqual(movedPort, PREFERRED_START_SCREEN_PORT)
   assert.ok(movedPort > 0)
+
+  if (!ours) {
+    console.log(
+      `       skip (something outside the suite holds ${PREFERRED_START_SCREEN_PORT}, ` +
+        "so it cannot be claimed back here)"
+    )
+    return
+  }
 
   await new Promise((resolve) => squatter.close(resolve))
   const preferred = await createStartScreen({ host: "127.0.0.1", log: () => {} })

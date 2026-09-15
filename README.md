@@ -550,6 +550,30 @@ nothing else. Ship it nowhere near production.
   `.env.local`, which lives in the same project root as your components. Keep
   `source.extensions` restrictive.
 
+### What leaves your machine
+
+By default, nothing. With no `ANTHROPIC_API_KEY` in the environment, the editor
+opens no connection to anything but your own dev server. A free-form prompt it
+cannot write itself is queued to a handoff file for your own coding agent to
+pick up, and the reply says so rather than pretending the edit landed.
+
+Set `ANTHROPIC_API_KEY` and leave `agent.transport` at `auto`, and free-form
+prompts take a different path: the prompt, the selected element, and the
+surrounding source are sent to the Anthropic API so the change can be applied
+for you. That is an opt-in you make by setting the key, but it is the difference
+between a tool that stays on your machine and one that transmits your source
+code, so it should not be a surprise.
+
+To keep the local behavior even when a key happens to be set:
+
+```js
+export default { agent: { transport: "handoff" } }
+```
+
+If your employer restricts which AI services may see your source code — many do,
+and the rule usually covers anything you write at work — that setting is the one
+to check before pointing this at a work project.
+
 ## Performance boundary
 
 The host application never imports this package. A normal development server
