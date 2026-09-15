@@ -1,19 +1,27 @@
 #!/bin/bash
-# Double-click this in Finder to open the design editor on a prototype.
+# Double-click this in Finder to open the design editor.
 #
-# It does the four things you would otherwise do by hand: make sure your app is
-# running, start the editor in front of it, forward the ports so your Mac can
-# reach them, and open the browser.
+# It lands you on the PROJECT CHOOSER, which lists the prototypes running on
+# your Cloudtop and lets you pick one — and switch to another later without
+# coming back here. It does the parts you would otherwise do by hand: start the
+# chooser, connect the ports, open the browser.
 #
-# Edit the two lines under CONFIG if your prototype lives somewhere else.
+# An earlier version of this script named one prototype and passed `--dev`,
+# which skips the chooser and attaches straight to that app. That is the right
+# shape for a script you run in one repo all day and the wrong one for a
+# launcher, which is exactly the moment you have not yet said which prototype
+# you mean.
 
 # ---------------- CONFIG ----------------
 CLOUDTOP="philhaoyang1.c.googlers.com"
-PROTOTYPE="src/agent-platform-draft"   # relative to your home dir on the Cloudtop
-PAGE="/overview"                        # which page to open
 # ----------------------------------------
 
 set -uo pipefail
+
+# The chooser, and the two ports it hands to whichever editor you start from it.
+# All three are forwarded up front, because pressing Start sends your tab
+# straight to the editor and a port that arrives late reads as a broken editor.
+CHOOSER=3455
 PROXY=3456
 WS=3457
 SSH_OPTS=(-o ConnectTimeout=20 -o ProxyCommand="corp-ssh-helper %h %p")
@@ -49,41 +57,49 @@ fi
 ssh "${SSH_OPTS[@]}" -O cancel -L $PROXY:127.0.0.1:$PROXY -L $WS:127.0.0.1:$WS \
   "$CLOUDTOP" >/dev/null 2>&1
 
-say "2/4  Starting the editor on the Cloudtop…"
-# Stop any editor from a previous run, then start a fresh one. `--dev` starts
-# the prototype's own dev server too if it is not already up.
+# Forwards a previous run left on the shared connection, or that a run killed
+# outright never took down. Harmless when there are none.
+FORWARDS=(-L "$CHOOSER:127.0.0.1:$CHOOSER" -L "$PROXY:127.0.0.1:$PROXY" -L "$WS:127.0.0.1:$WS")
+ssh "${SSH_OPTS[@]}" -O cancel "${FORWARDS[@]}" "$CLOUDTOP" >/dev/null 2>&1
+
+say "2/4  Starting the chooser on the Cloudtop…"
+# With no port argument the editor opens its project chooser rather than
+# attaching to one app. That is the point of this script: the chooser outlives
+# the choice, so switching prototypes is a click in the editor's toolbar rather
+# than another trip through here.
 #
-# The old editor is found BY PORT, not by a command-line pattern. `pkill -f
-# design-editor/cli.mjs` looks right and is a trap: that string also appears in
-# the ssh command being sent, so pkill matches the shell running it and kills
-# itself. The symptom is exit 255 with no output at all, which reads like the
+# The previous run is found BY PORT, not by a command-line pattern.
+# `pkill -f design-editor/cli.mjs` looks right and is a trap: that string also
+# appears in the ssh command being sent, so pkill matches the shell running it
+# and kills itself. The symptom is exit 255 with no output, which reads like the
 # connection dropped.
 ssh "${SSH_OPTS[@]}" "$CLOUDTOP" "
   export PATH=\$HOME/.local/opt/node-current/bin:\$HOME/.local/bin:\$PATH
-  for port in $PROXY $WS; do
+  for port in $CHOOSER $PROXY $WS; do
     old=\$(lsof -ti tcp:\$port -s tcp:LISTEN 2>/dev/null | head -1)
     [ -n \"\$old\" ] && kill \$old 2>/dev/null
   done
   sleep 2
-  cd \$HOME/$PROTOTYPE || exit 1
+  cd \$HOME || exit 1
   rm -f /tmp/design-editor.log
-  setsid nohup node \$HOME/src/design-editor/cli.mjs --dev --no-open \
-    --proxy-port $PROXY --ws-port $WS > /tmp/design-editor.log 2>&1 < /dev/null &
+  setsid nohup node \$HOME/src/design-editor/cli.mjs --no-open \
+    --start-screen-port $CHOOSER --proxy-port $PROXY --ws-port $WS \
+    > /tmp/design-editor.log 2>&1 < /dev/null &
   echo started
-" || die "Could not start the editor. See the message above."
+" || die "Could not start the chooser. See the message above."
 
-say "3/4  Waiting for it to come up (a first build can take a minute)…"
-for _ in $(seq 1 90); do
-  if ssh "${SSH_OPTS[@]}" "$CLOUDTOP" "grep -q 'design-editor] proxy' /tmp/design-editor.log 2>/dev/null"; then
+say "3/4  Waiting for it to come up…"
+for _ in $(seq 1 40); do
+  if ssh "${SSH_OPTS[@]}" "$CLOUDTOP" "grep -q 'to choose an app' /tmp/design-editor.log 2>/dev/null"; then
     READY=1; break
   fi
   printf "."
-  sleep 3
+  sleep 2
 done
 echo
 if [ "${READY:-0}" != "1" ]; then
   ssh "${SSH_OPTS[@]}" "$CLOUDTOP" 'tail -20 /tmp/design-editor.log' 2>/dev/null
-  die "The editor did not come up. Its output is above."
+  die "The chooser did not come up. Its output is above."
 fi
 
 say "4/4  Connecting and opening your browser…"
@@ -100,7 +116,6 @@ say "4/4  Connecting and opening your browser…"
 #
 # `-O forward` asks the existing connection to add the forward and returns
 # immediately; `-O cancel` takes it away again. One touch, and a real teardown.
-FORWARDS=(-L "$PROXY:127.0.0.1:$PROXY" -L "$WS:127.0.0.1:$WS")
 ssh "${SSH_OPTS[@]}" -O forward "${FORWARDS[@]}" "$CLOUDTOP" >/dev/null 2>&1 \
   || die "Could not connect the ports."
 
@@ -112,15 +127,19 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 for _ in $(seq 1 20); do
-  curl -s -m 3 -o /dev/null "http://127.0.0.1:$PROXY$PAGE" && break
+  curl -s -m 3 -o /dev/null "http://127.0.0.1:$CHOOSER/" && break
   sleep 1
 done
 
-open "http://127.0.0.1:$PROXY$PAGE"
+open "http://127.0.0.1:$CHOOSER/"
 
 cat <<EOF
 
-  ✅  Design editor is open at http://127.0.0.1:$PROXY$PAGE
+  ✅  Project chooser is open at http://127.0.0.1:$CHOOSER
+
+      Pick a prototype and press Start. To switch to another one later, use
+      the "Choose app" button in the editor's toolbar — no need to come back
+      here.
 
   Keep this window open while you work — closing it disconnects the editor.
   Your edits land in the real files on the Cloudtop when you press
@@ -128,6 +147,6 @@ cat <<EOF
 
 EOF
 
-# Hold the window open. The forward lives on the shared connection, so it is
-# `cleanup` that ends it, not this process exiting.
+# Hold the window open. The forwards live on the shared connection, so it is
+# `cleanup` that ends them, not this process exiting.
 while true; do sleep 3600; done
