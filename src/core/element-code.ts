@@ -18,6 +18,7 @@
  * what belongs in a view of the element's source.
  */
 
+import { config } from "./config"
 import type { Selection } from "./types"
 
 /** The five tints `css/code.ts` declares, plus `plain` — indentation and text. */
@@ -38,11 +39,37 @@ export type CodeView = "jsx" | "html" | "classes"
  * honest menu is the two dialects that node can be spelled in, plus the one
  * list the editor spends all its time writing: the class attribute.
  */
-export const CODE_VIEWS: ReadonlyArray<{ id: CodeView; label: string }> = [
+const REACT_CODE_VIEWS: ReadonlyArray<{ id: CodeView; label: string }> = [
   { id: "jsx", label: "JSX" },
   { id: "html", label: "HTML" },
   { id: "classes", label: "Tailwind classes" },
 ]
+
+/**
+ * An Angular host is offered two, and HTML is first.
+ *
+ * JSX is not a dialect an Angular element can be spelled in — the tab drew
+ * `className=` and `_nghost-ng-c3309602102` for a component whose template says
+ * `class=`, which is a view of a file that does not exist. Dropping it also
+ * makes HTML the default, because the default is the first entry.
+ *
+ * The class list survives either way; only its NAME follows Tailwind, which is
+ * a different question from the framework and answered separately.
+ */
+const ANGULAR_CODE_VIEWS: ReadonlyArray<{ id: CodeView; label: string }> = [
+  { id: "html", label: "HTML" },
+  { id: "classes", label: "Classes" },
+]
+
+function codeViews(): ReadonlyArray<{ id: CodeView; label: string }> {
+  const views = config.host.framework === "angular" ? ANGULAR_CODE_VIEWS : REACT_CODE_VIEWS
+  if (config.host.tailwind) return views
+  // Calling the class list "Tailwind classes" in a project with no Tailwind
+  // names a technology the designer would then go looking for.
+  return views.map((view) => (view.id === "classes" ? { ...view, label: "Classes" } : view))
+}
+
+export const CODE_VIEWS: ReadonlyArray<{ id: CodeView; label: string }> = codeViews()
 
 /** How far below the selected element the subtree is spelled out in full. */
 const MAX_DEPTH = 3
@@ -247,9 +274,22 @@ function truncate(text: string): string {
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT - 1)}…` : text
 }
 
+/**
+ * Attributes the framework stamped on at runtime, which are in the DOM and in
+ * no source file.
+ *
+ * Angular writes `_ngcontent-ng-c3539969218=""` onto every element for style
+ * encapsulation and `ng-reflect-*` in dev builds. This view claims to show the
+ * element as source, so carrying them makes it a view of the rendered DOM
+ * wearing source syntax — and the hash changes on every rebuild, so a designer
+ * comparing the panel against their template sees a diff that is not there.
+ */
+const RUNTIME_ATTRIBUTES = /^(_ng(content|host)-|ng-reflect-|ng-version$)/
+
 function emitAttributes(sink: CodeToken[], view: CodeView, element: Element): void {
   for (const attribute of Array.from(element.attributes)) {
     if (attribute.name === "style") continue
+    if (RUNTIME_ATTRIBUTES.test(attribute.name)) continue
     emit(sink, "plain", " ")
     emit(sink, "attribute", attributeName(view, attribute.name))
     if (attribute.value === "" && BOOLEAN_ATTRIBUTES.has(attribute.name)) continue

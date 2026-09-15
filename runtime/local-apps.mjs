@@ -18,6 +18,8 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
+import { LOOPBACK_ADDRESSES, urlHost } from "./dev-server.mjs"
+
 /**
  * Where a local web app is actually likely to be, kept short so a full scan
  * costs one timeout rather than a minute:
@@ -66,8 +68,11 @@ const LSOF_TIMEOUT_MS = 1500
 const PREFERRED_DEV_SCRIPTS = ["dev", "develop", "start", "serve"]
 const DEV_SCRIPT_FAMILY = /^(dev|develop|start|serve)([:_-]|$)/
 
-// Transcribed from `react-rewrite-cli/dist/detect.js`. Disagreeing with the
-// vendor here means the launch fails after this screen already said yes.
+// The React families are transcribed from `react-rewrite-cli/dist/detect.js`,
+// whose config-file test is what the launcher has to satisfy. Angular is named
+// by its dependency instead, the same way `resolveHostFramework` names it —
+// this screen must not report a project as unrecognised when the launcher is
+// about to accept it.
 const NEXT_CONFIGS = ["next.config.js", "next.config.ts", "next.config.mjs"]
 const VITE_CONFIGS = ["vite.config.js", "vite.config.ts"]
 
@@ -155,40 +160,80 @@ function lsof(args) {
   }
 }
 
-/**
- * The project root for whatever is listening on `port`, by asking that process
- * for its own working directory — which, for a dev server, IS the project root.
- *
- * macOS only, stated plainly rather than dressed up as portable: this is BSD
- * `lsof` output, Linux answers `-d cwd` only for your own processes, and
- * Windows has no equivalent. Everywhere else it returns null and the user picks
- * the folder themselves.
- */
-export function projectRootForPort(port) {
-  if (process.platform !== "darwin") return null
-  if (!Number.isInteger(port)) return null
-
+/** The pid listening on `port`, or null. */
+function listenerPid(port) {
   // One port can list several pids (IPv4 and IPv6 rows, or a cluster). The
   // first is the one that answered the scan closely enough.
-  const pid = lsof(["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"])
-    ?.split("\n")
-    .map((line) => line.trim())
-    .find((line) => /^\d+$/.test(line))
-  if (!pid) return null
+  return (
+    lsof(["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"])
+      ?.split("\n")
+      .map((line) => line.trim())
+      .find((line) => /^\d+$/.test(line)) ?? null
+  )
+}
 
+/**
+ * A process's working directory on macOS, via BSD `lsof`.
+ *
+ * Denial arrives as a VALUE, not as a failure: a process this user does not own
+ * answers with a zero exit status and the reason inside the field itself
+ * ("ncwd|rtd info error: Operation not permitted"), which `path` is happy to
+ * read as a relative path. So the field only counts when it is absolute.
+ */
+function cwdFromLsof(pid) {
   // `-Fn` is the machine-readable form: one field per line, the cwd being the
   // line tagged `n`.
-  //
-  // Denial arrives HERE, not as a failure: a process this user does not own
-  // answers with a zero exit status and the reason inside the field itself
-  // ("ncwd|rtd info error: Operation not permitted"), which `path` is happy to
-  // read as a relative path. So the field only counts when it is absolute.
   const cwd = lsof(["-a", "-p", pid, "-d", "cwd", "-Fn"])
     ?.split("\n")
     .find((line) => line.startsWith("n"))
     ?.slice(1)
     .trim()
-  if (!cwd || !path.isAbsolute(cwd)) return null
+  return cwd && path.isAbsolute(cwd) ? cwd : null
+}
+
+/**
+ * A process's working directory on Linux, via `/proc`.
+ *
+ * `lsof -d cwd` is the wrong tool here — Linux answers it only for your own
+ * processes, and even then it is a subprocess where a `readlink` will do. The
+ * symlink is the same fact without the fork, and it is readable for exactly the
+ * processes whose folder this screen has any business naming: your own.
+ */
+function cwdFromProc(pid) {
+  try {
+    const cwd = fs.readlinkSync(`/proc/${pid}/cwd`)
+    return path.isAbsolute(cwd) ? cwd : null
+  } catch {
+    // Another user's process, or one that exited between the two calls.
+    return null
+  }
+}
+
+/**
+ * The project root for whatever is listening on `port`, by asking that process
+ * for its own working directory — which, for a dev server, IS the project root.
+ *
+ * This is the difference between a start screen that fills the folder in for
+ * you and one that sends you to a file picker to find a path the machine
+ * already knows. It used to be macOS-only, which meant every row on a Linux
+ * workstation arrived blank — the platform where a designer is most likely to
+ * be driving a remote dev server they did not start themselves.
+ *
+ * Windows has no equivalent; there it returns null and the user picks the
+ * folder, which is the behaviour every platform had before.
+ */
+export function projectRootForPort(port) {
+  if (!Number.isInteger(port)) return null
+  const pid = listenerPid(port)
+  if (!pid) return null
+
+  const cwd =
+    process.platform === "darwin"
+      ? cwdFromLsof(pid)
+      : process.platform === "linux"
+        ? cwdFromProc(pid)
+        : null
+  if (!cwd) return null
 
   return nearestProjectRoot(isDirectory(cwd) ? cwd : path.dirname(cwd))
 }
@@ -302,7 +347,15 @@ async function probeApp(url, timeoutMs) {
  */
 export async function scanLocalApps({
   ports = DEFAULT_SCAN_PORTS,
-  host = "127.0.0.1",
+  /**
+   * Which loopback addresses to look on. Both, by default, because a dev server
+   * the designer started themselves is often on only one: `vite` and `ng serve`
+   * bind the NAME `localhost`, which on an IPv6-first machine resolves to
+   * `[::1]` alone. Scanning v4 only meant a running Angular app simply did not
+   * appear on the start screen, and the person was sent to type a URL for an
+   * app the machine could see perfectly well.
+   */
+  hosts = LOOPBACK_ADDRESSES,
   // Long enough to get a NAME out of a dev server, not just a port. A warm one
   // answers in milliseconds, but the scan is often the first request the thing
   // has had all day and Next compiles the route before it replies — measured at
@@ -313,11 +366,23 @@ export async function scanLocalApps({
 } = {}) {
   const probed = await Promise.all(
     ports.map(async (port) => {
-      const url = `http://${host}:${port}`
-      const app = await probeApp(`${url}/`, timeoutMs)
-      // An untitled page is still an app worth offering; the address is the
-      // only honest label left for it.
-      return app === null ? null : { port, url, title: app.title || `${host}:${port}`, said: app.projectRoot }
+      // First address that answers wins, and the row carries THAT address — it
+      // is what the editor will proxy, so a row naming the other one would send
+      // the launch somewhere nothing is listening.
+      for (const host of hosts) {
+        const url = `http://${urlHost(host)}:${port}`
+        const app = await probeApp(`${url}/`, timeoutMs)
+        if (app === null) continue
+        // An untitled page is still an app worth offering; the address is the
+        // only honest label left for it.
+        return {
+          port,
+          url,
+          title: app.title || `${urlHost(host)}:${port}`,
+          said: app.projectRoot,
+        }
+      }
+      return null
     })
   )
 
@@ -377,7 +442,11 @@ export function describeProject(dir) {
   const preferred = PREFERRED_DEV_SCRIPTS.filter((name) => named.includes(name))
   result.devScripts = [...preferred, ...named.filter((name) => !preferred.includes(name))]
 
-  if (NEXT_CONFIGS.some((name) => hasFile(target, name))) result.framework = "nextjs"
+  // Angular first: it ships a `vite.config.ts` in some scaffolds, and calling
+  // such a project "vite" would name the bundler where the row wants the
+  // framework the editor is about to treat it as.
+  if (dependencies["@angular/core"]) result.framework = "angular"
+  else if (NEXT_CONFIGS.some((name) => hasFile(target, name))) result.framework = "nextjs"
   else if (VITE_CONFIGS.some((name) => hasFile(target, name))) result.framework = "vite"
   else if (dependencies["react-scripts"]) result.framework = "cra"
 

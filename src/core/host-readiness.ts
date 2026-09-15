@@ -1,13 +1,23 @@
 /**
- * Waits until the host React tree has claimed its server-rendered DOM.
+ * Waits until the host framework has claimed the DOM.
  *
  * The editor is injected outside the app, so it cannot use a host component's
- * effect as a hydration signal. Next's `afterInteractive` contract also allows
- * a script to run after only part of the page has hydrated. React does attach a
- * Fiber/props expando to each claimed host element in both development and
- * production builds, so that is the narrow signal we need before changing
- * attributes on `<html>` or adding editor chrome to `<body>`.
+ * effect as a readiness signal. Next's `afterInteractive` contract also allows
+ * a script to run after only part of the page has hydrated. Each framework does
+ * leave a mark on the elements it owns, and that mark is the narrow signal we
+ * need before changing attributes on `<html>` or adding editor chrome to
+ * `<body>`.
+ *
+ *   React   — a Fiber/props expando on every claimed host element.
+ *   Angular — `ng-version` on the element it bootstrapped into.
+ *
+ * Asking the wrong question is not a harmless miss: nothing in an Angular page
+ * ever grows a `__reactFiber$`, so the poll below ran to its full ten-second
+ * timeout on EVERY load and the editor appeared ten seconds after the app did.
+ * It worked, so it never failed a test — it was just slow enough to feel broken.
  */
+
+import { config } from "./config"
 
 const REACT_HOST_PREFIXES = ["__reactFiber$", "__reactProps$"]
 const MAX_ELEMENTS_TO_SCAN = 128
@@ -26,14 +36,31 @@ function hasReactHostMarker(element: Element): boolean {
   )
 }
 
-/** True once a host-owned React element has been hydrated or client-rendered. */
-export function hasHydratedReactHost(root: Document = document): boolean {
+/**
+ * Angular stamps `ng-version` on the element it bootstrapped into, once, at the
+ * end of bootstrap — the same "this subtree is mine now" claim React's expando
+ * makes, and it arrives at the same moment in the page's life.
+ */
+function hasAngularHostMarker(element: Element): boolean {
+  return element.hasAttribute("ng-version")
+}
+
+function markerFor(framework: string): (element: Element) => boolean {
+  return framework === "angular" ? hasAngularHostMarker : hasReactHostMarker
+}
+
+/** True once a host-owned element has been hydrated or client-rendered. */
+export function hasHydratedReactHost(
+  root: Document = document,
+  framework: string = config.host.framework
+): boolean {
+  const claimed = markerFor(framework)
   const queue: Element[] = [root.documentElement]
 
   for (let index = 0; index < queue.length && index < MAX_ELEMENTS_TO_SCAN; index += 1) {
     const element = queue[index]
     if (isEditorTree(element)) continue
-    if (hasReactHostMarker(element)) return true
+    if (claimed(element)) return true
     queue.push(...element.children)
   }
 
@@ -45,9 +72,9 @@ function afterTwoPaints(resolve: () => void): void {
 }
 
 /**
- * Resolves after React claims host markup and completes two paint turns. The
- * bounded fallback keeps the editor available if React changes its private
- * marker names; by then the document has long since passed normal hydration.
+ * Resolves after the host framework claims its markup and two paint turns pass.
+ * The bounded fallback keeps the editor available if a framework changes its
+ * private marker; by then the document has long since finished loading.
  */
 export function whenHostHydrated(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
   return new Promise((resolve) => {

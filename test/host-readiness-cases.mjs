@@ -53,4 +53,26 @@ Object.defineProperty(document.getElementById("host"), "__reactFiber$fixture", {
 await pending
 assert.equal(readiness.hasHydratedReactHost(), true)
 
-console.log("5 passed, 0 failed")
+/*
+ * An Angular host leaves a different mark, and asking React's question of it
+ * is not a harmless miss: nothing in an Angular page ever grows a
+ * `__reactFiber$`, so the poll ran its full timeout on every load and the
+ * editor appeared ten seconds after the app did. It worked, so nothing failed
+ * — it was merely slow enough to feel broken.
+ */
+assert.equal(
+  readiness.hasHydratedReactHost(document, "angular"),
+  false,
+  "a React expando was mistaken for an Angular bootstrap"
+)
+
+const angularRoot = document.createElement("app-root")
+angularRoot.setAttribute("ng-version", "22.0.5")
+document.body.append(angularRoot)
+assert.equal(
+  readiness.hasHydratedReactHost(document, "angular"),
+  true,
+  "ng-version did not read as a bootstrapped Angular host"
+)
+
+console.log("7 passed, 0 failed")

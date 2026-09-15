@@ -244,6 +244,37 @@ check("DW-03 the ledger says where the drag started, not where it ended", () => 
   assert.equal(change.filePath, "src/Fixture.tsx")
 })
 
+check("DW-3b the vendor's lift never reaches the committed value", () => {
+  const element = mount('<div class="card">Card</div>')
+  reset(selectionFor(element))
+  fire(element, "pointerdown", { clientX: 0, clientY: 0 })
+  fire(element, "pointermove", { clientX: 40, clientY: 24 })
+  // What the vendored overlay paints over our preview mid-gesture: its own lift
+  // scale, plus the computed transform it read when the press began — which for
+  // an untransformed element is the identity matrix. Committing the raw inline
+  // string writes both of them into the file, which is what a real drag on a
+  // real Angular template was measured doing.
+  element.style.transform = "translate(40px, 24px) scale(1.02) matrix(1, 0, 0, 1, 0, 0)"
+  fire(element, "pointerup", {})
+
+  const [change] = previewOnlyChanges()
+  assert.equal(change.to, "translate(40px, 24px)", "a transient animation reached the write")
+})
+
+check("DW-3c a gesture that ends where it started writes nothing", () => {
+  const element = mount('<div class="card">Card</div>')
+  reset(selectionFor(element))
+  fire(element, "pointerdown", { clientX: 0, clientY: 0 })
+  fire(element, "pointermove", { clientX: 40, clientY: 0 })
+  // Dragged out and dropped back: the identity matrix the vendor leaves behind
+  // must not read as an edit just because the string differs from "".
+  element.style.transform = "matrix(1, 0, 0, 1, 0, 0)"
+  fire(element, "pointerup", {})
+
+  assert.deepEqual(previewOnlyChanges(), [], "an identity transform read as a move")
+  assert.equal(history.canUndo(), false)
+})
+
 check("DW-04 a press that never crosses the threshold writes nothing", () => {
   const element = mount('<div class="card" style="transform: translate(10px, 20px)">Card</div>')
   reset(selectionFor(element))

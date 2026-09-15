@@ -7,6 +7,7 @@
  * and shape-checked by the patch's `requiredFragments` gate.
  */
 
+import { isAngularHost, owningComponentName, resolveAngularSource } from "./angular"
 import type { ClassUpdate } from "./tailwind"
 import type { SourceRef } from "./types"
 
@@ -117,10 +118,49 @@ declare global {
 
 const BRIDGE_TIMEOUT_MS = 10_000
 
+/**
+ * The bridge with `elementInfo` answering for an Angular host.
+ *
+ * One wrap rather than an Angular branch in each caller. `elementInfo` is the
+ * synchronous "what is this element" every surface asks — the inspector header,
+ * the layers tree's row names and its component-root test, the options key —
+ * and on Angular the vendor's copy answers `null` for all of them, which is how
+ * a page of named components read as a list of `div`s.
+ *
+ * `filePath` stays empty on purpose. This is the SYNCHRONOUS accessor, and the
+ * file is a round trip away; `resolveElementSource` is the one that waits for
+ * it. Naming a file here that nobody had confirmed is exactly the class of
+ * error the vendor's own text-matching fallback makes.
+ */
+function withAngularElementInfo(bridge: RewriteBridge): RewriteBridge {
+  if (!isAngularHost()) return bridge
+  const angularInfo = (element: Element): RewriteElementInfo | null => {
+    const componentName = owningComponentName(element)
+    if (!componentName) return null
+    return {
+      tagName: element.tagName.toLowerCase(),
+      // Bundlers prefix a renamed class with `_`; the server owns the real
+      // mapping, but a row in the layers tree reading `_ShellComponent` is
+      // noise, so the display name is tidied here and nowhere else.
+      componentName: componentName.replace(/^_+/, ""),
+      filePath: "",
+      lineNumber: 0,
+      columnNumber: 0,
+      stack: [],
+    }
+  }
+  return {
+    ...bridge,
+    elementInfo: angularInfo,
+    elementSourceAsync: (element: Element) => Promise.resolve(angularInfo(element)),
+    store: bridge.store,
+  }
+}
+
 /** Resolves once the patched vendor overlay has installed the bridge. */
 export function whenBridgeReady(): Promise<RewriteBridge> {
   if (window.__DESIGN_EDITOR_BRIDGE__) {
-    return Promise.resolve(window.__DESIGN_EDITOR_BRIDGE__)
+    return Promise.resolve(withAngularElementInfo(window.__DESIGN_EDITOR_BRIDGE__))
   }
 
   return new Promise((resolve, reject) => {
@@ -128,7 +168,7 @@ export function whenBridgeReady(): Promise<RewriteBridge> {
     const poll = () => {
       const bridge = window.__DESIGN_EDITOR_BRIDGE__
       if (bridge) {
-        resolve(bridge)
+        resolve(withAngularElementInfo(bridge))
         return
       }
       if (Date.now() - started > BRIDGE_TIMEOUT_MS) {
@@ -274,6 +314,14 @@ function discoverPath(bridge: RewriteBridge, componentName: string): Promise<str
 }
 
 async function resolve(bridge: RewriteBridge, element: Element): Promise<SourceRef | null> {
+  // An Angular host has no fiber at all, so none of the three React routes
+  // below can answer — `elementInfo` returns null for every node, the owner
+  // stack does not exist, and `discoverFile` would grep for a component name
+  // nobody supplied. The Angular resolver is not a fallback after them; it is
+  // the whole answer, and reaching the React path first would only cost a
+  // round trip to learn that.
+  if (isAngularHost()) return resolveAngularSource(element)
+
   let info: RewriteElementInfo | null = null
   try {
     info = bridge.elementInfo(element)

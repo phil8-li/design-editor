@@ -93,6 +93,20 @@ interface RowSpec {
 }
 
 export const responsiveSection: InspectorSection = ({ selection, computed, writer, invalidate }) => {
+  /*
+   * Every row in this section writes a Tailwind breakpoint variant —
+   * `md:grid-cols-2` and the like. In a project that does not compile Tailwind
+   * those classes land in the markup and do nothing, so the section is an offer
+   * the host cannot honour. Measured on a real Angular app: five breakpoint
+   * rows, each inviting the designer to type utilities into a build with no
+   * utility layer.
+   *
+   * Gated on Tailwind rather than on the framework, because the two do not
+   * track each other — an Angular app may compile Tailwind and a React app may
+   * not, and it is this fact that decides whether the rows mean anything.
+   */
+  if (!config.host.tailwind) return null
+
   const bindings = responsiveClassBindings(Array.from(selection.element.classList))
   const scope = containerScope(selection.element)
   if (!scope && !isLayoutBox(selection.element, computed) && bindings.length === 0) return null

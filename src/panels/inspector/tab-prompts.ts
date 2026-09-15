@@ -20,6 +20,7 @@
  * button writes are readable underneath.
  */
 
+import { config } from "../../core/config"
 import { clear, el } from "../../core/dom"
 import { icon } from "../../core/icons"
 import {
@@ -33,6 +34,24 @@ import {
 } from "../../core/change-prompt"
 import { isProjectSourcePath } from "../../core/bridge"
 import type { EditorContext } from "../../core/context"
+
+/**
+ * What lands in this tab, in the host's own terms.
+ *
+ * The two hosts strand different things, so one sentence cannot be true for
+ * both. On React the queue is a Tailwind story: the writer speaks in utility
+ * classes, so a property with no utility has nowhere to go. On Angular there is
+ * no translation step and every CSS property is writable, so nothing arrives
+ * here for being unspellable — it arrives because the element could not be
+ * placed in its template, or because the change is not a style at all.
+ *
+ * Telling a designer on an Angular app that their edit lacked "a Tailwind name"
+ * would send them looking for a Tailwind config their project does not have.
+ */
+const EMPTY_DETAIL =
+  config.host.framework === "angular"
+    ? "Apply to code writes every edit it can place in a component template. The rest — a glyph swap, or an element that matches more than one tag in its template — collects here with its file, its element and its before and after, ready to copy as one brief."
+    : "Apply to code writes every edit it can spell as a utility class. The rest — a glyph swap, a property with no Tailwind name, a value that belongs in a shared token — collects here with its file, its element and its before and after, ready to copy as one brief."
 import type { InspectorTab } from "./tab-code"
 
 /** The same words `buildChangePrompt` files an unresolved entry under. */
@@ -240,9 +259,7 @@ export function promptsTab(editor: EditorContext): InspectorTab {
     return el("div", { class: "de-empty de-prompts-empty" }, [
       el("span", { class: "de-prompts-empty-glyph", "aria-hidden": "true" }, [icon("Sparkles", 18)]),
       el("div", {}, ["Nothing to hand over yet."]),
-      el("div", { class: "de-prompts-empty-detail" }, [
-        "Apply to code writes every edit it can spell as a utility class. The rest — a glyph swap, a property with no Tailwind name, a value that belongs in a shared token — collects here with its file, its element and its before and after, ready to copy as one brief.",
-      ]),
+      el("div", { class: "de-prompts-empty-detail" }, [EMPTY_DETAIL]),
     ])
   }
 

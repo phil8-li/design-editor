@@ -23,6 +23,7 @@ import { Readable } from "node:stream"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { browserPrelude } from "../config.mjs"
+import { urlHost } from "./dev-server.mjs"
 import { openBrowser } from "./open-browser.mjs"
 import { patchOverlay } from "./vendor-patch.mjs"
 
@@ -90,7 +91,9 @@ export function acceptErroringDevServer(host, appPort) {
   // put this patch on some other server's traffic.
   if (!appPort) return () => {}
 
-  const root = new URL(`http://${host || "localhost"}:${appPort}`).href
+  // Bracketed, or an IPv6 loopback host makes this throw and take the launch
+  // with it: `http://::1:4200` is not a URL.
+  const root = new URL(`http://${urlHost(host || "localhost")}:${appPort}`).href
   const originalFetch = globalThis.fetch
 
   const patched = async (input, ...rest) => {
@@ -160,14 +163,30 @@ export function readOverlaySource(config) {
 }
 
 /**
- * React Rewrite 0.1.1 identifies Next only by the presence of a next.config
- * file. A valid create-next-app project does not need one, so its detector
- * rejects the framework before it ever looks at the installed `next` package.
- * Report one virtual config path only during that synchronous detection pass;
- * nothing is written into the host project and every other filesystem probe
- * keeps its real answer.
+ * The vendored `detect()` gates, answered for a host it was never written for.
+ *
+ * `react-rewrite-cli@0.1.1` refuses to start unless the host's package.json
+ * declares `react` AND a `next.config.*` or `vite.config.*` file sits in the
+ * project root. Neither is a real requirement of anything this package uses at
+ * runtime: the proxy is HTTP, the injection is a `<script>` before `</body>`,
+ * and the overlay's hit-testing is `elementsFromPoint`. They are a one-time
+ * check the vendor performs on a project it assumes it owns.
+ *
+ * Two hosts trip them:
+ *
+ *   - A stock create-next-app project, which needs no `next.config` file. Only
+ *     the second gate applies; the dependency is really there.
+ *   - An Angular project, which has neither. Both gates apply, and both answers
+ *     are fictions — but fictions confined to the vendor's own synchronous
+ *     detection pass, which runs entirely inside `program.parse()` before the
+ *     dynamic import below resolves.
+ *
+ * So this returns the shims that pass, and the caller installs them for exactly
+ * that window. Nothing is written into the host project, every other filesystem
+ * probe keeps its real answer, and a project the vendor would have accepted
+ * unaided gets no shim at all.
  */
-function virtualNextConfig(config) {
+export function vendorDetectionShims(config) {
   const manifestPath = path.join(config.projectRoot, "package.json")
   let manifest
   try {
@@ -176,11 +195,31 @@ function virtualNextConfig(config) {
     return null
   }
   const dependencies = { ...manifest.dependencies, ...manifest.devDependencies }
-  if (!dependencies.next) return null
+  const has = (names) => names.some((name) => fs.existsSync(path.join(config.projectRoot, name)))
 
-  const names = ["next.config.js", "next.config.ts", "next.config.mjs"]
-  if (names.some((name) => fs.existsSync(path.join(config.projectRoot, name)))) return null
-  return path.join(config.projectRoot, "next.config.mjs")
+  if (config.host?.framework === "angular") {
+    return {
+      manifestPath,
+      // The vendor reads `allDeps["react"]` and nothing else about it. A version
+      // string it never compares is the smallest thing that answers the gate.
+      declareReact: !dependencies.react,
+      // Angular 17+ serves through Vite, so "vite" is the framework the vendor's
+      // own vocabulary has for this host. The port it infers from that is
+      // discarded — `--project-root` and the app port are both already known.
+      virtualConfig: has(["vite.config.js", "vite.config.ts"])
+        ? null
+        : path.join(config.projectRoot, "vite.config.ts"),
+    }
+  }
+
+  if (!dependencies.next) return null
+  return {
+    manifestPath,
+    declareReact: false,
+    virtualConfig: has(["next.config.js", "next.config.ts", "next.config.mjs"])
+      ? null
+      : path.join(config.projectRoot, "next.config.mjs"),
+  }
 }
 
 export function readChromeBundle() {
@@ -352,6 +391,7 @@ export async function launch(config, { appPort, host, open, verbose = false, onR
 
   const originalCreateReadStream = fs.createReadStream
   const originalExistsSync = fs.existsSync
+  const originalReadFileSync = fs.readFileSync
   const originalCreateServer = http.createServer
   const originalListen = net.Server.prototype.listen
   const originalWriteHead = http.ServerResponse.prototype.writeHead
@@ -551,13 +591,34 @@ export async function launch(config, { appPort, host, open, verbose = false, onR
   if (currentDirectory() !== config.projectRoot) process.chdir(config.projectRoot)
   if (currentDirectory() === null) process.cwd = () => config.projectRoot
 
-  const virtualConfig = virtualNextConfig(config)
+  const shims = vendorDetectionShims(config)
+  const virtualConfig = shims?.virtualConfig ?? null
   if (virtualConfig) {
     fs.existsSync = function existsWithConfig(filePath) {
       return path.resolve(String(filePath)) === virtualConfig || originalExistsSync.call(this, filePath)
     }
-    syncBuiltinESMExports()
   }
+  if (shims?.declareReact) {
+    fs.readFileSync = function readManifestWithReact(filePath, ...args) {
+      const contents = originalReadFileSync.call(this, filePath, ...args)
+      if (typeof contents !== "string") return contents
+      if (path.resolve(String(filePath)) !== shims.manifestPath) return contents
+      try {
+        const parsed = JSON.parse(contents)
+        // Under `devDependencies`, and named for what it is. If it ever escapes
+        // this window into something a human reads, it should read as a marker
+        // rather than as a dependency someone forgot to install.
+        parsed.devDependencies = {
+          ...parsed.devDependencies,
+          react: "0.0.0-design-editor-host-shim",
+        }
+        return JSON.stringify(parsed)
+      } catch {
+        return contents
+      }
+    }
+  }
+  if (virtualConfig || shims?.declareReact) syncBuiltinESMExports()
 
   process.argv = [
     process.argv[0],
@@ -567,15 +628,18 @@ export async function launch(config, { appPort, host, open, verbose = false, onR
     // the listen patch above may have remapped, so it can send the browser to a
     // port nothing is serving. `recordBoundPort` opens the bound one instead.
     "--no-open",
-    ...(host ? ["--host", host] : []),
+    // The vendor puts this straight into `http://${host}:${port}` for both its
+    // health check and its proxy target, so it needs the URL spelling.
+    ...(host ? ["--host", urlHost(host)] : []),
     ...(verbose ? ["--verbose"] : []),
   ]
 
   try {
     await import(pathToFileURL(vendor.entry).href)
   } finally {
-    if (virtualConfig) {
+    if (virtualConfig || shims?.declareReact) {
       fs.existsSync = originalExistsSync
+      fs.readFileSync = originalReadFileSync
       syncBuiltinESMExports()
     }
   }

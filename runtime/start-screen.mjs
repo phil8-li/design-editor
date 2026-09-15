@@ -229,8 +229,22 @@ function resolveProject(raw) {
 
   const dependencies = { ...manifest.dependencies, ...manifest.devDependencies }
   const name = manifest.name ?? path.basename(projectRoot)
-  if (typeof dependencies.react !== "string") {
-    throw badRequest(`${name} does not depend on React, and the editor only edits React components.`)
+  /*
+   * A project this editor has a lane for. React was the only answer when this
+   * guard was written, and it stayed the only answer after the Angular lane
+   * landed — so the start screen refused, by name, the exact projects the
+   * editor had just learned to edit. Every other entry point had been taught
+   * about Angular; this one had not, and it is the one a designer uses.
+   *
+   * The two dependencies are the same signals `resolveHostFramework` reads, and
+   * they are checked here rather than delegated because this must fail as a
+   * sentence on the page. Refusing later, inside the child process, reaches the
+   * terminal that nobody running the start screen is looking at.
+   */
+  if (typeof dependencies.react !== "string" && typeof dependencies["@angular/core"] !== "string") {
+    throw badRequest(
+      `${name} depends on neither React nor Angular, and those are the two the editor knows how to edit.`
+    )
   }
 
   return { projectRoot, manifest, packageName: name }

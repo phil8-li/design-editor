@@ -11,6 +11,7 @@
 
 import { resolveConfig } from "../config.mjs"
 import { createAgent } from "./agent.mjs"
+import { createAngularSource } from "./angular-source.mjs"
 import { createControlDefaults } from "./control-defaults.mjs"
 import { createIconSet } from "./icon-set.mjs"
 import { createOptionsStore, normalizeOptionSet } from "./options-store.mjs"
@@ -109,9 +110,60 @@ function controlTarget(searchParams) {
   return { group, key }
 }
 
-async function route(store, defaults, agent, icons, variants, prefix, req, res, url) {
+/**
+ * The two Angular verbs, which exist because the vendored engine has no
+ * equivalent for either.
+ *
+ * `/angular/source` answers "where is this element written". On React that
+ * answer comes from a fiber walk in the browser; here the browser can only read
+ * a component CLASS NAME off Angular's `ng` global, and turning that into a
+ * file means reading the project, which only this side can do.
+ *
+ * `/angular/apply` is what "Apply to code" calls instead of the vendor's
+ * `commitBatch` WebSocket message. It is a plain HTTP route rather than a
+ * second socket because it is request/response — the browser needs to be told
+ * which operations landed and which did not, and the vendor's protocol has no
+ * verb that answers.
+ */
+function angularRoutes(angular, framework, rest, req, res, url, readBody) {
+  if (!rest.startsWith("/angular/")) return null
+  if (framework !== "angular") {
+    throw badRequest("This project is not an Angular host", 409)
+  }
+
+  if (rest === "/angular/source" && req.method === "GET") {
+    const componentName = url.searchParams.get("component")?.trim() ?? ""
+    if (!componentName) throw badRequest("Angular source lookup needs a component")
+    let descriptor = null
+    const raw = url.searchParams.get("target")
+    if (raw) {
+      try {
+        descriptor = JSON.parse(raw)
+      } catch {
+        throw badRequest("Angular target descriptor is not valid JSON")
+      }
+    }
+    return sendJson(res, 200, { source: angular.resolve(componentName, descriptor) })
+  }
+
+  if (rest === "/angular/apply" && req.method === "POST") {
+    return readBody().then((body) => {
+      const operations = Array.isArray(body?.operations) ? body.operations : null
+      if (!operations) throw badRequest("Angular apply needs an operations array")
+      if (operations.length > 500) throw badRequest("Too many operations in one apply")
+      sendJson(res, 200, angular.apply(operations))
+    })
+  }
+
+  throw badRequest(`No design-editor route for ${req.method} ${url.pathname}`, 404)
+}
+
+async function route(store, defaults, agent, icons, variants, angular, framework, prefix, req, res, url) {
   const { pathname, searchParams } = url
   const rest = pathname.slice(prefix.length)
+
+  const handled = angularRoutes(angular, framework, rest, req, res, url, () => readJsonBody(req))
+  if (handled !== null) return handled
 
   if (rest === "/options" && req.method === "GET") {
     sendJson(res, 200, await store.readOptionSets())
@@ -184,6 +236,8 @@ export function createDesignEditorRoutes(config = resolveConfig()) {
   const agent = createAgent(config)
   const icons = createIconSet(config)
   const variants = createVariantCatalog(config)
+  const angular = createAngularSource(config)
+  const framework = config.host?.framework ?? "react"
 
   return {
     prefix,
@@ -205,7 +259,9 @@ export function createDesignEditorRoutes(config = resolveConfig()) {
         return true
       }
 
-      route(store, defaults, agent, icons, variants, prefix, req, res, url).catch((error) => {
+      route(
+        store, defaults, agent, icons, variants, angular, framework, prefix, req, res, url
+      ).catch((error) => {
         if (res.headersSent) {
           res.end()
           return

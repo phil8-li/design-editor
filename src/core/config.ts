@@ -119,6 +119,25 @@ export interface DesignEditorConfig {
   tailwind: TailwindConfig
   designSystem: DesignSystemCatalog
   icons: IconSetConfig
+  host: HostConfig
+}
+
+/**
+ * Which framework the app under the overlay is written in, and whether it
+ * compiles Tailwind.
+ *
+ * The framework decides which resolver answers "where is this element written"
+ * and which lane "Apply to code" commits through, so it arrives from the server
+ * rather than being sniffed here: at the moment this bundle loads, an Angular
+ * app has not bootstrapped and `window.ng` does not exist yet.
+ *
+ * `tailwind` is separate because it is a separate fact: a React app without
+ * Tailwind and an Angular app with it both exist, and it is this — not the
+ * framework — that decides whether a utility class is worth offering.
+ */
+export interface HostConfig {
+  framework: "react" | "angular"
+  tailwind: boolean
 }
 
 /**
@@ -205,6 +224,7 @@ const FALLBACK: DesignEditorConfig = {
   },
   designSystem: emptyDesignSystem(STANDARD_BREAKPOINTS),
   icons: { attribute: "", available: false },
+  host: { framework: "react", tailwind: true },
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -290,6 +310,17 @@ function readIconSet(value: unknown): IconSetConfig {
  * not lose the spacing table with it, and a partially-written config is the
  * normal case rather than the exception.
  */
+function readHost(value: unknown): HostConfig {
+  if (!isRecord(value)) return FALLBACK.host
+  return {
+    framework: value.framework === "angular" ? "angular" : "react",
+    // Only an explicit `false` turns it off. An older launcher that predates
+    // this key sends nothing, and every host it could be serving was assumed to
+    // have Tailwind before now.
+    tailwind: value.tailwind !== false,
+  }
+}
+
 function read(): DesignEditorConfig {
   const raw: unknown = (globalThis as { __DESIGN_EDITOR_CONFIG__?: unknown })
     .__DESIGN_EDITOR_CONFIG__
@@ -339,6 +370,7 @@ function read(): DesignEditorConfig {
     },
     designSystem: readDesignSystem(raw.designSystem, breakpoints, containerBreakpoints),
     icons: readIconSet(raw.icons),
+    host: readHost(raw.host),
   }
 }
 

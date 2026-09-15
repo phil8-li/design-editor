@@ -22,7 +22,7 @@ import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { loadConfig } from "./config.mjs"
-import { ensureAppRunning, probePort } from "./runtime/dev-server.mjs"
+import { ensureAppRunning, loopbackHostFor, probePort, urlHost } from "./runtime/dev-server.mjs"
 import { launch, readOverlaySource, resolveVendor } from "./runtime/launcher.mjs"
 import { openBrowser } from "./runtime/open-browser.mjs"
 import { createStartScreen } from "./runtime/start-screen.mjs"
@@ -51,10 +51,13 @@ const USAGE = `Usage: design-editor [appPort] [options]
 const CLI_PATH = fileURLToPath(import.meta.url)
 
 /**
- * The port `--dev` starts the app on when neither the flag nor the config names
- * one. Framework detection is not available this early — the vendor does it
- * after its own boot — and a dev server has to be told a port before it can be
- * asked which one it took.
+ * The port `--dev` falls back to when nothing else names one.
+ *
+ * The last resort, not the answer. `config.app.devPort` knows the host's
+ * framework and reads an Angular project's own `angular.json`, and that is what
+ * `main` reaches for first; a dev server still has to be told a port before it
+ * can be asked which one it took, so a guess is unavoidable — this is only the
+ * guess for a config object that carries no framework at all.
  */
 const DEFAULT_APP_PORT = 3000
 
@@ -190,7 +193,10 @@ export async function main(argv = process.argv.slice(2)) {
 
   // With `--dev` the port can no longer be left to the vendor's framework
   // detection: a dev server has to be told one before it can be asked.
-  const appPort = options.appPort ?? config.app.port ?? (options.dev ? DEFAULT_APP_PORT : null)
+  const appPort =
+    options.appPort ??
+    config.app.port ??
+    (options.dev ? config.app.devPort ?? DEFAULT_APP_PORT : null)
   const devScript = options.dev ? options.devScript ?? config.app.devScript : null
 
   for (const [port, label] of [
@@ -200,27 +206,64 @@ export async function main(argv = process.argv.slice(2)) {
     if (port !== "auto") await assertPortFree(port, label)
   }
 
+  /*
+   * The address the app is actually on, which is not always the one asked for.
+   *
+   * A server this command starts is told `--host`, so it lands where it was
+   * sent. A server the DESIGNER started is wherever their own dev script put
+   * it, and `vite` and `ng serve` both default to the name `localhost` — which
+   * on an IPv6-first machine is `[::1]` and nothing on `127.0.0.1`. Attaching
+   * to the address we wanted rather than the one answering is how a running,
+   * working app came back as "nothing is listening".
+   *
+   * Only ever a loopback address either way: this is a resolution among the
+   * two, not a widening.
+   */
+  let appHost = config.app.host
+
   if (devScript !== null) {
     const app = await ensureAppRunning({
       projectRoot: config.projectRoot,
       host: config.app.host,
       port: appPort,
       script: devScript,
+      // Angular's `ng serve` ignores PORT and reads `--port`; neither it nor
+      // Vite binds 127.0.0.1 unless told. Which flags (if any) a host needs is
+      // a property of its framework, resolved once in the config.
+      portFlag: config.app.devPortFlag,
+      hostFlag: config.app.devHostFlag,
     })
     if (app.started) holdUntilExit(app.stop)
-  } else if (appPort !== null && !(await probePort(config.app.host, appPort))) {
-    // The vendor's own health check fails here too, but it fails from inside a
-    // banner that has already claimed to be starting, and it does not know that
-    // starting the app is something this command can do.
-    throw new Error(
-      `Nothing is listening on http://${config.app.host}:${appPort}.\n` +
-        `  Start your dev server first, or run with --dev to start it here.`
-    )
+    // `ensureAppRunning` reports the address it found or reached — a script
+    // that ignored the host flag, or that had none, may still have gone to the
+    // other one, and an app it attached to rather than started is wherever the
+    // designer's own command put it.
+    appHost = app.host ?? (await loopbackHostFor(appPort)) ?? config.app.host
+  } else if (appPort !== null) {
+    const found = await loopbackHostFor(appPort)
+    if (!found) {
+      // The vendor's own health check fails here too, but it fails from inside
+      // a banner that has already claimed to be starting, and it does not know
+      // that starting the app is something this command can do.
+      throw new Error(
+        `Nothing is listening on http://${urlHost(config.app.host)}:${appPort}.\n` +
+          `  Start your dev server first, or run with --dev to start it here.`
+      )
+    }
+    if (found !== config.app.host) {
+      // Said out loud. It is the difference between the editor proxying the app
+      // and proxying nothing, and a silent correction is impossible to debug
+      // when some later thing goes wrong for an unrelated reason.
+      console.log(
+        `[design-editor] your app is on http://${urlHost(found)}:${appPort} — attaching there`
+      )
+    }
+    appHost = found
   }
 
   await launch(config, {
     appPort,
-    host: config.app.host,
+    host: appHost,
     open: config.app.open,
     verbose: options.verbose,
     /*

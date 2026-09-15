@@ -134,6 +134,16 @@ export const DEFAULT_CONFIG = {
     themeNamespaces: [...DEFAULT_THEME_NAMESPACES],
   },
   source: { roots: [], extensions: [".tsx", ".jsx", ".ts", ".js", ".mts", ".mjs"] },
+  // Which UI framework the host app is written in, and whether it compiles
+  // Tailwind. "auto"/null mean "work it out from the project", which is what
+  // every host should leave them as: both are properties of the project, not
+  // things a config file should have to restate.
+  //
+  // They are first-class settings rather than runtime sniffs because several
+  // decisions hang off them before the browser exists — whether the vendored
+  // React CLI's detection gates have to be answered, which file extensions the
+  // writer may touch, and which resolver the editor bundle uses.
+  host: { framework: "auto", tailwind: null },
   vendor: { package: "react-rewrite-cli" },
   agent: {
     transport: "auto",
@@ -233,6 +243,180 @@ function resolveLevaConfig(value, projectRoot) {
   })
 }
 
+const HOST_FRAMEWORKS = new Set(["react", "angular"])
+
+/**
+ * What the host's dev server is, and what it takes to start one on a chosen
+ * port.
+ *
+ * One probe, four consumers: which editing lane the browser uses, which port
+ * `--dev` picks when nothing names one, and whether the port and the interface
+ * have to be spelled on the command line.
+ *
+ * The two flag columns are the ones that cost bugs, and both were measured on a
+ * real machine rather than read off a docs page.
+ *
+ * PORT: `next dev` reads the environment variable, which is the only mechanism
+ * this package ever had. `vite` does not — `PORT=3999 vite` binds 5173 and says
+ * so — and neither does `ng serve`. A `--dev` run against either started the
+ * app on the framework's own default while the launcher waited on the port it
+ * had asked for.
+ *
+ * HOST: worse, because it is silent. `vite` and `ng serve` both default to
+ * `localhost`, and on a machine that resolves that to IPv6 they bind `[::1]`
+ * and NOTHING on `127.0.0.1` — measured for both. The launcher probes
+ * `127.0.0.1`, the vendored proxy targets `127.0.0.1`, so the app was up,
+ * reachable in a browser, and invisible to the editor.
+ *
+ * Create React App takes neither flag and reads `PORT` and `HOST` instead,
+ * which is why this is a table rather than "pass everything and hope".
+ */
+const DEV_SERVERS = {
+  angular: { framework: "angular", port: 4200, portFlag: "--port", hostFlag: "--host" },
+  next: { framework: "react", port: 3000, portFlag: "--port", hostFlag: "--hostname" },
+  vite: { framework: "react", port: 5173, portFlag: "--port", hostFlag: "--host" },
+  cra: { framework: "react", port: 3000, portFlag: null, hostFlag: null },
+  unknown: { framework: "react", port: 3000, portFlag: null, hostFlag: null },
+}
+
+function readManifest(projectRoot) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Which of the five the host is, by the dependency that decides it.
+ *
+ * Angular is tested first because its scaffolds may carry a `vite.config.ts` of
+ * their own, and `next` before `vite` because a Next project can depend on Vite
+ * for its tests. The fallthrough is `unknown`, which behaves exactly as this
+ * package behaved before any of this existed.
+ */
+export function detectDevServer(projectRoot) {
+  const manifest = readManifest(projectRoot)
+  const deps = { ...manifest?.dependencies, ...manifest?.devDependencies }
+  const has = (name) => fs.existsSync(path.join(projectRoot, name))
+
+  if (deps["@angular/core"]) return "angular"
+  if (deps.next || has("next.config.js") || has("next.config.ts") || has("next.config.mjs")) {
+    return "next"
+  }
+  if (deps["react-scripts"]) return "cra"
+  if (deps.vite || has("vite.config.js") || has("vite.config.ts")) return "vite"
+  return "unknown"
+}
+
+/**
+ * Whether the host compiles Tailwind.
+ *
+ * A separate question from the framework, and the one that actually decides
+ * whether a utility class means anything. The React lane's whole writer speaks
+ * in utilities, the Code tab offers a "Tailwind classes" view, and the
+ * Responsive section writes `md:grid-cols-2` — all three are noise in a project
+ * that has no Tailwind, whether that project is Angular or React.
+ *
+ * The dependency is the reliable signal: Tailwind has to be installed to
+ * compile, however the host wires it up. The config file is checked too, for a
+ * host that resolves the package through a workspace root this cannot see.
+ */
+export function detectTailwind(projectRoot) {
+  const manifest = readManifest(projectRoot)
+  const deps = { ...manifest?.dependencies, ...manifest?.devDependencies }
+  if (deps.tailwindcss) return true
+  return ["tailwind.config.js", "tailwind.config.ts", "tailwind.config.mjs", "tailwind.config.cjs"]
+    .some((name) => fs.existsSync(path.join(projectRoot, name)))
+}
+
+/**
+ * Which framework the app under the overlay is written in.
+ *
+ * Detected from the dependency that decides it, not from a config file that
+ * happens to sit beside one. `react` is the fallback rather than a third
+ * "unknown" state, because every path this value gates already behaved as if
+ * the host were React — an unrecognised project keeps that behaviour instead of
+ * acquiring a new failure mode.
+ */
+export function resolveHostFramework(projectRoot, configured = "auto") {
+  if (HOST_FRAMEWORKS.has(configured)) return configured
+  if (configured !== "auto" && configured !== undefined && configured !== null) {
+    throw new Error(`host.framework must be "auto", "react" or "angular" (got ${configured})`)
+  }
+  return DEV_SERVERS[detectDevServer(projectRoot)].framework
+}
+
+/**
+ * The file kinds the writer may touch, widened for a framework whose markup is
+ * not in its script files.
+ *
+ * Only when the host has NOT set `source.extensions` itself. The allowlist is
+ * the last thing standing between the browser and a file it should not reach,
+ * so a host that narrowed it deliberately keeps exactly what it asked for.
+ */
+function hostSourceExtensions(extensions, framework, overridden) {
+  if (framework !== "angular" || overridden) return extensions
+  return [...new Set([...extensions, ".html", ".css", ".scss"])]
+}
+
+// The `dev` and `start` families, best first — the same order the start screen
+// offers them in, so the script this resolves to is the one the screen would
+// have preselected. Kept in step with `PREFERRED_DEV_SCRIPTS` in
+// runtime/local-apps.mjs, which cannot be imported here: this module is the one
+// every other module loads, and that one shells out to `lsof`.
+const DEV_SCRIPT_PREFERENCE = ["dev", "develop", "start", "serve"]
+
+/**
+ * The npm script `--dev` runs, resolved against the scripts the host actually
+ * has.
+ *
+ * `"dev"` is the right default for Next and Vite and the wrong one for Angular,
+ * whose `ng new` writes `start` and no `dev` at all — so `design-editor --dev`
+ * on a stock Angular project used to die on `Missing script: dev`, and the fix
+ * was a flag the designer had to know to pass. Naming a script the project does
+ * not have is not a default, it is a guess, and this is the one place that can
+ * check.
+ *
+ * An explicitly configured name always wins, even a wrong one: a host that says
+ * `devScript: "dev"` and has no `dev` script should hear that from npm rather
+ * than have this quietly run something else.
+ */
+export function resolveDevScript(projectRoot, configured, explicit) {
+  if (explicit) return configured
+  const scripts = readManifest(projectRoot)?.scripts
+  if (!scripts || typeof scripts !== "object") return configured
+  const has = (name) => typeof scripts[name] === "string"
+  if (has(configured)) return configured
+  return DEV_SCRIPT_PREFERENCE.find(has) ?? configured
+}
+
+/**
+ * The port `--dev` starts the app on when nothing names one.
+ *
+ * A dev server has to be told a port before it can be asked which one it took,
+ * so this is a guess by construction — but the framework narrows it to one
+ * guess that is nearly always right, and an Angular project that moved its port
+ * says so in `angular.json`, which is better than any default.
+ */
+export function resolveDevPort(projectRoot, devServer) {
+  if (devServer === "angular") {
+    try {
+      const angularJson = JSON.parse(
+        fs.readFileSync(path.join(projectRoot, "angular.json"), "utf8")
+      )
+      for (const project of Object.values(angularJson.projects ?? {})) {
+        const port =
+          project?.architect?.serve?.options?.port ?? project?.targets?.serve?.options?.port
+        if (Number.isInteger(port)) return port
+      }
+    } catch {
+      // No angular.json, or one this cannot read. The CLI's own default stands.
+    }
+  }
+  return DEV_SERVERS[devServer].port
+}
+
 /**
  * Merges host overrides onto the defaults and makes every path absolute.
  * `projectRoot` defaults to the directory the config file was found in, so it
@@ -269,6 +453,12 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
   )
 
   const icons = resolveIconSetConfig(merged.icons, projectRoot)
+  const devServer = detectDevServer(projectRoot)
+  const framework = resolveHostFramework(projectRoot, merged.host?.framework)
+  const tailwindPresent =
+    typeof merged.host?.tailwind === "boolean"
+      ? merged.host.tailwind
+      : detectTailwind(projectRoot)
 
   const apiPrefix = merged.apiPrefix.startsWith("/")
     ? merged.apiPrefix.replace(/\/+$/, "")
@@ -276,6 +466,20 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
 
   return Object.freeze({
     ...merged,
+    app: Object.freeze({
+      ...merged.app,
+      devScript: resolveDevScript(
+        projectRoot,
+        merged.app.devScript,
+        typeof raw.app?.devScript === "string"
+      ),
+      // The port and flags `--dev` uses when neither the command line nor this
+      // config names one. Reported rather than applied: `app.port` stays null
+      // so "the host did not say" and "the host said 3000" stay distinguishable.
+      devPort: resolveDevPort(projectRoot, devServer),
+      devPortFlag: DEV_SERVERS[devServer].portFlag,
+      devHostFlag: DEV_SERVERS[devServer].hostFlag,
+    }),
     configPath,
     projectRoot,
     stateDir,
@@ -293,10 +497,15 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
     designSystem,
     icons,
     controls: Object.freeze({ leva }),
+    host: Object.freeze({ framework, devServer, tailwind: tailwindPresent }),
     source: Object.freeze({
       ...merged.source,
       roots: merged.source.roots.map((entry) => path.resolve(projectRoot, entry)),
-      extensions: merged.source.extensions.map((ext) => ext.toLowerCase()),
+      extensions: hostSourceExtensions(
+        merged.source.extensions.map((ext) => ext.toLowerCase()),
+        framework,
+        Array.isArray(raw.source?.extensions)
+      ),
     }),
   })
 }
@@ -370,6 +579,11 @@ export function browserPrelude(config, runtime = {}) {
       dockedPanel: config.chrome.dockedPanel,
     },
     tailwind: config.tailwind,
+    // Which resolver and which write lane the editor bundle uses. The browser
+    // could sniff for `window.ng`, and it does check — but a page that has not
+    // bootstrapped yet has no `ng`, so the authoritative answer has to arrive
+    // from the side that read the host's package.json.
+    host: config.host,
     // Absolute manifest and stylesheet paths stay in the server-side config.
     designSystem: config.designSystem.catalog,
     // The attribute, not the drawings: 114KB of path data would be paid for on

@@ -49,6 +49,14 @@
  * click do" is the fastest way to make a direct-manipulation tool feel broken.
  */
 
+import {
+  angularQueueSize,
+  applyAngularOperations,
+  buildAngularOperations,
+  clearAngularQueue,
+  isAngularHost,
+  onAngularQueueChange,
+} from "../core/angular"
 import { previewOnlyChanges } from "../core/change-prompt"
 import { config } from "../core/config"
 import { el } from "../core/dom"
@@ -190,6 +198,58 @@ export function installToolbar(context: EditorContext): void {
     modeGlyph.replaceChildren(icon(mode.glyph, GLYPH))
   }
 
+  /** True when either lane is holding an edit that has not reached source. */
+  const hasPendingChanges = () =>
+    isAngularHost() ? angularQueueSize() > 0 : bridge.store.hasChanges()
+
+  /**
+   * The Angular commit.
+   *
+   * A request rather than the vendor's `commitBatch` WebSocket message, because
+   * this one has an answer worth waiting for. The vendor's protocol is
+   * fire-and-forget: it reports success by the page hot-reloading, and reports
+   * a write it could not place by doing nothing at all. Here an operation can
+   * fail for a reason the user can act on — an element that matches two
+   * template nodes equally well, text that turns out to be an interpolation —
+   * and the only place that reason can surface is the reply.
+   */
+  const applyAngular = async () => {
+    const operations = buildAngularOperations()
+    if (!operations.length) {
+      context.toast("Could not resolve source files for these changes", "error")
+      return
+    }
+    context.toast(`Applying ${operations.length} change${operations.length === 1 ? "" : "s"}…`)
+    try {
+      const result = await applyAngularOperations(operations)
+      // Cleared on any reply, including a partial one: what failed is reported
+      // below and stays on screen as a preview, and leaving it queued would
+      // mean the next Apply retried a write that has already been refused once.
+      clearAngularQueue()
+      syncPressed()
+      if (!result.failed.length) {
+        const files = new Set(result.applied.map((entry) => entry.filePath))
+        context.toast(
+          `Wrote ${result.applied.length} change${result.applied.length === 1 ? "" : "s"}` +
+            ` to ${[...files].join(", ")}`
+        )
+        return
+      }
+      // The first reason, in full, rather than a count of failures. One
+      // sentence a designer can act on beats a tally they have to go looking
+      // for, and the reasons repeat far more often than they differ.
+      const [first] = result.failed
+      const others = result.failed.length - 1
+      context.toast(
+        `Wrote ${result.applied.length}, skipped ${result.failed.length}` +
+          ` — ${first.reason}${others > 0 ? ` (+${others} more)` : ""}`,
+        "error"
+      )
+    } catch (error) {
+      context.toast(error instanceof Error ? error.message : "Apply failed", "error")
+    }
+  }
+
   const applyButton = el(
     "button",
     {
@@ -197,8 +257,12 @@ export function installToolbar(context: EditorContext): void {
       type: "button",
       ...hint("Apply to code", "Write pending visual changes back to source"),
       onclick: () => {
-        if (!bridge.store.hasChanges()) {
+        if (!hasPendingChanges()) {
           context.toast("Nothing to apply — make a change first")
+          return
+        }
+        if (isAngularHost()) {
+          void applyAngular()
           return
         }
         const operations = bridge.store.buildBatchOperations()
@@ -441,7 +505,7 @@ export function installToolbar(context: EditorContext): void {
     inspectorToggle.paint()
     undoButton.toggleAttribute("disabled", !canUndo())
     redoButton.toggleAttribute("disabled", !canRedo())
-    applyButton.toggleAttribute("disabled", !bridge.store.hasChanges())
+    applyButton.toggleAttribute("disabled", !hasPendingChanges())
   }
 
   // The engine pushes its own change events below; from our store only the mode,
@@ -465,6 +529,10 @@ export function installToolbar(context: EditorContext): void {
   } catch {
     // Older engine builds do not expose every subscription.
   }
+  // The Angular lane keeps its queue outside the vendor store, so the button's
+  // disabled state has to hear from it directly — the engine has nothing to say
+  // about a write it is not carrying.
+  onAngularQueueChange(syncPressed)
 
   window.addEventListener("keydown", (event) => {
     /*

@@ -112,6 +112,33 @@ export function translateBy(element: LayerElement, dx: number, dy: number): stri
   return `translate(${round(offset.x + dx)}px, ${round(offset.y + dy)}px)`
 }
 
+/**
+ * The transform a finished gesture MEANS, rather than the string left sitting
+ * inline when it ends.
+ *
+ * Two writers touch this one property during a drag. Ours writes a pure
+ * `translate(...)`; the vendored overlay paints its own preview over the top —
+ * `translate(x, y) scale(1.02)`, plus whatever the computed transform was when
+ * the press began, which for an untransformed element is the identity matrix.
+ * Read raw at commit, the settled value is therefore whichever of the two wrote
+ * last, decorated with a lift nobody asked for.
+ *
+ * That was invisible on React, where `transform` has no utility and the value
+ * only ever reached the Prompts tab as a hint for a person to read. On Angular
+ * the writer puts it in the template, and `transform: translate(40px, 24px)
+ * scale(1.02) matrix(1, 0, 0, 1, 0, 0)` is a permanent record of a transient
+ * animation — measured, in a real app's own overview template.
+ *
+ * So the offset is recomposed from the matrix, which carries the translation in
+ * `m41`/`m42` whatever else was multiplied into it, and nothing else is kept.
+ * An element left at no offset gets the empty string, which REMOVES the
+ * declaration instead of pinning an identity onto it.
+ */
+function settledTransform(element: LayerElement): string {
+  const { x, y } = readOffset(element)
+  return x === 0 && y === 0 ? "" : `translate(${round(x)}px, ${round(y)}px)`
+}
+
 const DRAG_THRESHOLD = 3
 
 /**
@@ -290,8 +317,9 @@ export function installTransform(context: EditorContext, writer: Writer): void {
       // A resize only moves the origin when a west or north handle dragged it,
       // and a move that snapped back where it started moved nothing. The
       // element is the honest record of which of those happened.
-      if (style.transform !== target.inline.transform) {
-        writes.push({ property: "transform", value: style.transform })
+      const settled = settledTransform(target.element)
+      if (settled !== target.inline.transform) {
+        writes.push({ property: "transform", value: settled })
       }
       if (writes.length === 0) continue
 

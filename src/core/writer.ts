@@ -7,6 +7,12 @@
  * untrustworthy is a preview that the code write silently drops.
  */
 
+import {
+  isAngularHost,
+  queueAngularClasses,
+  queueAngularStyles,
+  queueAngularText,
+} from "./angular"
 import { resolveElementSource, type RewriteBridge, type UpdateClassOperation } from "./bridge"
 import { previewOnlyChanges, recordPreviewOnly } from "./change-prompt"
 import { record } from "./history"
@@ -271,7 +277,70 @@ export function createWriter(bridge: RewriteBridge): Writer {
    * `applyStyles`, so undoing a change neither announces itself twice nor
    * records an inverse of the inverse.
    */
+  /**
+   * The Angular lane: preview, then queue the CSS declarations verbatim.
+   *
+   * No Tailwind translation happens here, and that is not a shortcut — an
+   * Angular template has no utility classes to carry one. The write target is
+   * the element's own `style` attribute in the template, which means the set of
+   * expressible properties is every CSS property rather than the subset the
+   * translator can spell. `transform`, which a drag produces and which has no
+   * utility, is writable on this lane and preview-only on the React one.
+   *
+   * Returns the properties that could not be queued, in the same shape the
+   * React lane returns, so the toast and the ledger stay one code path. The
+   * only way to land there is an element Angular does not own — inside a
+   * third-party web component, say — which is a real answer, not a shortfall
+   * in the translator.
+   */
+  const writeStylesAngular = (selection: Selection, writes: StyleWrite[]): string[] => {
+    const before = writes.map((write) => ({
+      property: write.property,
+      value: currentValue(selection.element, write.property),
+    }))
+    for (const write of writes) {
+      selection.element.style.setProperty(write.property, write.value)
+    }
+
+    /*
+     * A declaration that changes nothing is not an edit, and on this lane that
+     * distinction reaches the file.
+     *
+     * The inspector's numeric fields commit on `change` as well as on Enter, so
+     * leaving one by clicking the canvas re-commits the value it was showing.
+     * Selecting an element, looking at it, and clicking the next one therefore
+     * arrives here as "set opacity to 1" for an element already at 1. The
+     * React lane turns that into a utility class nobody notices; here it would
+     * write `style="opacity: 1"` into the template of every element the user
+     * merely passed through on the way to the one they meant.
+     *
+     * Compared through `currentValue` in both directions rather than against
+     * the input string, because the browser re-serializes what it is given —
+     * `rgb(0,0,255)` reads back as `rgb(0, 0, 255)`, and a string compare would
+     * call that a change.
+     */
+    const changed = writes.filter(
+      (write, index) => currentValue(selection.element, write.property) !== before[index].value
+    )
+    if (!changed.length) return []
+    if (queueAngularStyles(selection.element, changed)) return []
+
+    const className = selection.element.getAttribute("class") ?? ""
+    for (const write of changed) {
+      const index = writes.indexOf(write)
+      strand(selection, {
+        className,
+        property: write.property,
+        from: before[index].value,
+        to: write.value,
+      })
+    }
+    return changed.map((write) => write.property)
+  }
+
   const writeStyles = (selection: Selection, writes: StyleWrite[]): string[] => {
+    if (isAngularHost()) return writeStylesAngular(selection, writes)
+
     const updates: ClassUpdate[] = []
     const keys: string[] = []
     const dropped: string[] = []
@@ -340,6 +409,18 @@ export function createWriter(bridge: RewriteBridge): Writer {
     for (const name of write.remove) element.classList.remove(name)
     for (const name of write.add) element.classList.add(name)
 
+    if (isAngularHost()) {
+      if (!queueAngularClasses(element, write)) {
+        strand(selection, {
+          className: identity.className,
+          property: "class",
+          from: identity.className,
+          to: element.getAttribute("class") ?? "",
+        })
+      }
+      return
+    }
+
     const escape = (name: string) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     const additions = [...new Set(write.add.filter((name) => !write.remove.includes(name)))]
     const removals = [...new Set(write.remove)]
@@ -398,6 +479,18 @@ export function createWriter(bridge: RewriteBridge): Writer {
     const element = selection.element
     const originalText = element.textContent ?? ""
     element.textContent = text
+
+    if (isAngularHost()) {
+      if (!queueAngularText(element, text)) {
+        strand(selection, {
+          className: element.getAttribute("class") ?? "",
+          property: "text",
+          from: originalText,
+          to: text,
+        })
+      }
+      return
+    }
     // The identity the AST matcher needs is read here, before the await: by the
     // time source resolves, a re-render may have replaced the classes we would
     // otherwise send, and the matcher scores JSX against them.

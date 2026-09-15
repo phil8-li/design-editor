@@ -13,22 +13,63 @@ import path from "node:path"
 
 import { isEditableSourcePath } from "../config.mjs"
 
-const DEFAULT_SYSTEM_PROMPT = `You are a precision frontend code modifier for a React application using Tailwind CSS.
+/**
+ * The half of the system prompt that differs by host.
+ *
+ * An agent told to "find the className in the JSX" and to "prefer Tailwind
+ * utilities" will confidently produce a wrong edit in an Angular template,
+ * where the attribute is `class`, the file is `.html`, and there may be no
+ * Tailwind at all. The instructions are not decoration — they are what the
+ * model uses to locate the element and to choose how to express the change.
+ *
+ * Everything the two share — change only what was asked, preserve formatting,
+ * the SEARCH/REPLACE contract — is stated once, below.
+ */
+const HOST_GUIDANCE = {
+  react: {
+    intro: "a React application using Tailwind CSS",
+    styling: "- Prefer Tailwind utility classes already used in the file over new inline styles",
+    locate: [
+      "1. **className string** — most reliable, find it as an exact substring in the JSX",
+      "2. **Text content** — disambiguates elements with the same tag and classes",
+      "3. **Ancestry** — parent tags and classNames narrow the search",
+      "4. **Component name** — which React component to look in",
+      "5. **Line hint** — approximate, may be stale, do not rely on it exclusively",
+    ],
+    fence: "tsx",
+  },
+  angular: {
+    intro: "an Angular application",
+    styling: [
+      "- The file is usually a component's `.html` template; the attribute is `class`, not `className`",
+      "- Prefer a class the component's own stylesheet already defines, then a `style` attribute on the element",
+      "- Never rewrite an Angular binding — `[class.x]`, `[style.x]`, `[ngClass]`, `*ngIf`, `@if`/`@for` — or the interpolation inside `{{ }}`",
+    ].join("\n"),
+    locate: [
+      "1. **class attribute** — most reliable, find it as an exact substring in the template",
+      "2. **Text content** — disambiguates elements with the same tag and classes",
+      "3. **Ancestry** — parent tags and classes narrow the search",
+      "4. **Component name** — which Angular component's template to look in",
+      "5. **Line hint** — approximate, may be stale, do not rely on it exclusively",
+    ],
+    fence: "html",
+  },
+}
+
+function systemPromptFor(framework) {
+  const host = HOST_GUIDANCE[framework] ?? HOST_GUIDANCE.react
+  return `You are a precision frontend code modifier for ${host.intro}.
 
 A designer selected one element in a visual editor and described the change they want. Reproduce their intent in the source file.
 
 ## Critical Rules
 - Change only the selected element (and its children when the request requires it)
 - Preserve all existing code structure, formatting, and whitespace
-- Prefer Tailwind utility classes already used in the file over new inline styles
+${host.styling}
 - Never refactor, rename, or "improve" code the request did not ask about
 
 ## Element Location Strategy
-1. **className string** — most reliable, find it as an exact substring in the JSX
-2. **Text content** — disambiguates elements with the same tag and classes
-3. **Ancestry** — parent tags and classNames narrow the search
-4. **Component name** — which React component to look in
-5. **Line hint** — approximate, may be stale, do not rely on it exclusively
+${host.locate.join("\n")}
 
 ## Response Format
 
@@ -57,15 +98,20 @@ Rules for SEARCH/REPLACE blocks:
 - Order blocks from top-of-file to bottom-of-file
 - Do NOT include line numbers in SEARCH/REPLACE content
 - If the request cannot be satisfied in this file, reply with a one-sentence explanation and no blocks`
+}
 
-function describeSelection(request) {
+function describeSelection(request, framework) {
   const selection = request?.selection
   if (!selection) return "No element was selected."
 
+  // Named as the host's own source names it. Telling an agent the `className`
+  // of an element whose template says `class` is a small lie that sends it
+  // looking for a JSX attribute in a `.html` file.
+  const classAttribute = framework === "angular" ? "class" : "className"
   const lines = [
     `- Tag: <${selection.tagName}>`,
     `- Component: ${selection.componentName || "unknown"}`,
-    `- className: ${selection.className || "(none)"}`,
+    `- ${classAttribute}: ${selection.className || "(none)"}`,
     `- Text: ${selection.text ? JSON.stringify(selection.text) : "(none)"}`,
   ]
   if (selection.rect) {
@@ -85,20 +131,21 @@ function describeSelection(request) {
   return lines.join("\n")
 }
 
-function buildUserMessage(prompt, request, source, filePath) {
+function buildUserMessage(prompt, request, source, filePath, framework) {
   const numbered = source
     .split("\n")
     .map((line, index) => `${index + 1}: ${line}`)
     .join("\n")
 
+  const fence = (HOST_GUIDANCE[framework] ?? HOST_GUIDANCE.react).fence
   return [
     `## File: ${filePath}`,
-    "```tsx",
+    "```" + fence,
     numbered,
     "```",
     "",
     "## Selected element",
-    describeSelection(request),
+    describeSelection(request, framework),
     "",
     "## Requested change",
     prompt,
@@ -141,6 +188,7 @@ async function loadAnthropic() {
  */
 async function applyWithClaude(config, prompt, request) {
   const projectRoot = config.projectRoot
+  const framework = config.host?.framework ?? "react"
   const filePath = request?.selection?.source?.filePath
   if (!filePath) return null
 
@@ -171,9 +219,13 @@ async function applyWithClaude(config, prompt, request) {
     const response = await client.messages.create({
       model: config.agent.model,
       max_tokens: config.agent.maxTokens,
-      system: config.agent.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+      // A host that supplied its own prompt gets exactly that; otherwise the
+      // instructions follow the framework, because "find the className in the
+      // JSX" is a wrong instruction in an Angular template rather than a
+      // vague one.
+      system: config.agent.systemPrompt ?? systemPromptFor(framework),
       messages: [
-        { role: "user", content: buildUserMessage(prompt, request, original, filePath) },
+        { role: "user", content: buildUserMessage(prompt, request, original, filePath, framework) },
       ],
     })
     responseText = response.content
@@ -238,7 +290,7 @@ async function writeHandoff(config, prompt, request) {
     "",
     "## Selected element",
     "",
-    describeSelection(request),
+    describeSelection(request, config.host?.framework ?? "react"),
     "",
   ].join("\n")
 
