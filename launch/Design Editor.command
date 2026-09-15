@@ -44,13 +44,27 @@ HELP
   echo "Press any key to close."; read -r -n 1; exit 1
 fi
 
+# A forward left on the shared connection by an older version of this script,
+# or by a run that was killed outright. Harmless when there is none.
+ssh "${SSH_OPTS[@]}" -O cancel -L $PROXY:127.0.0.1:$PROXY -L $WS:127.0.0.1:$WS \
+  "$CLOUDTOP" >/dev/null 2>&1
+
 say "2/4  Starting the editor on the Cloudtop…"
-# Kill any editor from a previous run, then start a fresh one. `--dev` starts
+# Stop any editor from a previous run, then start a fresh one. `--dev` starts
 # the prototype's own dev server too if it is not already up.
+#
+# The old editor is found BY PORT, not by a command-line pattern. `pkill -f
+# design-editor/cli.mjs` looks right and is a trap: that string also appears in
+# the ssh command being sent, so pkill matches the shell running it and kills
+# itself. The symptom is exit 255 with no output at all, which reads like the
+# connection dropped.
 ssh "${SSH_OPTS[@]}" "$CLOUDTOP" "
   export PATH=\$HOME/.local/opt/node-current/bin:\$HOME/.local/bin:\$PATH
-  pkill -f 'design-editor/cli.mjs' 2>/dev/null
-  sleep 1
+  for port in $PROXY $WS; do
+    old=\$(lsof -ti tcp:\$port -s tcp:LISTEN 2>/dev/null | head -1)
+    [ -n \"\$old\" ] && kill \$old 2>/dev/null
+  done
+  sleep 2
   cd \$HOME/$PROTOTYPE || exit 1
   rm -f /tmp/design-editor.log
   setsid nohup node \$HOME/src/design-editor/cli.mjs --dev --no-open \
@@ -73,13 +87,29 @@ if [ "${READY:-0}" != "1" ]; then
 fi
 
 say "4/4  Connecting and opening your browser…"
-# Forward the editor's two ports. Killed when you close this window.
-ssh "${SSH_OPTS[@]}" -N \
-  -L $PROXY:127.0.0.1:$PROXY \
-  -L $WS:127.0.0.1:$WS \
-  "$CLOUDTOP" &
-TUNNEL=$!
-trap 'kill $TUNNEL 2>/dev/null' EXIT
+# Forward the editor's two ports onto the connection we ALREADY authenticated
+# in step 1, rather than opening a second one.
+#
+# The obvious `ssh -N -L …` is wrong here in two different ways, and they pull
+# in opposite directions. Left on the machine's shared connection
+# (`ControlMaster auto`, `ControlPersist yes` in ~/.ssh/config) the forward
+# outlives this window, so closing it leaves the ports open and the next run
+# silently reuses a tunnel pointing at an editor that is gone. Forced onto its
+# own connection with `ControlPath=none` it needs a SECOND security-key touch,
+# which is precisely the friction this launcher exists to remove.
+#
+# `-O forward` asks the existing connection to add the forward and returns
+# immediately; `-O cancel` takes it away again. One touch, and a real teardown.
+FORWARDS=(-L "$PROXY:127.0.0.1:$PROXY" -L "$WS:127.0.0.1:$WS")
+ssh "${SSH_OPTS[@]}" -O forward "${FORWARDS[@]}" "$CLOUDTOP" >/dev/null 2>&1 \
+  || die "Could not connect the ports."
+
+# On the signals a closed Terminal window actually sends, not just on a clean
+# exit: an EXIT trap alone does not run when the shell is terminated.
+cleanup() {
+  ssh "${SSH_OPTS[@]}" -O cancel "${FORWARDS[@]}" "$CLOUDTOP" >/dev/null 2>&1
+}
+trap cleanup EXIT INT TERM HUP
 
 for _ in $(seq 1 20); do
   curl -s -m 3 -o /dev/null "http://127.0.0.1:$PROXY$PAGE" && break
@@ -98,5 +128,6 @@ cat <<EOF
 
 EOF
 
-# Hold the window open so the tunnel stays up.
-wait $TUNNEL
+# Hold the window open. The forward lives on the shared connection, so it is
+# `cleanup` that ends it, not this process exiting.
+while true; do sleep 3600; done
