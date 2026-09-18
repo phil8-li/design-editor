@@ -1,5 +1,15 @@
 /**
- * Floating bottom toolbar: the mode switch, time travel, and the commit path.
+ * Floating bottom toolbar: one row of icons, read left to right.
+ *
+ * Every control in it is a glyph with a hover tip now, including the two that
+ * used to carry words. The mode switch was the last holdout and the argument
+ * for its label was a good one — no 16px drawing says "the editor is not
+ * intercepting your clicks" — but the bar it was written for had three
+ * controls in it. At nine, one wide pill among eight squares is not emphasis,
+ * it is a ragged row: the squares no longer line up into clusters, and the
+ * cluster is the thing that makes nine controls findable at all. The word did
+ * not disappear, it moved into the tip and into the accessible name, which is
+ * where every other control in this strip has always kept its.
  *
  * It used to carry a zoom stepper, a measurement reminder and an overflow menu
  * inventorying every Figma tool this editor does not have. All three answered
@@ -22,58 +32,144 @@
  *
  * The two panel toggles STAY here, and this is the one place they live — a
  * disclosure with two homes is a disclosure with two answers. Each draws ONE
- * mark, named for what its panel holds rather than for the shape of the panel:
- * layers on the left, sliders on the right. `aria-pressed` carries the state,
- * which is all a side panel needs from its button — the panel is on screen or it
- * is not, and that is a louder report than any 16px drawing.
+ * mark, and the mark is now the PANEL rather than what the panel holds: a
+ * framed box with its left column inked, and the same box mirrored. Naming the
+ * contents (a layer stack, a slider rack) made two unrelated drawings that had
+ * to be learned as a pair, and dated as soon as either panel grew a second tab.
+ * Left and right are read rather than remembered.
+ *
+ * They are also the two controls in the bar that report ON without the accent
+ * chip. The glyph fills, and that is all — see `quiet` on `panelToggle`.
  *
  * Every glyph in the strip is drawn at ONE size, `GLYPH`, and inks the same
  * share of its grid (see `inkViewBox` in `core/icons.ts`). Two glyphs at the
  * same nominal size still read a step apart when one of them fills more of its
  * box, so the size alone was never the whole of "consistent".
  *
- * "Copy change prompts" left too, and this one was not a deletion — it moved.
- * The changes the writer cannot express as classes are a QUEUE that grows as
- * you work, and the toolbar had room for a button but never for the list. It
- * now sits under the list it copies, in the right panel's Prompts tab, where a
- * count is not the only thing it can tell you.
+ * "Copy notes and edits" has left this bar for the second time, and this time
+ * without a square. It came back once because the panel that holds the same
+ * Copy can be CLOSED, and handing the work over from the only place it was
+ * drawn meant first reopening 260px you had shut on purpose. That argument
+ * expired with the change below it: Notes and Inspect now raise the right panel
+ * on the tab that answers them, so the list is up by the time there is anything
+ * in it worth copying. What is left is the chord — `notes.copy` runs
+ * `copyBrief` directly, and a keydown is as much a user gesture as a click, so
+ * the clipboard still opens for it.
  *
- * One thing did arrive, and it is not a tool: the way back to the chooser. The
- * editor takes over the URL the chooser was on, so a designer who wanted a
- * different app had no door except the terminal. It is drawn only for the
- * sessions that have a chooser to go back to, which is why the strip most
- * people see is unchanged.
+ * One thing LEFT this bar, and it was never a tool: the way back to the
+ * chooser. It names the app the whole editor is pointed at, and that is a
+ * statement about what you are looking at rather than a thing you do to this
+ * page — while everything else in this strip is a verb about the current
+ * selection. A control answering "which app is this?" belongs above the panel
+ * that lists what is IN that app, not among the verbs, so it now lives at the
+ * top of the left panel, where the name it shows reads as the heading for the
+ * tree underneath it instead of as the one word in a row of glyphs.
  *
  * The remaining tool state is still mirrored into the vendor engine so its
  * selection mode stays in sync with ours — two sources of truth for "what does a
  * click do" is the fastest way to make a direct-manipulation tool feel broken.
+ *
+ * Read left to right the row is: what a click does (the pointer, and notes) —
+ * what to do with what you did (step back, step forward) — and what the editor
+ * is showing you (how the chrome is painted, the left panel, the right panel,
+ * and then the whole editor away).
+ *
+ * The two mode controls also REACH the right panel, which is the one place this
+ * bar's clusters touch. Inspect raises Design, Notes raises Changes; each mode
+ * has exactly one tab that is the rest of it, and the pairing is enforced in
+ * `setMode` (`core/context.ts`) rather than here, so the keymap cannot arrive
+ * at a different panel than the buttons do.
+ *
+ * The pill also MOVES. It is a floating surface over someone else's product,
+ * and the product does not know it is coming: parked at the bottom centre it
+ * covers a tab bar on one app and a cookie banner on the next, and the only
+ * remedy was to hide the whole editor. It is draggable by its ground now, the
+ * way Agentation's is, and it remembers where it was put. The disc remembers
+ * its own corner separately — `shell/launcher.ts` owns the gesture both use,
+ * and nothing else about either of them.
  */
 
-import {
-  angularQueueSize,
-  applyAngularOperations,
-  buildAngularOperations,
-  clearAngularQueue,
-  isAngularHost,
-  onAngularQueueChange,
-} from "../core/angular"
-import { previewOnlyChanges } from "../core/change-prompt"
-import { config } from "../core/config"
+import { onAngularQueueChange } from "../core/angular"
+import { buildAnnotationBrief, outboxItems } from "../annotations/output"
+import { onAnnotationsChange } from "../annotations/store"
+import { onEditsChange } from "../annotations/journal"
+import { onPreviewOnlyChange } from "../core/change-prompt"
+import { editorMode } from "../core/store"
 import { el } from "../core/dom"
 import { canRedo, canUndo, onHistoryChange, redo, undo } from "../core/history"
-import { icon, type IconName } from "../core/icons"
-import { historyAction, isMac, isTextEntry } from "../core/keymap"
-import { untranslatedProperties } from "../core/writer"
+import { icon, type IconName, type IconWeight } from "../core/icons"
+import { chordLabel, SHORTCUTS } from "../core/keymap"
+import { registerCommand } from "../core/commands"
+import { onRemovalQueueChange } from "../core/removal"
+import { tokens, type ThemeName } from "../core/tokens"
 import type { EditorContext } from "../core/context"
+import { installDrag } from "./launcher"
+import { onInsetsChange } from "./shell"
 
 /**
  * The one size every glyph in this strip is drawn at.
  *
  * The mode switch used to draw its arrow at 14 while everything else drew at
  * 16, on the theory that a glyph beside a word should sit back. Beside a row of
- * 16s it does not read as deferential, it reads as a different icon set.
+ * 16s it does not read as deferential, it reads as a different icon set. The
+ * ramp in `tokens.icon` owns that number now, and `IconSize` turns the 14 this
+ * once was into a compile error rather than something to catch in review.
  */
-const GLYPH = 16
+const GLYPH = tokens.icon.control
+
+/**
+ * How far the pointer travels on the pill's ground before it is a drag.
+ *
+ * Ten, which is the disc's figure and Agentation's, where this used to be four.
+ * The old four had a real argument behind it — this ground has no press to
+ * steal, so the threshold only had to beat a tremor, and every pixel above
+ * that is slop between the pointer and an object meant to be stuck to it.
+ *
+ * What that argument missed is the hand. The bar and the disc are separate
+ * objects, but they are moved by the same gesture and a hand does not steady
+ * itself differently for a 600px pill than for a 44px disc — so a threshold
+ * written twice is a number that drifts for no reason anybody could point at.
+ * Six pixels of extra travel is not a cost a hand can feel.
+ *
+ * (`canvas/marquee.ts` still uses three, and should: a marquee is not this
+ * object, and its press has a selection to protect rather than a position.)
+ */
+const DRAG_SLACK = 10
+
+/**
+ * Everything in the bar that is a control rather than ground.
+ *
+ * A press that lands on any of these is that control's press and never a drag.
+ * The bar holds nothing but buttons now that its one anchor has gone to the
+ * left panel; the anchor and the field types are named anyway, because the
+ * failure if one is ever added and missed here is silent — a text field you
+ * cannot put a caret in, because dragging its own text moved the toolbar
+ * instead.
+ */
+const CONTROLS = "button, a, input, select, textarea"
+
+/**
+ * Draw a control's glyph, and only when the weight it draws has changed.
+ *
+ * Every toggle in this bar redraws its mark when it flips, because ON is a FILL
+ * here rather than a heavier stroke — and a fill is a different `<svg>` rather
+ * than a different value on the one already mounted. Replacing it
+ * unconditionally would be a swap on nearly every repaint: `syncPressed` also
+ * runs on selection, on history and on every queue change, and the weight is
+ * the same in all of them. Two things go wrong when it does. The stroke
+ * transition in `css/icons.ts` restarts from scratch on a fresh node, so a
+ * glyph flickers while the user is dragging a selection about; and the node
+ * under the pointer is torn out mid-hover, which drops the hover state until
+ * the pointer moves again.
+ *
+ * The weight last drawn is held on the element rather than in a module-level
+ * map, so it cannot outlive the button it describes.
+ */
+function drawGlyph(button: HTMLElement, name: IconName, weight: IconWeight): void {
+  if (button.dataset.deWeight === weight) return
+  button.dataset.deWeight = weight
+  button.replaceChildren(icon(name, GLYPH, weight))
+}
 
 /**
  * Hover text for an icon-only control, plus the label everyone else reads.
@@ -84,22 +180,41 @@ const GLYPH = 16
  * draws it above the strip. The `aria-label` is not a duplicate of it — a
  * pseudo-element is not an accessible name, so a tooltip on its own leaves the
  * control unnamed.
+ *
+ * `second` is whatever the name cannot say on its own: the shortcut for the
+ * controls that have one, and for the mode switch the consequence of pressing
+ * it. It is one parameter rather than two because the tip has one shape, and a
+ * second overload would be how the separator ends up spelled two ways.
  */
-function tip(label: string, shortcut?: string): Record<string, string> {
-  return { "data-de-tip": shortcut ? `${label} · ${shortcut}` : label, "aria-label": label }
+function tip(label: string, second?: string): Record<string, string> {
+  return { "data-de-tip": second ? `${label} · ${second}` : label, "aria-label": label }
 }
 
 /**
- * Hover text for a control that already shows its own label.
+ * The key a control answers to, spelled the platform's way, read off the one
+ * table in `core/keymap.ts`.
  *
- * The `aria-label` here is not redundant with the visible text — it PINS it.
- * CSS generated content joins name-from-content, so a `data-de-tip` alone
- * leaves the button announced as "Apply to code Write pending visual changes
- * back to source": the sighted user's hint smuggled into everyone else's name.
- * An explicit label wins over content and shuts that off.
+ * The tips used to write their own — `isMac() ? "⌘Z" : "Ctrl+Z"`, twice — which
+ * is exactly how a tooltip comes to advertise a shortcut the keymap no longer
+ * binds. Asking the table means a control with no key shows no key, and a key
+ * that moves moves in the tip on the same commit.
  */
-function hint(label: string, detail: string): Record<string, string> {
-  return { "data-de-tip": detail, "aria-label": label }
+function keyFor(command: string): string | undefined {
+  const shortcut = SHORTCUTS.find((entry) => entry.command === command)
+  return shortcut && chordLabel(shortcut.chord)
+}
+
+/**
+ * The mode switch's second line: its key, then what pressing it leads to.
+ *
+ * The key leads because the sentence after it is long, and a tip is read left
+ * to right until it stops being useful — "V" is the part a designer is looking
+ * for the second time they hover. `tip` joins on one separator, so the two are
+ * composed here rather than by teaching it a third slot nothing else wants.
+ */
+function modeDetail(detail: string): string {
+  const key = keyFor("mode.inspect")
+  return key ? `${key} · ${detail}` : detail
 }
 
 /**
@@ -108,42 +223,147 @@ function hint(label: string, detail: string): Record<string, string> {
  * The switch used to be labelled "Interactive" in both states and told apart
  * only by a pressed treatment, which meant the label was a promise in one state
  * and a lie in the other — you had to look at the ring to learn whether the
- * editor was still holding your clicks. So the label now names the state you are
- * STANDING IN, and the tip names what pressing would do; those are different
- * sentences and they were being asked to share one string.
+ * editor was still holding your clicks. So each half names the state you are
+ * STANDING IN, and carries a second sentence for what pressing would do; those
+ * were being asked to share one string.
  *
- * The glyph is the same arrow twice, filled while the editor holds the pointer
- * and hollow once it has handed it over. Shape, not colour: this pair is read
- * in the corner of the eye at `GLYPH`, and a mode told apart by hue alone is not
- * told apart at all.
+ * Both now reach the user through the tip and the accessible name rather than
+ * through a word on the button. `label` is still the state and `detail` still
+ * the consequence — losing the pill did not merge them, which is the failure
+ * that would actually cost something.
+ *
+ * The glyph is the same arrow in both states — filled while the editor holds
+ * the pointer, hollow once it has handed it over. Weight, not colour: this pair
+ * is read in the corner of the eye at `GLYPH`, and a mode told apart by hue
+ * alone is not told apart at all. It is also the same arrow the floating
+ * launcher wears, because it is the same claim about who owns the pointer.
  */
 /**
- * The two things the chooser link can say, and how long it stays asking.
+ * The pointer mode, in the two states this one control can show.
  *
- * The second string is not a dialog in disguise — it is the same control,
- * saying what pressing it now means. It reverts on its own, because an armed
- * button that stayed armed would let a click ten minutes later leave without a
- * word, which is the exact silence the arming exists to break.
+ * `label` names what the control IS, and pressed means the mode is live. That
+ * is the flip: it used to wear the name of the current state while its
+ * `aria-pressed` tracked `interactive`, so the arrow filled at the exact moment
+ * the editor handed the pointer away — a lit control announcing its own feature
+ * was off.
+ *
+ * Interactive has no button of its own. It is what you get when neither Inspect
+ * nor Notes is on; a third control would offer two ways into one state and a
+ * fourth combination to get stuck in.
  */
-const CHOOSER = {
-  label: "Choose app",
-  detail: "Leave the editor and pick another app to design",
-  confirm: "Leave anyway?",
-  armedMs: 6000,
-} as const
-
 const MODES = {
   inspecting: {
-    label: "Inspecting",
-    glyph: "Cursor",
-    detail: "Hand the pointer back to the app",
+    label: "Inspect",
+    weight: "filled",
+    detail: "Click an element to select it",
   },
   interactive: {
-    label: "Interactive",
-    glyph: "CursorOutline",
-    detail: "Take the pointer back for the editor",
+    label: "Inspect",
+    weight: "outline",
+    detail: "Off — clicks go to the app",
   },
-} as const
+} as const satisfies Record<string, { label: string; weight: IconWeight; detail: string }>
+
+/**
+ * The chrome's own paint, in the two states this one control can show.
+ *
+ * Shaped like `MODES` above, and for the same reason: one stable name, because
+ * this is one thing that is on or off rather than two controls sharing a
+ * square, and `aria-pressed` carries which. A name that rewrote itself under
+ * the pointer would announce two different controls in the same place.
+ *
+ * The name is "Light mode" in both states — the thing the button OFFERS —
+ * rather than "Theme", which names a category and tells you nothing about what
+ * pressing does. `detail` is the half that moves, and it says the state you are
+ * standing in exactly as the mode switch's does.
+ */
+/**
+ * An ACTION, not a toggle, and the glyph is the whole of it.
+ *
+ * It wore `aria-pressed` and the pressed fill every other control in this bar
+ * wears, which asked the reader to decode two things at once: a sun that means
+ * "light is available" sitting in a lit chip that means "something is on". The
+ * chip was answering a question nobody had — the chrome's colour is the most
+ * visible state on the screen, so a control reporting it is restating what the
+ * whole editor already says.
+ *
+ * So: no pressed state, and the name says what pressing DOES rather than where
+ * you are. A button whose label is the outcome needs no state of its own.
+ */
+const THEMES = {
+  dark: { label: "Switch to light mode", glyph: "Sun" },
+  light: { label: "Switch to dark mode", glyph: "Moon" },
+} as const satisfies Record<ThemeName, { label: string; glyph: IconName }>
+
+/**
+ * Where the choice is kept, and it IS kept — unlike the bar's drag position.
+ *
+ * `shell/launcher.ts` argues its position out of storage on the grounds that a
+ * 600px pill reappearing mid-page reads as a broken layout rather than as a
+ * preference. A theme is the opposite case: it is a preference in the plainest
+ * sense, there is nothing surprising about the editor looking the way you left
+ * it, and a designer who picked light and found dark again tomorrow would have
+ * to re-pick it every single morning.
+ */
+const THEME_KEY = "design-editor:theme"
+
+/**
+ * The stored choice, or null when there is not one that can be trusted.
+ *
+ * Every read is wrapped, because `localStorage` does not return null when an
+ * origin's storage is blocked — Safari with cross-site tracking prevention,
+ * Chrome with third-party cookies off and this overlay served from the proxy,
+ * or any browser in a hardened profile — it THROWS on property access. This
+ * runs during `installToolbar`, before the bar is appended, so an unguarded
+ * read there does not cost a theme, it costs the whole editor.
+ */
+function storedTheme(): ThemeName | null {
+  try {
+    const raw = window.localStorage.getItem(THEME_KEY)
+    return raw === "light" || raw === "dark" ? raw : null
+  } catch {
+    return null
+  }
+}
+
+function rememberTheme(theme: ThemeName): void {
+  try {
+    window.localStorage.setItem(THEME_KEY, theme)
+  } catch {
+    // Same bargain the launcher's saved corner makes: the toggle still worked,
+    // it just will not outlive the tab.
+  }
+}
+
+/**
+ * Write the theme where the palette can see it — in two places, on purpose.
+ *
+ * `css/base.ts` declares the custom properties on `:root` and keys the light
+ * block off `data-de-theme`, so `<html>` is what actually switches the chrome:
+ * it is the only ancestor shared by the four roots the editor mounts on
+ * `<body>`, and a popover parked outside the editor root would otherwise stay
+ * dark on a light page. The editor root carries the same attribute so the
+ * scoped selector beside it is real rather than decoration.
+ *
+ * Re-queried rather than captured at install: `mountShell` runs first so the
+ * root is already there, but a lane that cannot find it must still theme the
+ * document rather than throw on a null.
+ */
+function applyTheme(theme: ThemeName): void {
+  document.documentElement.setAttribute("data-de-theme", theme)
+  document.querySelector(".de-root")?.setAttribute("data-de-theme", theme)
+}
+
+/*
+ * Re-exported, not redefined.
+ *
+ * The commit moved to `core/apply.ts` so the Changes tab could reach it, and
+ * this went with it — it is a consequence of an Angular refusal, which only the
+ * commit can observe. The name stays reachable here because it was part of this
+ * module's surface before the move, and a re-export costs a line where chasing
+ * the new path costs every caller a change.
+ */
+export { recordRefusedWrite } from "../core/apply"
 
 export function installToolbar(context: EditorContext): void {
   const { slots, bridge } = context
@@ -163,130 +383,138 @@ export function installToolbar(context: EditorContext): void {
   }
 
   /**
-   * The one control that changes what a click means everywhere, so it is the
-   * one control that spells itself out — and it sits at the far LEFT, first in
-   * the strip, because it is the question every other control's answer depends
-   * on. An icon alone would have to say "the editor is not intercepting you
-   * now", and no glyph at this size says that; a word alone would drop the arrow
-   * this editor's pointer has always been drawn as. It carries both.
+   * The one control that changes what a click means everywhere, and it sits at
+   * the far LEFT, first in the strip, because it is the question every other
+   * control's answer depends on.
+   *
+   * `de-button--mode` on a `de-tool` looks like a mistake and is not: the class
+   * is the name two other lanes address this control by, and the square is what
+   * it is drawn as now. Renaming it would be a rename in files this change does
+   * not own, for no gain a reader of the bar can see.
    */
-  const modeGlyph = el("span", { class: "de-button-glyph" }, [icon(MODES.inspecting.glyph, GLYPH)])
-  const modeLabel = el("span", {}, [MODES.inspecting.label])
   const interactiveButton = el(
     "button",
     {
-      class: "de-button de-button--mode",
+      class: "de-tool de-button--mode",
       type: "button",
-      "aria-pressed": "false",
-      ...hint(MODES.inspecting.label, MODES.inspecting.detail),
-      onclick: () => context.setInteractive(!context.getState().interactive),
+      "aria-pressed": "true",
+      ...tip(MODES.inspecting.label, modeDetail(MODES.inspecting.detail)),
+      /*
+       * Pressing an ON mode turns it OFF, and off means interactive.
+       *
+       * That is the whole three-mode rule stated once: Inspect and Notes are
+       * the two things the editor can be doing with a click, and interactive is
+       * the absence of both. Writing `setMode` rather than flipping a boolean
+       * is what stops the fourth, undescribable state where the editor has
+       * handed the pointer away and is still intercepting clicks to pin notes.
+       */
+      onclick: () => context.setMode(editorMode() === "inspecting" ? "interactive" : "inspecting"),
     },
-    [modeGlyph, modeLabel]
+    [icon("Cursor", GLYPH, MODES.inspecting.weight)]
   )
 
-  /** Both halves of the switch move together, so one function moves them. */
-  const paintMode = (interactive: boolean) => {
-    const mode = interactive ? MODES.interactive : MODES.inspecting
-    interactiveButton.setAttribute("aria-pressed", String(interactive))
-    // The accessible name tracks the visible word rather than sitting on a
-    // stable "Interactive mode": a name that disagrees with the label on screen
-    // is the failure mode WCAG 2.5.3 exists for, and voice control types what it
-    // sees.
-    interactiveButton.setAttribute("aria-label", mode.label)
-    interactiveButton.setAttribute("data-de-tip", mode.detail)
-    if (modeLabel.textContent !== mode.label) modeLabel.textContent = mode.label
-    modeGlyph.replaceChildren(icon(mode.glyph, GLYPH))
+  /** Name, tip and glyph are one fact about the mode, so one function writes them. */
+  const paintMode = (): void => {
+    const inspecting = editorMode() === "inspecting"
+    const mode = inspecting ? MODES.inspecting : MODES.interactive
+    interactiveButton.setAttribute("aria-pressed", String(inspecting))
+    // Through `tip` rather than two `setAttribute` calls with the separator
+    // written out again here: the name and the hover text are built the same
+    // way for every other control in the bar, and this is the only one that
+    // rebuilds them after install.
+    for (const [name, value] of Object.entries(tip(mode.label, modeDetail(mode.detail)))) {
+      interactiveButton.setAttribute(name, value)
+    }
+    /*
+     * The weight now agrees with `aria-pressed` instead of contradicting it.
+     *
+     * It is still named here rather than left to CSS, because the glyph has to
+     * hollow in TWO states — interactive and annotating — and `aria-pressed`
+     * only distinguishes one of them. Filled means "a click selects", which is
+     * true in exactly one of the three modes.
+     */
+    drawGlyph(interactiveButton, "Cursor", mode.weight)
   }
 
-  /** True when either lane is holding an edit that has not reached source. */
-  const hasPendingChanges = () =>
-    isAngularHost() ? angularQueueSize() > 0 : bridge.store.hasChanges()
+  /*
+   * Nothing here reports the queue any more, and that is deliberate.
+   *
+   * The bar used to build a committer, then an indicator that replaced it: a
+   * square carrying `owedCount()` that opened the Changes tab on a press. Both
+   * are gone. The committer went because the tab writes better than a tick in a
+   * toolbar can; the indicator went because it was a second, quieter way to say
+   * what the tab's own badge already says, on a control whose only action was
+   * "open the panel" — which the inspector toggle three glyphs to its left
+   * already does.
+   *
+   * What the split left behind is still worth stating: the queues (what can be
+   * written) and the outbox (what the designer is owed) are different lists,
+   * and the bar now reads neither. The count lives in one place, on the tab.
+   */
 
   /**
-   * The Angular commit.
+   * The notes brief, on the clipboard — a COMMAND now, with no square of its
+   * own in the bar.
    *
-   * A request rather than the vendor's `commitBatch` WebSocket message, because
-   * this one has an answer worth waiting for. The vendor's protocol is
-   * fire-and-forget: it reports success by the page hot-reloading, and reports
-   * a write it could not place by doing nothing at all. Here an operation can
-   * fail for a reason the user can act on — an element that matches two
-   * template nodes equally well, text that turns out to be an interpolation —
-   * and the only place that reason can surface is the reply.
+   * The button came back here once because the panel that holds the same Copy
+   * can be closed, and handing the work over from behind a closed panel meant
+   * reopening 260px you had shut on purpose. What has changed is the two
+   * controls either side of it: Notes and Inspect now bring the right panel
+   * with them (see `setMode` in `core/context.ts`), so the list this copies is
+   * on screen by the time there is anything in it to copy. A second door into
+   * one action, three glyphs from the door that also shows you what you are
+   * about to hand over, is a square spent on a shortcut for a panel that is
+   * already open.
+   *
+   * The KEY survives the button, which is why this is a function rather than a
+   * deletion: `notes.copy` is registered on it below, and a chord is not a
+   * square in the bar.
+   *
+   * The write happens SYNCHRONOUSLY inside the gesture's task and before
+   * anything awaits. The Clipboard API only works under the transient user
+   * activation the press carries and the browser revokes it the moment the
+   * handler yields, so building the brief after an `await` — even an awaited
+   * count of what is in it — is how a copy comes to do nothing on every second
+   * press. Same shape as `copyChangePrompt` and the panel's own Copy.
    */
-  const applyAngular = async () => {
-    const operations = buildAngularOperations()
-    if (!operations.length) {
-      context.toast("Could not resolve source files for these changes", "error")
+  const copyBrief = (): void => {
+    const items = outboxItems()
+    /*
+     * Counted the way the brief counts ITSELF, which is not the same as
+     * counting the outbox: `buildAnnotationBrief` drops resolved notes, because
+     * a note the designer has ticked off is work that no longer needs doing.
+     * Count the rows instead and a session whose notes are all resolved reports
+     * "Copied 4 notes" over a clipboard holding the brief's "nothing to hand
+     * over yet" sentinel.
+     *
+     * Synchronous, like everything above the clipboard write has to be.
+     */
+    const notes = items.filter((item) => item.type === "note").length
+    const changes = items.filter((item) => item.type === "edit").length
+    if (!notes && !changes) {
+      context.toast("Nothing to copy — no notes, no edits")
       return
     }
-    context.toast(`Applying ${operations.length} change${operations.length === 1 ? "" : "s"}…`)
+    let refused = false
     try {
-      const result = await applyAngularOperations(operations)
-      // Cleared on any reply, including a partial one: what failed is reported
-      // below and stays on screen as a preview, and leaving it queued would
-      // mean the next Apply retried a write that has already been refused once.
-      clearAngularQueue()
-      syncPressed()
-      if (!result.failed.length) {
-        const files = new Set(result.applied.map((entry) => entry.filePath))
-        context.toast(
-          `Wrote ${result.applied.length} change${result.applied.length === 1 ? "" : "s"}` +
-            ` to ${[...files].join(", ")}`
-        )
-        return
-      }
-      // The first reason, in full, rather than a count of failures. One
-      // sentence a designer can act on beats a tally they have to go looking
-      // for, and the reasons repeat far more often than they differ.
-      const [first] = result.failed
-      const others = result.failed.length - 1
-      context.toast(
-        `Wrote ${result.applied.length}, skipped ${result.failed.length}` +
-          ` — ${first.reason}${others > 0 ? ` (+${others} more)` : ""}`,
-        "error"
-      )
-    } catch (error) {
-      context.toast(error instanceof Error ? error.message : "Apply failed", "error")
+      void navigator.clipboard
+        .writeText(buildAnnotationBrief(items))
+        .catch(() => context.toast("The browser refused the clipboard", "error"))
+    } catch {
+      // A browser with no Clipboard API at all throws here rather than
+      // rejecting, and the toast below must not then claim a success.
+      refused = true
     }
+    if (refused) {
+      context.toast("The browser refused the clipboard", "error")
+      return
+    }
+    const parts = [
+      notes ? `${notes} ${notes === 1 ? "note" : "notes"}` : "",
+      changes ? `${changes} ${changes === 1 ? "change" : "changes"}` : "",
+    ].filter(Boolean)
+    context.toast(`Copied ${parts.join(" and ")}`)
   }
-
-  const applyButton = el(
-    "button",
-    {
-      class: "de-button de-button--primary",
-      type: "button",
-      ...hint("Apply to code", "Write pending visual changes back to source"),
-      onclick: () => {
-        if (!hasPendingChanges()) {
-          context.toast("Nothing to apply — make a change first")
-          return
-        }
-        if (isAngularHost()) {
-          void applyAngular()
-          return
-        }
-        const operations = bridge.store.buildBatchOperations()
-        if (!operations.length) {
-          context.toast("Could not resolve source files for these changes", "error")
-          return
-        }
-        bridge.send({ type: "commitBatch", operations })
-
-        // The count only covers what became a utility class. Anything the
-        // translator could not express is still on screen and is about to be
-        // lost on the next hot reload, so the commit message has to name it
-        // rather than report an unqualified success.
-        const lost = untranslatedProperties()
-        const applying = `Applying ${operations.length} change${operations.length === 1 ? "" : "s"}…`
-        if (lost.length === 0) {
-          context.toast(applying)
-        } else {
-          context.toast(`${applying} ${lost.join(", ")} cannot be written to code`, "error")
-        }
-      },
-    },
-    ["Apply to code"]
-  )
 
   /**
    * The button and the shortcut are the same call, not two that agree.
@@ -304,6 +532,25 @@ export function installToolbar(context: EditorContext): void {
     context.refresh()
   }
 
+  /*
+   * A HOOK, not a circular arrow.
+   *
+   * These wore Lucide's `RotateCcw` and `RotateCw`, which are arrows bent
+   * around 300 degrees of a circle, and they were the two marks in the bar that
+   * read a size larger than everything beside them. Measured, they inked 13.5
+   * of the 16 lattice against a 12-unit panel frame — but the extra size is not
+   * really the number. A closed ring gives the eye no gap to stop at, so it
+   * reads as one big round thing at whatever size it is drawn, and it says the
+   * more roundabout thing too: the reader has to work out which way a circle is
+   * turning before they know which button goes back.
+   *
+   * `ToolUndo` and `ToolRedo` are half a ring with a straight shaft and an
+   * arrowhead pointing the way they travel. Simpler to read, a unit and a half
+   * smaller, and — the reason the family can draw them at all — a half ring is
+   * cut on the vertical diameter, where the tangent is horizontal, so the shaft
+   * and the tail land on the lattice instead of leaving the curve at an angle
+   * nothing else here can meet.
+   */
   const undoButton = el(
     "button",
     {
@@ -311,10 +558,10 @@ export function installToolbar(context: EditorContext): void {
       type: "button",
       // Spelled the way the platform spells it, since the tooltip is the only
       // place the shortcut is written down.
-      ...tip("Undo", isMac() ? "⌘Z" : "Ctrl+Z"),
+      ...tip("Undo", keyFor("history.undo")),
       onclick: () => travel("undo"),
     },
-    [icon("RotateCcw", GLYPH)]
+    [icon("ToolUndo", GLYPH)]
   )
 
   const redoButton = el(
@@ -322,10 +569,10 @@ export function installToolbar(context: EditorContext): void {
     {
       class: "de-tool",
       type: "button",
-      ...tip("Redo", isMac() ? "⇧⌘Z" : "Shift+Ctrl+Z"),
+      ...tip("Redo", keyFor("history.redo")),
       onclick: () => travel("redo"),
     },
-    [icon("RotateCw", GLYPH)]
+    [icon("ToolRedo", GLYPH)]
   )
 
   /**
@@ -346,174 +593,449 @@ export function installToolbar(context: EditorContext): void {
    * rather than remembered from the last click, since the shell writes
    * `layersOpen` and `inspectorOpen` too and a button counting its own clicks
    * would drift the first time anything else moved the flag.
+   *
+   * ON FILLS THE MARK, and that is the one thing the state says on the glyph
+   * itself. It used to say it in stroke weight alone — half a unit heavier,
+   * applied by `css/icons.ts` — which is a signal you can only read by
+   * comparing: set the pressed glyph beside the same glyph at rest and the
+   * difference is obvious, look at one button on its own and there is nothing
+   * to measure it against. That is the wrong shape for these four, because the
+   * question they answer ("are notes armed?", "is the inspector up?") is asked
+   * of ONE button at a time. Solid or hollow needs no reference.
+   *
+   * The mode switch two clusters to the left has always done this, for exactly
+   * this reason, and it has been the only control in the bar that does. Three
+   * toggles reporting their state one way and a fourth reporting it another was
+   * the actual inconsistency — the fix is the rest of them catching up rather
+   * than the pointer giving up its fill.
    */
-  const panelToggle = (
-    label: string,
-    glyph: IconName,
-    read: () => boolean,
+  const panelToggle = (options: {
+    label: string
+    glyph: IconName
+    read: () => boolean
     write: (next: boolean) => void
-  ) => {
+    /** The key that does the same thing, for the tip. Not every toggle has one. */
+    key?: string
+    /**
+     * Report ON with the GLYPH alone — no accent chip behind it.
+     *
+     * The chip is the right report for a mode, because a mode is a claim about
+     * what the next click will do and there is nothing on screen to check it
+     * against until you make one. A panel toggle is the opposite case: press it
+     * and a quarter of the screen appears. Lighting the button as well is the
+     * third report of one fact, and two accent squares in a four-glyph cluster
+     * flatten the distinction the cluster is there to make — "what a click
+     * does" and "what is on screen" stop looking like different questions.
+     *
+     * So the fill in the mark carries it, which is the signal that survives
+     * having nothing to compare against, and the square stays quiet.
+     */
+    quiet?: boolean
+  }) => {
+    const { label, glyph, read, write, key, quiet } = options
     const button = el(
       "button",
       {
-        class: "de-tool",
+        class: quiet ? "de-tool de-tool--quiet" : "de-tool",
         type: "button",
-        ...tip(label),
+        ...tip(label, key),
         onclick: () => write(!read()),
       },
       [icon(glyph, GLYPH)]
     )
-    const paint = () => button.setAttribute("aria-pressed", String(read()))
+    const paint = () => {
+      const on = read()
+      button.setAttribute("aria-pressed", String(on))
+      // One read of the state, two reports of it: the attribute for anything
+      // listening, the weight for the eye. Painting them from separate reads is
+      // how a button comes to look off while announcing itself on.
+      drawGlyph(button, glyph, on ? "filled" : "outline")
+    }
     return { button, paint }
   }
 
-  const layersToggle = panelToggle(
-    "Toggle layers panel",
-    "Layers",
-    () => context.getState().layersOpen,
-    (next) => context.setState({ layersOpen: next })
-  )
-  const inspectorToggle = panelToggle(
-    "Toggle inspector",
-    "SlidersHorizontal",
-    () => context.getState().inspectorOpen,
-    (next) => context.setState({ inspectorOpen: next })
-  )
+  /*
+   * The two panels, drawn as the SIDES they are.
+   *
+   * These wore the contents — a layer stack and a slider rack — on the argument
+   * that what a designer cannot get from the screen is which panel a button
+   * opens, and that a picture of the panel does not answer it either. The first
+   * half still holds and the second turned out to be false in the one way that
+   * matters: the two marks were unrelated drawings that happened to sit next to
+   * each other, so the pair had to be learned. Left and right are one drawing
+   * mirrored, and a mirrored pair is read rather than remembered — the
+   * side the ink is on IS the side of the screen that moves.
+   *
+   * It also stops the marks lying as the panels grow. The left panel has held
+   * three tabs since Assets and Design system landed there, so a layer stack on
+   * its button names one of them; the right one holds Design, Changes and
+   * Design system, and sliders name a section of a section. A panel's contents
+   * are a moving target. Which edge it is attached to is not.
+   */
+  const layersToggle = panelToggle({
+    label: "Toggle layers panel",
+    glyph: "PanelLeft",
+    read: () => context.getState().layersOpen,
+    write: (next) => context.setState({ layersOpen: next }),
+    key: keyFor("panel.left.toggle"),
+    quiet: true,
+  })
+  const inspectorToggle = panelToggle({
+    label: "Toggle inspector",
+    glyph: "PanelRight",
+    read: () => context.getState().inspectorOpen,
+    write: (next) => context.setState({ inspectorOpen: next }),
+    quiet: true,
+  })
 
   /**
-   * The way back to the screen that chose this app — when there is one.
+   * Annotation mode, beside the mode switch rather than the panel toggles.
    *
-   * Once the editor is up, the browser sits on the proxy with the overlay over
-   * the app, and until this control existed that was a one-way door: the URL
-   * that used to show the chooser now shows the editor, so the only way to
-   * design a different app was to kill the process. The supervisor that keeps
-   * a chooser alive for the session says so in `chooserUrl`; every other way of
-   * starting leaves it null and draws nothing, because a link to a screen that
-   * is not running is worse than no link at all.
+   * It answers the same question the mode switch answers — what does a click
+   * do — and a designer scanning the bar for that answer must not have to find
+   * it in two places. The panel toggles next door answer a different one:
+   * which surfaces are on screen. Grouping this with them would file "clicking
+   * now writes a note" under "a panel is open", which is the same category
+   * error as putting undo in with them.
    *
-   * An anchor, not a button. This is a real navigation, and an anchor is what
-   * hands the browser back its own vocabulary for one: the target in the status
-   * bar before you commit, Cmd-click for a second tab, and a back button that
-   * works afterwards. None of that survives a click handler on a `<button>`,
-   * and all of it is worth more here than anywhere else in this strip, because
-   * this is the only control that ends the page.
+   * It TURNS INTERACTIVE MODE OFF, and has to. Interactive mode hands every
+   * click to the app; annotation mode intercepts every click. Both true at
+   * once is not a state the canvas can act on, and leaving the user to
+   * discover that by clicking is worse than deciding it here — the last mode
+   * pressed is plainly the one meant.
    *
-   * Same tab by default: the editor is the thing being left. A second tab would
-   * leave a stale overlay running behind the chooser, pinned to an app the
-   * designer has already moved on from, and two live editors is exactly the
-   * confusion this control exists to end.
+   * It keeps the accent chip the two panel toggles have given up, and that is
+   * the distinction the chip is now FOR: a mode is a claim about the next
+   * click, with nothing on screen to check it against until the click is made.
+   * See `quiet` above.
    */
-  const chooserLabel = el("span", {}, [CHOOSER.label])
-  let armed = 0
+  const annotateToggle = panelToggle({
+    label: "Notes",
+    glyph: "MessageSquare",
+    read: () => editorMode() === "annotating",
+    // The other half of the three-mode rule. Turning notes ON leaves inspect
+    // behind; turning it OFF lands in interactive, not back in inspect —
+    // leaving a mode is not a request for a different one. Two writes used to
+    // do this (`annotating` here, `interactive` there) and the pair could
+    // interleave into the state where the editor had given the pointer away
+    // and was still swallowing clicks.
+    //
+    // Raising it also raises the Changes tab, which is where the notes it pins
+    // land. That rule is `setMode`'s rather than this button's, so the ⌥ key
+    // bound to the same mode cannot arrive at a different panel.
+    write: (next) => context.setMode(next ? "annotating" : "interactive"),
+    key: keyFor("mode.notes"),
+  })
 
   /**
-   * What leaving would throw away, in words rather than counts.
+   * Which way the chrome is painted — and it sits with the panel toggles,
+   * because that cluster is the one that answers "what is the editor showing
+   * you". Layers and the inspector say which surfaces are up; this says how all
+   * of them are inked. Neither changes what a click means, and neither touches
+   * the document or the file, which is what keeps it out of the two clusters
+   * either side of it.
    *
-   * Both kinds of work exist only in this tab. The engine holds applied-but-
-   * unsent operations until "Apply to code" commits them, and the ledger in
-   * `change-prompt.ts` holds every change that could NOT be written as a class
-   * — icon swaps, untranslatable properties, and (since the writer learned to
-   * strand them) class lists whose file never resolved. The Prompts tab is the
-   * only copy of that second list, and it is a copy nobody has taken until they
-   * press the button under it. A navigation drops both without a sound, so the
-   * control asks first and says which one it would be costing.
+   * BEFORE "Hide editor", not after. Hide is the terminal member of this
+   * cluster — the one that takes the whole bar with it — and a control read
+   * after the one that removes the bar is a control in the wrong place. So the
+   * run escalates: one panel, the other panel, how it is all painted, then all
+   * of it away.
+   *
+   * `Square`, and it is the honest pick rather than the obvious one: this set
+   * has no sun, no moon and no half-filled contrast disc, and `tools/build-icons
+   * .mjs` is not this change's to edit. What `Square` has is two weights and no
+   * drawing of its own, so the `aria-pressed` rule in `css/icons.ts` turns it
+   * into exactly the contrast chip the missing glyph would have been — a hollow
+   * chip on the dark chrome, a solid one once the light theme is on. The layers
+   * tree also draws `Square` as its "plain element" mark; that is a 12px mark
+   * in a tree and never appears in this bar, so the two cannot be read side by
+   * side and mistaken for each other.
+   *
+   * No `prefers-color-scheme`, on first run or ever. See the note on
+   * `storedTheme` for where the choice lives; the reason not to seed it from
+   * the OS is that this chrome is a frame around SOMEONE ELSE'S product, and
+   * the OS preference is a fact about the designer's desktop rather than about
+   * the thing under review. Honouring it would also quietly change the editor's
+   * appearance for every user on a light desktop the next time they load it,
+   * with no interaction to explain the change — which is the one thing "default
+   * to the current appearance" rules out. If this ever follows anything, it
+   * should follow the app in the viewport, not the menu bar above it.
    */
-  const pendingWork = (): string[] => {
-    const kinds: string[] = []
-    if (bridge.store.hasChanges()) kinds.push("changes you have not applied")
-    if (previewOnlyChanges().length > 0) kinds.push("prompts you have not copied")
-    return kinds
+  let theme: ThemeName = storedTheme() ?? "dark"
+
+  const themeButton = el(
+    "button",
+    {
+      class: "de-tool",
+      type: "button",
+      ...tip(THEMES[theme].label),
+      onclick: () => setTheme(theme === "light" ? "dark" : "light"),
+    },
+    [icon(THEMES[theme].glyph, GLYPH)]
+  )
+
+  /** Name, tip and glyph are one fact about the theme, so one function writes them. */
+  const paintTheme = (): void => {
+    for (const [name, value] of Object.entries(tip(THEMES[theme].label))) {
+      themeButton.setAttribute(name, value)
+    }
+    themeButton.replaceChildren(icon(THEMES[theme].glyph, GLYPH))
   }
 
-  const disarm = () => {
-    if (armed === 0) return
-    window.clearTimeout(armed)
-    armed = 0
-    chooserLabel.textContent = CHOOSER.label
-    chooserLink?.setAttribute("aria-label", CHOOSER.label)
+  const setTheme = (next: ThemeName): void => {
+    theme = next
+    applyTheme(next)
+    rememberTheme(next)
+    paintTheme()
   }
 
-  const chooserLink = config.chooserUrl
-    ? el(
-        "a",
-        {
-          class: "de-button",
-          href: config.chooserUrl,
-          ...hint(CHOOSER.label, CHOOSER.detail),
-          onclick: (event: Event) => {
-            const click = event as MouseEvent
-            // A modified click opens a second tab and leaves this one standing,
-            // so there is nothing to lose and nothing to ask about. Holding one
-            // back would be guarding against a navigation that is not happening.
-            if (click.metaKey || click.ctrlKey || click.shiftKey || click.altKey) return
-            // Armed: this is the second click, so it goes. The timer is dropped
-            // but the flag is left standing — the label must not snap back to
-            // "Choose app" while the page it is drawn on is unloading.
-            if (armed !== 0) {
-              window.clearTimeout(armed)
-              return
-            }
-            const losing = pendingWork()
-            if (losing.length === 0) return
-            click.preventDefault()
-            chooserLabel.textContent = CHOOSER.confirm
-            // The name follows the word, for the reason the mode switch does:
-            // a control that says one thing on screen and another to a screen
-            // reader is two controls.
-            ;(click.currentTarget as HTMLElement).setAttribute("aria-label", CHOOSER.confirm)
-            armed = window.setTimeout(disarm, CHOOSER.armedMs)
-            context.toast(
-              `Leaving loses ${losing.join(" and ")} — click again to leave anyway`,
-              "error"
-            )
-          },
-        },
-        [chooserLabel]
-      )
-    : null
+  // Restore before anything paints. `installToolbar` runs inside the same task
+  // as `mountShell`, so the attribute is on `<html>` before the first frame and
+  // a session that ended in light mode never flashes dark on its way back.
+  applyTheme(theme)
+
+  /**
+   * The way out of the editor's way — and it sits with the panel toggles,
+   * because it is the same question asked about everything at once.
+   *
+   * Closing both panels never achieved this. The bar stayed, and behind the
+   * bar the canvas lane stayed too, so every click on the product was still
+   * being swallowed by an editor with almost nothing on screen to explain why.
+   * This one stands the whole thing down, hands the pointer back, and leaves a
+   * single button in the corner as the receipt.
+   *
+   * No `aria-pressed`. A toggle reports a state you can see it in; press this
+   * and the button itself is gone, so the honest thing is a plain action whose
+   * name says where it goes. No keyboard shortcut either: a key would have to
+   * be live while the editor is invisible, which is how an app ends up with
+   * chrome nobody can explain the arrival of.
+   */
+  const hideButton = el(
+    "button",
+    {
+      class: "de-tool",
+      type: "button",
+      ...tip("Hide editor", keyFor("chrome.toggle")),
+      onclick: () => context.setChromeHidden(true),
+    },
+    /*
+     * A cross, where this used to draw four arrows converging on a centre.
+     *
+     * The arrows were the honest mark while collapsing was a jump cut: one
+     * surface vanished, another appeared, and the glyph had to carry the whole
+     * story of where the editor went. The collapse animates now — the bar
+     * shrinks toward the corner the disc grows out of — so the motion tells
+     * that story, and the four arrows were left restating it at 16px. A cross
+     * says the plainer thing that is left: this closes.
+     *
+     * `ToolClose` rather than `X`, which is the same picture drawn by this
+     * family instead of by Lucide. `X` is drawn seven other places, most of
+     * them at `icon.row` — 12px, a rung the native lattice may not land on — so
+     * it keeps its Lucide artwork and the bar gets a mark of its own. What that
+     * buys is weight: at 16px Lucide strokes 1.5 CSS pixels, and set among
+     * seven 1-unit fills the cross read a step bolder than the bar it closes.
+     */
+    [icon("ToolClose", GLYPH)]
+  )
 
   // UI3 keeps one slim, stable strip at the bottom. Selection never moves it.
   //
-  // The mode leads the EDITING controls and the commit path closes them: read
-  // left to right that run is "what a click does", then "which surfaces are
-  // up", then "what has been done with them". The mode is first among them
-  // because it is the question every other control's answer depends on.
+  // ONE group, and the reading order carries what the clusters used to.
   //
-  // The chooser link sits outside that reading, ahead of all of it, because it
-  // is not a thing you do to this page — it is the way out of it, one level up
-  // from every other control here. Trailing the strip it would read as the last
-  // step of the commit path, which is the one thing it must not be mistaken for.
+  // There were three, each answering a different question: what a click does,
+  // what to do with what you did, and what the editor is showing you. The
+  // partition was real, and it was still costing more than it returned. Every
+  // control in this bar is a 32px square, so the only thing a cluster could be
+  // made of was air — and air between squares that look identical does not say
+  // WHICH question the break is about, only that somebody drew one. Eight
+  // glyphs is short enough to read straight through; the reader who needs undo
+  // finds it by its glyph, not by working out which third of the bar it is in.
   //
-  // The hairline between clusters is asked for by name rather than counted:
-  // `--seam` marks the one seam air cannot carry, four icon squares meeting in
-  // a row, and a fourth group appearing at the front must not conjure a second
-  // rule somewhere else in the bar.
+  // What the clusters were protecting survives as ORDER, which costs nothing
+  // and cannot be misread as a stray gap. Left to right: the mode leads, because
+  // every other control's answer depends on which mode you are in; the notes
+  // toggle sits with it, because it is the other thing a click can mean; then
+  // time travel over what you did; then the chrome — how it is painted, the
+  // left panel, the right panel, and then all of it away. Hide is last because
+  // nothing is read after the control that takes the bar off screen.
+  //
+  // The mirrored pair still has to stay adjacent and in screen order — a panel
+  // on the left, a panel on the right — which is the one adjacency in this run
+  // that is load-bearing rather than conventional. The theme leads them rather
+  // than splitting them.
   slots.toolbar.append(
-    ...(chooserLink ? [el("div", { class: "de-toolbar-group" }, [chooserLink])] : []),
-    el("div", { class: "de-toolbar-group" }, [interactiveButton]),
-    el("div", { class: "de-toolbar-group" }, [layersToggle.button, inspectorToggle.button]),
-    el("div", { class: "de-toolbar-group de-toolbar-group--seam" }, [
+    el("div", { class: "de-toolbar-group" }, [
+      interactiveButton,
+      annotateToggle.button,
       undoButton,
       redoButton,
-      applyButton,
+      themeButton,
+      layersToggle.button,
+      inspectorToggle.button,
+      hideButton,
     ])
   )
 
-  const syncPressed = () => {
-    paintMode(context.getState().interactive)
-    layersToggle.paint()
-    inspectorToggle.paint()
-    undoButton.toggleAttribute("disabled", !canUndo())
-    redoButton.toggleAttribute("disabled", !canRedo())
-    applyButton.toggleAttribute("disabled", !hasPendingChanges())
+  /**
+   * The bar, draggable by its ground.
+   *
+   * Four things about this are decisions rather than plumbing.
+   *
+   * ITS OWN POSITION, and only its own. The drag holds the box it last
+   * resolved, which outlives every collapse and expand of the session because
+   * the element and the gesture both do — so a bar that was moved is still
+   * moved when the editor comes back. The disc keeps a separate one. They were
+   * briefly a single shared position, which is what a collapse that MORPHED
+   * one surface into the other needed; the collapse is a fade now, nothing
+   * travels, and two surfaces you can park independently is the better trade.
+   *
+   * THE GROUND ONLY. A press that lands on a control belongs to that control,
+   * so `grabbable` declines it and the drag is never armed — which is also why
+   * a drag can never fire the control it ends over. The browser dispatches a
+   * click to the nearest common ancestor of the mousedown and the mouseup
+   * targets, and a gesture that began on the ground has a ground element on one
+   * side of that pair, so the common ancestor is always the bar itself and
+   * never a button inside it. Worth knowing because the obvious belt — swallow
+   * the click in a capture listener — does NOT work in this chrome: the
+   * shell's `restoreChromeFocus` guard replaces `stopPropagation` and
+   * `preventDefault` with no-ops for every event aimed at our own surfaces, so
+   * a handler here cannot cancel anything. See `shell/shell.ts`.
+   *
+   * `--de-bar-left` / `--de-bar-right`, not the app's own pair. Those two hold
+   * their value while the chrome is hidden; the app's collapse to zero. A bar
+   * clamped against zero the moment it is hidden would slide out from under
+   * the panels while it faded, which is the exact jump those variables were
+   * introduced to prevent, now applied to a bar that has been dragged.
+   *
+   * `panelInset` as the margin, because that is the inset the pill rests at.
+   * A dragged surface should be able to land exactly where an undragged one
+   * sits, or the resting position is somewhere the user cannot choose.
+   */
+  const measure = () => {
+    const rect = slots.toolbar.getBoundingClientRect()
+    return { width: rect.width, height: rect.height }
   }
 
-  // The engine pushes its own change events below; from our store only the mode,
-  // the two panel flags and the dirty flag affect this row. Anything broader
-  // would re-query the engine on every pointermove.
+  const drag = installDrag({
+    element: slots.toolbar,
+    dragging: "de-toolbar--dragging",
+    slack: DRAG_SLACK,
+    inset: tokens.size.panelInset,
+    sides: ["--de-bar-left", "--de-bar-right"],
+    size: measure,
+    grabbable: (event) =>
+      !(event.target instanceof Element) || event.target.closest(CONTROLS) === null,
+    paint(box) {
+      /*
+       * `left` is the pill's CENTRE, not its left edge.
+       *
+       * The centring `translateX(-50%)` stays in force while the bar is
+       * dragged, and it has to: base.ts restates that translate with
+       * `!important` under reduced motion, so an inline `transform: none` here
+       * would lose to it and shunt the bar half its own width sideways for the
+       * one person who asked for less motion. Writing the centre into `left`
+       * leaves the transform alone and keeps both arrangements true at once.
+       */
+      slots.toolbar.style.left = `${box.x + measure().width / 2}px`
+      slots.toolbar.style.top = `${box.y}px`
+      // The stylesheet anchors the pill to the bottom; a dragged one is
+      // anchored to the top, and both cannot be in force at once.
+      slots.toolbar.style.bottom = "auto"
+    },
+    rest() {
+      slots.toolbar.style.removeProperty("left")
+      slots.toolbar.style.removeProperty("top")
+      slots.toolbar.style.removeProperty("bottom")
+    },
+    /**
+     * Where the pill rests: the middle of the WINDOW, at the bottom inset.
+     *
+     * The same two numbers `css/toolbar.ts` writes, restated here because the
+     * clamp cannot read a stylesheet. Keep them in agreement — a second answer
+     * to "where does it rest" is a bar that jumps the first time a panel is
+     * toggled, which is the exact bug this pair exists to close.
+     *
+     * A top-LEFT, where the stylesheet writes a centre, because that is the
+     * corner `installDrag` bounds and paints from. `paint` above converts back.
+     */
+    anchor: () => {
+      const { width, height } = measure()
+      return {
+        x: (window.innerWidth - width) / 2,
+        y: window.innerHeight - height - tokens.size.panelInset,
+      }
+    },
+  })
+
+  /*
+   * A SEAM drag moves the same edges a toggle moves, and does not go through
+   * the store.
+   *
+   * The subscription below hears the two panel flags, which is every way a
+   * panel can appear or disappear — but not the way it can grow. Pulling the
+   * inspector out to its share of a narrow window walks its inner edge across
+   * a bar that is centred on the window and knows nothing about it, and with
+   * nothing listening here the bar would sit under the panel until the next
+   * toggle. `resize.ts` already filters this down to the frames where the
+   * published inset actually moved, so it is one clamp per changed pixel-width
+   * and not one per pointermove.
+   */
+  onInsetsChange(() => drag.place())
+
+  const syncPressed = () => {
+    paintMode()
+    layersToggle.paint()
+    inspectorToggle.paint()
+    annotateToggle.paint()
+    undoButton.toggleAttribute("disabled", !canUndo())
+    redoButton.toggleAttribute("disabled", !canRedo())
+    /*
+     * No count is painted here any more.
+     *
+     * The bar used to mirror `owedCount()` onto a Changes square, which meant
+     * two lanes reading one list and a standing risk that the bar and the panel
+     * it pointed at disagreed. The tab's own badge is the single reader now.
+     */
+  }
+
+  // The engine pushes its own change events below; from our store only the two
+  // modes, the two panel flags and the dirty flag affect this row. Anything
+  // broader would re-query the engine on every pointermove.
+  //
+  // `annotating` has to be in this list, not just in `syncPressed`. The toggle
+  // writes the flag and paints nothing itself, so a key missing from here is a
+  // button that shows the wrong state until something unrelated happens to
+  // repaint the bar — and the state it shows wrong is which mode a click is in.
   context.subscribe((next, previous) => {
+    /*
+     * The app area changed shape, so a dragged bar may now be under a panel.
+     *
+     * Three flags move those edges and all three are here. The two panel
+     * toggles move one edge each; "Hide editor" moves both at once and then
+     * moves them back, and it is the one that has to be listened for in BOTH
+     * directions — the bar has to be back inside the work area by the time it
+     * fades in, not a frame afterwards.
+     *
+     * The shell's own subscriber is registered first (it mounts before any
+     * lane installs), so `--de-bar-left` and `--de-bar-right` already hold
+     * their new values by the time this runs. That ordering is why the clamp
+     * can read them synchronously instead of waiting a frame.
+     *
+     * Not animated, and that is the same decision `syncInsets` makes about the
+     * app's padding: the correction lands in one step, in the frame the panel
+     * appears. Animating it would mean transitioning `left`, which relayouts
+     * the app under a moving bar for the length of the slide.
+     */
+    if (
+      next.layersOpen !== previous.layersOpen ||
+      next.inspectorOpen !== previous.inspectorOpen ||
+      next.chromeHidden !== previous.chromeHidden
+    ) {
+      drag.place()
+    }
     if (
       next.interactive === previous.interactive &&
+      next.annotating === previous.annotating &&
       next.layersOpen === previous.layersOpen &&
       next.inspectorOpen === previous.inspectorOpen &&
       next.dirty === previous.dirty
@@ -533,33 +1055,51 @@ export function installToolbar(context: EditorContext): void {
   // disabled state has to hear from it directly — the engine has nothing to say
   // about a write it is not carrying.
   onAngularQueueChange(syncPressed)
+  // Deletions are queued outside both of those, so they need their own line
+  // here for the same reason: nothing else will tell the button they exist.
+  onRemovalQueueChange(syncPressed)
 
-  window.addEventListener("keydown", (event) => {
-    /*
-     * Undo and redo are editor commands, not canvas ones, so they are not
-     * gated on `editorOwnsInput()`: the buttons stay live in interactive mode
-     * and the keys have to match them. A native field keeps its own Cmd+Z —
-     * that undo is the user's typing.
-     */
-    const history = historyAction(event)
-    if (history) {
-      if (isTextEntry(event.target)) return
-      event.preventDefault()
-      // The vendor's document-capture guard reaches keys too.
-      event.stopPropagation()
-      travel(history)
-    }
+  /*
+   * This bar has no keyboard listener. It publishes what its controls DO, and
+   * `shell/shortcuts.ts` is the one module in the editor that listens for a key.
+   *
+   * It used to own two chords — ⌘. and ⌘Z — each carrying its own copy of the
+   * guards. That was fine at two and is not at thirty: the point of a
+   * Figma-sized keymap is that "does this key already do something?" has ONE
+   * place to ask. What stays here is the behaviour, because the behaviour is the
+   * bar's: `travel` is the same call the buttons make, so the toast, the refresh
+   * and the disabled state cannot drift between a click and a keystroke.
+   *
+   * `notes.copy` no longer has a button to go through — it IS the copy now, and
+   * the clipboard write still lands inside a real user gesture because a keydown
+   * is one. That is what let the square leave the bar without the chord leaving
+   * with it.
+   *
+   * Registered rather than exported, so that nothing has to care which of the
+   * two lanes is installed first: a name in the registry is resolved at the
+   * moment the key is pressed, by which time everything that mounts has.
+   */
+  registerCommand("chrome.toggle", () => context.setChromeHidden(!context.getState().chromeHidden))
+  registerCommand("chrome.hide", () => context.setChromeHidden(true))
+  registerCommand("history.undo", () => travel("undo"))
+  registerCommand("history.redo", () => travel("redo"))
+  registerCommand("notes.copy", copyBrief)
+  registerCommand("theme.toggle", () => setTheme(theme === "light" ? "dark" : "light"))
 
-    /*
-     * No bare-letter shortcuts here any more.
-     *
-     * V and H picked between two tools; with one tool left there is nothing for
-     * a letter to pick, and a letter that reaches the page and does nothing is
-     * worse than no letter — it swallows a keystroke the app might have wanted.
-     * Capture is kept for the history branch above, which has to beat an app
-     * handler that stops the event on its way up.
-     */
-  }, true)
+  /*
+   * The outbox moves the indicator's count, and nothing else in this bar was
+   * watching it.
+   *
+   * The existing subscriptions cover the QUEUES — the vendor store, the Angular
+   * queue, the removal queue — which is what the old commit button cared about.
+   * The count is a different list: a pinned note or a stranded write changes it
+   * without touching any queue, and a commit clearing `queued` changes it
+   * without touching the store. Both of those left the number stale for as long
+   * as the bar sat there, which on a collapsed panel is the whole session.
+   */
+  onAnnotationsChange(syncPressed)
+  onEditsChange(syncPressed)
+  onPreviewOnlyChange(syncPressed)
 
   syncPressed()
 }

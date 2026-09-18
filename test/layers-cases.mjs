@@ -302,7 +302,13 @@ check("selection paints aria-selected on exactly the selected rows", () => {
 
 check("the row keeps its motionless chrome and its rounded band", () => {
   assert.match(layersCss, /\.de-layer \{[^}]*transition: none;[^}]*animation: none;/s)
-  assert.match(layersCss, /\.de-layer \{[^}]*border-radius: 4px;/s)
+  // Through the token, not a literal: the kit's radius scale moved from 2/4/6/10
+  // to 4/8/12/16 and a hardcoded 4 here would have gone on passing while the
+  // row it describes had visibly changed shape.
+  assert.ok(
+    layersCss.includes(`border-radius: ${tokens.radius.md};`),
+    "the row no longer takes its corner from the control radius"
+  )
   assert.match(layersCss, /\.de-layer \{[^}]*gap: 4px;/s)
 })
 
@@ -310,7 +316,15 @@ check("the drop rule is a 2px accent line the panel can place", () => {
   const indicator = context.slots.left.querySelector(".de-layer-drop")
   assert.equal(indicator.style.display, "none")
   assert.match(layersCss, /\.de-layer-drop \{[^}]*height: 2px;/s)
-  assert.match(layersCss, new RegExp(`\\.de-layer-drop \\{[^}]*background: ${tokens.color.accent};`, "s"))
+  // Substring, not a RegExp built from the token. A themed token is now a
+  // `var(--de-color-accent, #a1bbff)` reference, and its parentheses compile
+  // into a capture group that matches nothing — a test that silently stops
+  // checking the thing it names is worse than one that fails.
+  const rule = layersCss.slice(layersCss.indexOf(".de-layer-drop {"))
+  assert.ok(
+    rule.slice(0, rule.indexOf("}")).includes(`background: ${tokens.color.accent};`),
+    "the drop line is no longer painted in the accent"
+  )
 })
 
 check("the filter still narrows the tree, and clearing it restores the rows", () => {

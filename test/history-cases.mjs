@@ -80,6 +80,7 @@ const bundled = await build({
       export { createContext } from "./src/core/context"
       export { createWriter } from "./src/core/writer"
       export { installToolbar } from "./src/shell/toolbar"
+      export { installShortcuts } from "./src/shell/shortcuts"
       export * as history from "./src/core/history"
       export { historyAction } from "./src/core/keymap"
     `,
@@ -308,6 +309,17 @@ const context = editor.createContext(bridge, {
   right: slot(),
 })
 editor.installToolbar(context)
+/*
+ * The keyboard is a separate lane now, and these cases need it mounted.
+ *
+ * The bar used to carry its own ⌘Z listener; it registers a `history.undo`
+ * command instead, and `shell/shortcuts.ts` is the one module in the editor
+ * that listens for a key (see `core/keymap.ts` for why there is only one). The
+ * behaviour under test has not moved — `travel` is still the bar's, and still
+ * the same call the buttons make — but the composition has, so these cases
+ * build the pair the product builds rather than half of it.
+ */
+editor.installShortcuts(context)
 const byLabel = (name) => toolbarSlot.querySelector(`[aria-label="${name}"]`)
 
 check("both buttons exist, icon-only, with the shortcut in the hover text", () => {

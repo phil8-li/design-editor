@@ -687,7 +687,9 @@ async function panelSectionCases() {
     computed: globalThis.window.getComputedStyle(element),
     invalidate() {},
   }
-  const heading = (node) => node?.querySelector(".de-section-toggle")?.textContent.trim()
+  // The title is a span beside the fold button rather than inside it: the
+  // chevron moved to the trailing edge, so the button holds no text of its own.
+  const heading = (node) => node?.querySelector(".de-section-title")?.textContent.trim()
 
   check("nothing bound and nothing saved means no section at all", () => {
     panel.setState({ optionSets: {} })

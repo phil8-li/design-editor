@@ -34,7 +34,6 @@ import path from "node:path"
 
 import { JSDOM } from "jsdom"
 
-import { folderDialog } from "../runtime/folder-dialog.mjs"
 import {
   DEFAULT_SCAN_PORTS,
   describeProject,
@@ -137,9 +136,9 @@ await check("a port nobody is on is not an error", async () => {
 /*
  * The folder an app row carries. `lsof -d cwd` is the direct answer and a
  * managed Mac refuses it for the user's own dev servers, which left every row
- * with no folder and sent the person to a file picker for a path the machine
- * already knew. A dev server writes absolute paths into its own page, so the
- * page is the way around a permission the process cannot get.
+ * with no folder and made the person type out a path the machine already knew.
+ * A dev server writes absolute paths into its own page, so the page is the way
+ * around a permission the process cannot get.
  */
 await check("a dev server that names itself in its page needs no permission", () => {
   const root = reactProject()
@@ -221,42 +220,6 @@ await check("a directory that is not there still answers every field", () => {
   assert.deepEqual(project.devScripts, [])
 })
 
-console.log("\nThe folder dialog")
-
-// The dialog itself is a window a person has to answer, so what is pinned here
-// is the command built for it — the part that is wrong silently.
-await check("each desktop gets its own native picker, opened where it was told", () => {
-  const mac = folderDialog("darwin", "/Users/someone/code")
-  assert.equal(mac.command, "osascript")
-  // NSOpenPanel rather than `choose folder`: the AppleScript command answers
-  // with an alias, which cannot be built for a folder macOS protects.
-  assert.match(mac.args.join(" "), /NSOpenPanel/)
-  assert.match(mac.args.join(" "), /\/Users\/someone\/code/)
-
-  const windows = folderDialog("win32", "C:\\Users\\someone")
-  assert.equal(windows.command, "powershell.exe")
-  assert.match(windows.args.join(" "), /FolderBrowserDialog/)
-  // Without an apartment of its own the dialog never appears.
-  assert.ok(windows.args.includes("-STA"))
-
-  const linux = folderDialog("linux", "/home/someone")
-  assert.equal(linux.command, "zenity")
-  assert.ok(linux.args.includes("--directory"))
-  // zenity opens the parent unless the path ends in a separator.
-  assert.ok(linux.args.includes("--filename=/home/someone/"))
-})
-
-await check("a quote in a path cannot break out of the script it is written into", () => {
-  const mac = folderDialog("darwin", '/tmp/it"s here')
-  assert.match(mac.args.at(-1), /\\"s here/)
-  const windows = folderDialog("win32", "C:\\it's here")
-  assert.match(windows.args.at(-1), /it''s here/)
-})
-
-await check("a platform with no known picker says so instead of guessing", () => {
-  assert.equal(folderDialog("aix", "/"), null)
-})
-
 console.log("\nThe screen")
 
 const app = await pageServer("Workspaces")
@@ -301,77 +264,6 @@ await check("a pasted ~ is the home directory, not a relative path", async () =>
   assert.equal(status, 200)
   assert.equal(body.project.path, os.homedir())
   assert.equal(body.project.isDirectory, true)
-})
-
-/*
- * The dialog is a window a person has to answer, so the route is driven with a
- * stand-in for it. What is worth pinning is the three things the page depends
- * on: where the dialog is told to open, what a choice turns into, and that
- * dismissing it is an ordinary answer rather than an error.
- */
-async function withBrowseScreen(openFolderDialog, run) {
-  const stub = await createStartScreen({ host: "127.0.0.1", port: 0, log: () => {}, openFolderDialog })
-  const browse = (payload) =>
-    json(`${stub.url}/api/browse`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    })
-  try {
-    await run(browse)
-  } finally {
-    stub.close()
-  }
-}
-
-await check("browsing opens the dialog where the field points, and describes what comes back", async () => {
-  let openedAt = null
-  await withBrowseScreen(
-    async ({ startIn }) => {
-      openedAt = startIn
-      return { canceled: false, path: project }
-    },
-    async (browse) => {
-      const { status, body } = await browse({ startIn: "~" })
-      assert.equal(status, 200)
-      // The page may send `~`, or nothing at all; neither reaches the dialog raw.
-      assert.equal(openedAt, os.homedir())
-      assert.equal(body.canceled, false)
-      assert.equal(body.project.path, project)
-      assert.equal(body.project.hasReact, true)
-    }
-  )
-})
-
-await check("a dismissed dialog leaves the field alone instead of erroring", async () => {
-  await withBrowseScreen(
-    async () => ({ canceled: true }),
-    async (browse) => {
-      const { status, body } = await browse({})
-      assert.equal(status, 200)
-      assert.equal(body.canceled, true)
-      assert.equal(body.project, undefined)
-    }
-  )
-})
-
-// The dialog can end up behind the browser window, and the second press has to
-// say that rather than queue another one behind the first.
-await check("a second press while the dialog is open says where the first one went", async () => {
-  let release
-  await withBrowseScreen(
-    () => new Promise((resolve) => (release = () => resolve({ canceled: true }))),
-    async (browse) => {
-      const first = browse({})
-      // The route only holds the flag once the dialog call is under way.
-      await new Promise((resolve) => setTimeout(resolve, 50))
-      const { status, body } = await browse({})
-      assert.equal(status, 409)
-      assert.match(body.error, /already open/i)
-      release()
-      assert.equal((await first).status, 200)
-    }
-  )
 })
 
 // Dragging a folder onto a terminal is the most direct way to get a path out of
@@ -456,6 +348,23 @@ await check("an off-origin page cannot reach it", async () => {
 await check("an unknown path is a 404", async () => {
   const response = await fetch(`${screen.url}/nope`)
   assert.equal(response.status, 404)
+})
+
+// The native folder panel that used to answer here was dropped: a typed path is
+// the only way to name a project folder now. A route removed by halves is the
+// failure worth pinning — a 405 would mean some method is still registered on
+// the path, and no answer at all would mean a page still calling it hangs
+// instead of saying so.
+await check("the folder panel's route is gone, not merely unanswered", async () => {
+  const { status, body } = await json(`${screen.url}/api/browse`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ startIn: os.homedir() }),
+  })
+  assert.equal(status, 404)
+  assert.match(body.error, /no start screen route/i)
+  // And nothing on the page asks for it.
+  assert.doesNotMatch(startScreenPage(), /api\/browse/)
 })
 
 await check("status stays false until an endpoint file says otherwise", async () => {

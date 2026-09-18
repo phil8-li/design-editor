@@ -5,7 +5,15 @@
  */
 
 import { config } from "./config"
-import { elementKey, getState, primarySelection, setState, subscribe } from "./store"
+import {
+  elementKey,
+  getState,
+  primarySelection,
+  setMode,
+  setState,
+  subscribe,
+  type EditorMode,
+} from "./store"
 import { resolveElementSource, toSourceRef, type RewriteBridge } from "./bridge"
 import type { LayerElement, Selection, ToolId } from "./types"
 
@@ -38,6 +46,24 @@ export interface EditorContext {
    * keep the chrome's frame loop awake for a canvas nobody is painting.
    */
   setInteractive(interactive: boolean): void
+  /**
+   * Moves to one of the three pointer modes, clearing the others.
+   *
+   * Offered beside `setInteractive` rather than replacing it because the shell
+   * and the keymap still speak in "hand the pointer back", which is one edge of
+   * the same idea. Anything CHOOSING a mode should call this: it is the only
+   * path that cannot leave the editor interactive and annotating at once.
+   *
+   * It also BRINGS THE RIGHT PANEL WITH IT — Design for `inspecting`, Changes
+   * for `annotating`. See the implementation for why that rule lives here
+   * rather than on the two buttons.
+   */
+  setMode(mode: EditorMode): void
+  /**
+   * Stands the whole editor down to a single floating button, or brings it
+   * back. Drops the hover target for the same reason `setInteractive` does.
+   */
+  setChromeHidden(hidden: boolean): void
   /** Rebuilds every registered panel. Cheap: panels diff internally. */
   refresh(): void
   onRefresh(fn: () => void): () => void
@@ -142,6 +168,47 @@ export function createContext(bridge: RewriteBridge, slots: EditorSlots): Editor
 
     setInteractive(interactive) {
       setState(interactive ? { interactive, hovered: null } : { interactive })
+    },
+
+    /**
+     * The mode, and the right panel that answers it.
+     *
+     * Each of the two working modes has a tab that is the rest of it. Inspect
+     * selects an element and Design is where its properties are read and
+     * written; Notes pins a comment and Changes is the list those land in. A
+     * designer who turns one on and then has to go and find the matching tab is
+     * doing the editor's filing for it — and the pairing is not a guess, it is
+     * the only tab either mode has anything to say to.
+     *
+     * HERE rather than in the toolbar's two click handlers, because the modes
+     * have three doors: the buttons, the keymap (`mode.inspect`, `mode.notes`)
+     * and anything else that reaches a mode through this context. A rule
+     * written on the buttons would leave the keys switching a mode into a panel
+     * still showing the other one's tab.
+     *
+     * The panel is OPENED, not merely retabbed, which is the same bargain
+     * `panel.inspector.tab1..3` already struck: a tab switched behind a closed
+     * panel is indistinguishable from a control that did nothing. Leaving a
+     * mode is not a request for a tab — `interactive` writes neither, so
+     * pressing Notes off leaves the Changes list up to read rather than
+     * snapping the panel back to Design under the pointer.
+     *
+     * One `setState` for both flags, after the mode write: two writes paint an
+     * open panel on the old tab for a frame, and every subscriber in the editor
+     * would run twice for one user action.
+     */
+    setMode(mode) {
+      setMode(mode)
+      const tab = mode === "annotating" ? "annotations" : mode === "inspecting" ? "design" : null
+      if (tab) setState({ inspectorOpen: true, inspectorTab: tab })
+    },
+
+    setChromeHidden(hidden) {
+      // Cleared in BOTH directions, unlike the mode switch. Going out, a stale
+      // hover would keep the frame loop awake over a canvas nobody is drawing;
+      // coming back, the pointer has been over the app for a while and the
+      // element it last rested on is not news worth painting an outline for.
+      setState({ chromeHidden: hidden, hovered: null })
     },
 
     refresh() {

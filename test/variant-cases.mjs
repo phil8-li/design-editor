@@ -1,6 +1,13 @@
 /**
  * Cases for component variants: the source parse, the loopback route, the
- * current-option reading, and the inspector section that draws them.
+ * current-option reading, and the half of the inspector's instance section that
+ * draws them.
+ *
+ * The section under test is `instanceSection`, which absorbed the old
+ * `variantsSection` — so every case below is about a selection with a SOURCE
+ * declaration and no library behind it, which is the axis half of that section
+ * in isolation. The library half, and the merge of the two, are driven by
+ * `library-panel-cases.mjs`, where a catalog exists to merge with.
  *
  * The parse runs against fixtures under `test/fixtures/variants/` rather than
  * against live source resolution on purpose. React 19 removed the debug field
@@ -64,7 +71,7 @@ const bundled = await build({
   stdin: {
     contents: `
       export * from "./src/core/variants"
-      export { variantsSection } from "./src/panels/inspector/section-variants"
+      export { instanceSection } from "./src/panels/inspector/section-instance"
       export { createWriter } from "./src/core/writer"
     `,
     resolveDir: PACKAGE_DIR,
@@ -289,7 +296,7 @@ check("an unresolved option cannot be applied", () => {
 
 /* ---------- the inspector section ---------- */
 
-console.log("\nVariants section")
+console.log("\nInstance section: the source-declared axes")
 
 const pending = []
 const bridge = {
@@ -336,12 +343,12 @@ function contextFor(node, source) {
 }
 
 check("a selection with no source at all draws nothing", () => {
-  assert.equal(client.variantsSection(contextFor(element("flex"), null)), null)
+  assert.equal(client.instanceSection(contextFor(element("flex"), null)), null)
 })
 
 check("an empty filePath draws nothing — it lights up when lane 2 lands", () => {
   assert.equal(
-    client.variantsSection(
+    client.instanceSection(
       contextFor(element("bg-primary text-primary-foreground shadow hover:bg-primary/90"), {
         ...SOURCE,
         filePath: "",
@@ -353,7 +360,7 @@ check("an empty filePath draws nothing — it lights up when lane 2 lands", () =
 
 await checkAsync("the first render requests the file and draws nothing yet", async () => {
   const node = element("bg-primary text-primary-foreground shadow hover:bg-primary/90")
-  assert.equal(client.variantsSection(contextFor(node, SOURCE)), null)
+  assert.equal(client.instanceSection(contextFor(node, SOURCE)), null)
   const loaded = await client.loadVariants(API_BASE, FIXTURE_RELATIVE)
   assert.equal(loaded.length, 1)
 })
@@ -366,7 +373,7 @@ document.body.append(host, instance)
 
 function renderSection(node = instance) {
   host.textContent = ""
-  const rendered = client.variantsSection(contextFor(node, SOURCE))
+  const rendered = client.instanceSection(contextFor(node, SOURCE))
   if (rendered) host.append(rendered)
   return rendered
 }
@@ -374,7 +381,21 @@ function renderSection(node = instance) {
 check("a plain div in a variant-bearing file still draws nothing", () => {
   const plain = document.createElement("div")
   plain.className = "flex gap-2"
-  assert.equal(client.variantsSection(contextFor(plain, SOURCE)), null)
+  assert.equal(client.instanceSection(contextFor(plain, SOURCE)), null)
+})
+
+check("the header names the component, not the factory the axes came out of", () => {
+  assert.ok(renderSection(), "the section should render for a matched instance")
+  const head = host.querySelector('[data-de-instance="header"]')
+  assert.ok(head, "an instance with no header is a block that says what, about what")
+  // `buttonVariants` is what the source calls the recipe; `Button` is what the
+  // designer selected, and the bridge is the one that knows it.
+  assert.match(head.textContent, /Button/)
+  assert.equal(head.textContent.includes("buttonVariants"), false)
+  // No library is on, so there is nothing to attribute this to and the section
+  // must not invent an owner.
+  assert.equal(host.querySelector(".de-instance-owner"), null)
+  assert.equal(host.querySelector(".de-instance-thumb"), null)
 })
 
 check("both axes render, each control declaring a data-de-field", () => {
@@ -402,7 +423,7 @@ check("the small axis shows its current option and marks the declared default", 
 
 check("a mixed instance offers Mixed as the shown value", () => {
   const modified = element("inline-flex h-9 px-4 py-2 bg-brand-500 text-primary-foreground shadow hover:bg-primary/90")
-  const rendered = client.variantsSection(contextFor(modified, SOURCE))
+  const rendered = client.instanceSection(contextFor(modified, SOURCE))
   assert.ok(rendered, "an instance matched on size alone still has variants to show")
   const select = rendered.querySelector('[data-de-field="variants.variant"], [data-de-field="variants.size"]')
   assert.ok(select)
@@ -464,6 +485,30 @@ check("the section says plainly that it writes classes, not the prop", () => {
   const note = host.querySelector(".de-variant-note")
   assert.ok(note)
   assert.match(note.textContent, /not its prop/)
+})
+
+/*
+ * The one rule in this section that is about honesty rather than about wiring.
+ *
+ * `tone` is declared by the fixture and built at runtime, so its classes are
+ * unknown and `variantClassWrite` refuses it. The picker has to say so BEFORE
+ * the click — a refusal that arrives as nothing happening is how a designer
+ * ends up trying every option in the list one at a time.
+ */
+check("an option the source builds at runtime is offered inert, and says why", () => {
+  renderSection()
+  const picker = host.querySelector('[data-de-field="variants.variant"]')
+  picker.click()
+  const tone = document.querySelector('[data-de-choice="tone"]')
+  assert.ok(tone, "the runtime-built option was dropped rather than disabled")
+  assert.equal(tone.getAttribute("aria-disabled"), "true")
+  assert.match(tone.textContent, /built at runtime/)
+
+  const before = pending.length
+  tone.click()
+  assert.equal(pending.length, before, "an unresolved option queued a source operation")
+  assert.equal(instance.getAttribute("class").includes("tone"), false)
+  document.querySelector(".de-token-popover")?.remove()
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

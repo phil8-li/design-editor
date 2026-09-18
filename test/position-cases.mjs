@@ -239,12 +239,20 @@ check("the six marks sit in one toolbar, as two groups of three", () => {
   )
 })
 
-check("every mark is drawn, not typed", () => {
+check("every mark is drawn, not typed, and all six are one size", () => {
   const view = scene()
-  for (const button of view.strip("Align").querySelectorAll("button")) {
-    assert.equal(button.querySelector("svg")?.getAttribute("width"), "14")
+  const buttons = Array.from(view.strip("Align").querySelectorAll("button"))
+  assert.ok(buttons.length > 0, "the align strip drew no buttons")
+  for (const button of buttons) {
+    // 16, the ramp's `control` rung — these sit in 24px tool buttons beside the
+    // toolbar's own marks. It used to be 14, which is not on the ramp at all.
+    assert.equal(button.querySelector("svg")?.getAttribute("width"), "16")
     assert.equal(button.textContent, "", `${button.getAttribute("aria-label")} carries a text mark`)
   }
+  // Read off each other as well as off the number: the point of the strip is
+  // that the six marks are the same size, whatever that size is.
+  const sizes = new Set(buttons.map((b) => b.querySelector("svg")?.getAttribute("width")))
+  assert.equal(sizes.size, 1, `the align strip draws ${sizes.size} different sizes`)
 })
 
 check("horizontal is justify-content and vertical is align-items", () => {

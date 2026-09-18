@@ -39,6 +39,7 @@
     "runtime/",
     "server/",
     "src/",
+    "tools/",
     "tsconfig.json"
   ],
   "engines": {
@@ -47,18 +48,27 @@
   "scripts": {
     "build": "node build.mjs",
     "prepare": "node build.mjs",
-    "verify": "node build.mjs --check && node cli.mjs --verify",
-    "test": "node test/cli-cases.mjs && node test/dev-flow-cases.mjs && node test/bundle-freshness-cases.mjs && node test/start-screen-cases.mjs && node test/folder-dialog-cases.mjs && node test/host-readiness-cases.mjs && node test/options-cases.mjs && node test/token-cases.mjs && node test/host-agnostic-cases.mjs && node test/angular-cases.mjs && node test/zero-config-cases.mjs && node test/host-parity-cases.mjs && node test/icon-cases.mjs && node test/icon-set-cases.mjs && node test/picker-cases.mjs && node test/toolbar-cases.mjs && node test/history-cases.mjs && node test/responsive-cases.mjs && node test/selection-cases.mjs && node test/selection-shell-cases.mjs && node test/layers-cases.mjs && node test/inspector-tabs-cases.mjs && node test/code-tab-cases.mjs && node test/prompts-tab-cases.mjs && node test/prompts-live-cases.mjs && node test/stranded-write-cases.mjs && node test/drag-write-cases.mjs && node test/position-cases.mjs && node test/apply-source-cases.mjs && node test/variant-cases.mjs && node test/ui-change-cases.mjs --offline",
+    "verify": "node tools/build-icons.mjs --check && node tools/build-sonner-css.mjs --check && node build.mjs --check && node cli.mjs --verify",
+    "test": "node test/cli-cases.mjs && node test/dev-flow-cases.mjs && node test/bundle-freshness-cases.mjs && node test/start-screen-cases.mjs && node test/editor-registry-cases.mjs && node test/host-readiness-cases.mjs && node test/options-cases.mjs && node test/token-cases.mjs && node test/token-binding-cases.mjs && node test/concentric-cases.mjs && node test/library-source-cases.mjs && node test/library-url-cases.mjs && node test/library-auth-cases.mjs && node test/library-store-cases.mjs && node test/library-panel-cases.mjs && node test/library-generality-cases.mjs && node test/design-system-tab-cases.mjs && node test/insert-cases.mjs && node test/audit-cases.mjs && node test/lint-marker-cases.mjs && node test/host-agnostic-cases.mjs && node test/angular-cases.mjs && node test/zero-config-cases.mjs && node test/host-parity-cases.mjs && node test/icon-cases.mjs && node test/icon-set-cases.mjs && node test/picker-cases.mjs && node test/toast-cases.mjs && node test/toolbar-cases.mjs && node test/history-cases.mjs && node test/shortcut-cases.mjs && node test/responsive-cases.mjs && node test/selection-cases.mjs && node test/vendor-chrome-cases.mjs && node test/selection-shell-cases.mjs && node test/focus-modality-cases.mjs && node test/resize-cases.mjs && node test/delete-cases.mjs && node test/annotation-cases.mjs && node test/agentation-cases.mjs && node test/layers-cases.mjs && node test/app-chooser-cases.mjs && node test/inspector-tabs-cases.mjs && node test/code-tab-cases.mjs && node test/mcp-handoff-cases.mjs && node test/stranded-write-cases.mjs && node test/drag-write-cases.mjs && node test/position-cases.mjs && node test/multi-align-cases.mjs && node test/apply-source-cases.mjs && node test/variant-cases.mjs && node test/changes-tab-cases.mjs && node test/mcp-status-cases.mjs && node test/component-usage-cases.mjs && node test/ui-change-cases.mjs --offline",
     "test:standalone-next": "node test/standalone-next-cases.mjs"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
+    "agentation": "^3.0.2",
     "esbuild": "^0.28.1",
+    "motion": "^13.4.0",
+    "motion-panels": "^0.5.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "react-rewrite-cli": "0.1.1",
+    "sonner": "^2.0.8",
     "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "jsdom": "^29.1.1",
+    "lucide": "^1.46.0",
     "typescript": "5.9"
   }
 }

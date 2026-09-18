@@ -14,6 +14,7 @@
  */
 
 import fs from "node:fs"
+import { publishEditor, withdrawEditor } from "./editor-registry.mjs"
 import http from "node:http"
 import net from "node:net"
 import path from "node:path"
@@ -23,6 +24,7 @@ import { Readable } from "node:stream"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { browserPrelude } from "../config.mjs"
+import { chooserUrlFromEnv, isLoopbackOrigin } from "./chooser-url.mjs"
 import { urlHost } from "./dev-server.mjs"
 import { openBrowser } from "./open-browser.mjs"
 import { patchOverlay } from "./vendor-patch.mjs"
@@ -39,19 +41,14 @@ const CHROME_BUNDLE = fileURLToPath(
 )
 
 /**
- * Mirrors `isLoopbackHost` in server/routes.mjs. Not imported from there: that
- * module pulls in the agent and the options store, and this file is loaded
- * before the vendor boots, when neither exists yet.
+ * Re-exported, not defined here any more: `server/apps.mjs` reads the same
+ * environment variable to find the screen it relays the app list from, and it
+ * cannot import this module to get at it — importing this one patches `fs`,
+ * `http` and `net`. The definition moved to runtime/chooser-url.mjs and the
+ * name stays on this module's surface, because the callers that already read it
+ * from here are not wrong about where it belongs.
  */
-function isLoopbackOrigin(value) {
-  if (typeof value !== "string" || value.length === 0) return false
-  try {
-    const host = new URL(value).hostname.replace(/^\[|\]$/g, "")
-    return host === "localhost" || host === "127.0.0.1" || host === "::1"
-  } catch {
-    return false
-  }
-}
+export { chooserUrlFromEnv }
 
 /** The absolute URL a `fetch` argument names, or null when it names none. */
 function requestedUrl(input) {
@@ -110,29 +107,6 @@ export function acceptErroringDevServer(host, appPort) {
   return () => {
     if (globalThis.fetch === patched) globalThis.fetch = originalFetch
   }
-}
-
-/**
- * The chooser screen this editor was started from, or null when there is none.
- *
- * A supervisor that keeps its chooser alive for the whole session sets
- * `DESIGN_EDITOR_CHOOSER_URL` on the editor process, and that is the ONLY way
- * this value arrives. Started any other way — a plain `node cli.mjs 3000`, or
- * `--dev` — there is no second screen in existence, so there is nothing to
- * guess at and no default worth inventing: the toolbar simply carries no way
- * back, which is the truth about that session.
- *
- * The value ends up as an `href` inside the page, so it is held to the same
- * rule as every other origin this package accepts: loopback, and http. The
- * parsed form is what is handed on rather than the raw environment string,
- * because the URL parser tolerates leading control characters and whitespace
- * that the injected copy should not carry.
- */
-export function chooserUrlFromEnv(env = process.env) {
-  const value = env.DESIGN_EDITOR_CHOOSER_URL
-  if (!isLoopbackOrigin(value)) return null
-  const url = new URL(value)
-  return url.protocol === "http:" ? url.href : null
 }
 
 /**
@@ -302,6 +276,44 @@ async function loadRoutes(config) {
   }
 }
 
+/**
+ * The MCP endpoint a coding agent connects to, on its own fixed port.
+ *
+ * Not mounted on the proxy, which binds `auto`: this URL is typed into an
+ * agent's config file by hand and has to survive a restart. A busy port is a
+ * warning and nothing more — the editor's whole job is unaffected, and the
+ * clipboard path in the Prompts tab still works.
+ */
+async function startMcpEndpoint(config, runtime) {
+  const port = config.ports?.mcp
+  if (typeof port !== "number") return null
+  try {
+    const [{ createMcpEndpoint }, { handoffQueue }, { isLocalRequest }] = await Promise.all([
+      import("../server/mcp.mjs"),
+      import("../server/handoff.mjs"),
+      import("../server/routes.mjs"),
+    ])
+    const queue = handoffQueue()
+    const endpoint = createMcpEndpoint({ queue, isLocalRequest })
+    await endpoint.listen(port, LOOPBACK)
+    // Only after the bind. The route that records a click reads this to decide
+    // whether to promise the designer a delivery or only a queued file, and a
+    // flag set optimistically would promise one on the exact runs — port taken,
+    // endpoint disabled — where nothing can ever arrive.
+    queue.markEndpointListening()
+    runtime.mcpPort = port
+    writeEndpointFile(config, runtime)
+    console.log(`[design-editor] MCP http://${LOOPBACK}:${port}/mcp — point your agent at it`)
+    return endpoint
+  } catch (error) {
+    const reason = error?.code === "EADDRINUSE" ? `port ${port} is in use` : error.message
+    console.warn(
+      `[design-editor] MCP endpoint not started (${reason}) — "Send to agent" still queues to ${config.apiPrefix}`
+    )
+    return null
+  }
+}
+
 /** The working directory, or `null` where the machine will not name it. */
 function currentDirectory() {
   try {
@@ -320,7 +332,61 @@ function decodeSourcePath(value) {
   }
 }
 
+/**
+ * The endpoint file says where THIS editor is, inside the project it is
+ * editing. The registry says the same thing somewhere every other editor can
+ * read it — see `editor-registry.mjs` for why one is not enough.
+ *
+ * Published from the same place and at the same moments, so the two can never
+ * disagree about a port, and withdrawn on the way out so the chooser does not
+ * offer a door into a process that has gone.
+ */
+function publishToRegistry(config, runtime) {
+  if (!runtime.proxyPort) return
+  publishEditor({
+    proxyPort: runtime.proxyPort,
+    wsPort: runtime.wsPort ?? null,
+    appPort: runtime.appPort ?? null,
+    appUrl: runtime.appPort ? `http://${LOOPBACK}:${runtime.appPort}` : null,
+    projectRoot: config.projectRoot,
+    packageName: readPackageName(config.projectRoot),
+    url: `http://${LOOPBACK}:${runtime.proxyPort}`,
+  })
+  if (!registryWithdrawal) {
+    const port = runtime.proxyPort
+    registryWithdrawal = () => withdrawEditor(port)
+    // Both, because they catch different exits: `exit` covers a normal return
+    // and an explicit `process.exit`, the signals cover Ctrl+C and a supervisor
+    // replacing this editor with the next one.
+    process.once("exit", registryWithdrawal)
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+      process.once(signal, () => {
+        registryWithdrawal?.()
+        process.exit(0)
+      })
+    }
+  }
+}
+
+let registryWithdrawal = null
+
+/**
+ * What the project calls itself, for a chooser row that has to name it. Read
+ * from disk rather than carried in the config because the config does not have
+ * it and nothing else needed it until now.
+ */
+function readPackageName(projectRoot) {
+  try {
+    const raw = fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")
+    const name = JSON.parse(raw)?.name
+    return typeof name === "string" && name.length > 0 ? name : null
+  } catch {
+    return null
+  }
+}
+
 function writeEndpointFile(config, runtime) {
+  publishToRegistry(config, runtime)
   try {
     fs.mkdirSync(config.stateDir, { recursive: true })
     fs.writeFileSync(
@@ -334,6 +400,8 @@ function writeEndpointFile(config, runtime) {
           apiPrefix: config.apiPrefix,
           apiBase: `http://${LOOPBACK}:${runtime.proxyPort}${config.apiPrefix}`,
           wsUrl: `ws://${LOOPBACK}:${runtime.wsPort}`,
+          mcpPort: runtime.mcpPort ?? null,
+          mcpUrl: runtime.mcpPort ? `http://${LOOPBACK}:${runtime.mcpPort}/mcp` : null,
           projectRoot: config.projectRoot,
         },
         null,
@@ -405,6 +473,9 @@ export async function launch(config, { appPort, host, open, verbose = false, onR
     appPort,
     proxyPort: null,
     wsPort: null,
+    // Set only once the MCP endpoint has actually bound, so the endpoint file
+    // never advertises a URL nothing is serving.
+    mcpPort: null,
     chooserUrl: chooserUrlFromEnv(),
   }
   let patchedOverlay
@@ -521,6 +592,11 @@ export async function launch(config, { appPort, host, open, verbose = false, onR
           console.log(
             `[design-editor] proxy ${url} — ws ://${LOOPBACK}:${runtime.wsPort} — api ${config.apiPrefix}`
           )
+          // Started here rather than earlier for one reason: `recordBoundPort`
+          // names the ports by counting `http.Server`s, so a third server bound
+          // before the proxy would be recorded as the proxy and the editor would
+          // open on an MCP endpoint. By this line both numbers are already taken.
+          void startMcpEndpoint(config, runtime)
           // This is the editing URL. The dev server's own URL still works and
           // still has no editor on it, so the one worth opening is this one.
           if (open) openBrowser(url)

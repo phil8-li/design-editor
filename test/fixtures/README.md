@@ -12,3 +12,20 @@ reads a host's tokens rather than a memory of the app it was written in.
 
 None of them is a real product. Keep them small: a fixture that grows into a
 second design system stops being readable as a counter-example.
+
+## `libraries/` and `variants/`
+
+`variants/` holds source files the variant catalog parses. `libraries/` holds one
+file per format the Libraries tab can install — `manifest.json`, `tokens.json`
+(Style Dictionary / DTCG), `icons.json`, `theme.css` — and they are documentation
+as much as fixtures: they are the answer to "what shape does a design system have
+to be in for this editor to read it?".
+
+They are synthetic for a reason that is not the one above. This is a public MIT
+repository, and the libraries feature was verified against real, internal design
+systems that cannot ship here. So these files reproduce the SHAPES those systems
+turned out to have — a type word in the middle of a token name rather than at the
+front, an alias chain, a `var(--x, 12px)` fallback, a colour whose value is an
+unpaintable channel triple, a multi-value radius — with invented names and values.
+A fixture here that starts to look like somebody's real product is a mistake in
+both directions.

@@ -1,5 +1,6 @@
 /**
- * Deterministic design-system catalog, token-matching, and token-row cases.
+ * Deterministic design-system catalog, token-matching, and token-row cases,
+ * plus the chrome's own two-theme palette.
  *
  * Breakpoints and responsive classes live in responsive-cases.mjs.
  */
@@ -59,6 +60,672 @@ async function loadEditorHelpers() {
     `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString("base64")}`
   )
 }
+
+/**
+ * The chrome's own tokens and the stylesheet that gives the colour half of them
+ * a value. Both, because the whole contract between them is that neither may
+ * name a custom property the other does not.
+ *
+ * Its own bundle, ahead of everything else in this file, because the palette is
+ * the editor's own and has nothing to do with a host app — and the host gate
+ * below exits the process when there is no host on disk. Folded into
+ * `loadEditorHelpers` these cases would silently stop running in a bare clone,
+ * which is the one place a colour regression would go unnoticed longest.
+ */
+async function loadChromeTokens() {
+  const { build } = await import("esbuild")
+  const bundled = await build({
+    stdin: {
+      contents: `
+        export { tokens, themeProperties, THEMES, accentFill, declaredNests } from "./src/core/tokens"
+        export { baseCss, paletteCss } from "./src/core/css/base"
+        export { shellCss } from "./src/core/css"
+      `,
+      resolveDir: PACKAGE_DIR,
+      loader: "ts",
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+    logLevel: "silent",
+  })
+  return import(
+    `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString("base64")}`
+  )
+}
+
+// ── The chrome's own palette ───────────────────────────────────────────────
+
+console.log("\nChrome palette")
+
+const chrome = await loadChromeTokens()
+
+/**
+ * The declarations of one theme's block, as a Map of property to value.
+ *
+ * Read out of the shipped stylesheet rather than off the token module, because
+ * the failure these cases exist to catch lives in the gap between the two: a
+ * role the tokens reference and the stylesheet never declares resolves to its
+ * fallback and looks fine in dark, then paints a dark surface into the middle
+ * of the light theme. Nothing else in the suite would see that.
+ */
+function themeBlock(selector) {
+  const match = chrome.paletteCss.match(
+    new RegExp(`(^|\\n)${selector} \\{\\n([\\s\\S]*?)\\n\\}`, "m")
+  )
+  assert.ok(match, `no palette block for ${selector}`)
+  const declarations = new Map()
+  for (const line of match[2].split("\n")) {
+    const pair = line.match(/^\s*(--[a-z0-9-]+):\s*(.+);$/)
+    assert.ok(pair, `unparseable declaration: ${line}`)
+    declarations.set(pair[1], pair[2])
+  }
+  return declarations
+}
+
+const DARK_BLOCK = themeBlock('\\[data-design-editor\\]\\[data-de-theme="dark"\\]')
+const LIGHT_BLOCK = themeBlock('\\[data-design-editor\\]\\[data-de-theme="light"\\]')
+
+check("every colour role is a reference, so one stylesheet can carry two themes", () => {
+  const roles = Object.entries(chrome.tokens.color)
+  assert.ok(roles.length >= 25, `only ${roles.length} colour roles — the group shrank`)
+  for (const [role, value] of roles) {
+    assert.match(
+      value,
+      /^var\(--de-color-[a-z0-9-]+, .+\)$/,
+      `color.${role} is "${value}", which a run-time theme cannot move`
+    )
+  }
+  // The syntax tints are themed for the same reason: their only ground is
+  // `bgSunken`, and `bgSunken` moves.
+  for (const [role, value] of Object.entries(chrome.tokens.code)) {
+    assert.match(value, /^var\(--de-code-[a-z0-9-]+, .+\)$/, `code.${role} is "${value}"`)
+  }
+  // The shadows keep their geometry and theme only the tint: an offset and a
+  // blur are not a colour, and a theme must not be able to move them.
+  assert.match(chrome.tokens.shadow.float, /^0 8px 30px var\(--de-shadow-cast-soft, /)
+  assert.match(chrome.tokens.shadow.popover, /^0 6px 22px var\(--de-shadow-cast, /)
+  // The pairing export has to go through the tokens too, or every accent-filled
+  // surface in the chrome stays on the dark theme's light indigo.
+  assert.equal(
+    chrome.accentFill,
+    `background: ${chrome.tokens.color.accentSurface}; color: ${chrome.tokens.color.onAccent};`
+  )
+})
+
+/*
+ * The failure mode that ships a white label on a white ground.
+ *
+ * A role defined in one theme and missing from the other does not throw, does
+ * not warn and does not show up in the theme that was being looked at while it
+ * was written. It resolves to the dark fallback baked into the reference, so it
+ * paints a dark-theme colour into the middle of the light chrome — a dark
+ * surface under dark ink, or the reverse. Both directions are asserted because
+ * an extra declaration is the same bug seen from the other end: a property
+ * nothing references is a role that was renamed in one place only.
+ */
+check("both themes define exactly the properties the tokens reference", () => {
+  const referenced = new Set(chrome.themeProperties())
+  assert.ok(referenced.size > 30, `only ${referenced.size} themed properties`)
+
+  // Every reference in the tokens really is one of them — the derivation from
+  // camelCase to `--de-group-kebab` is the one typo here that produces no error.
+  for (const group of ["color", "code"]) {
+    for (const [role, value] of Object.entries(chrome.tokens[group])) {
+      const property = value.slice(4, value.indexOf(","))
+      assert.ok(referenced.has(property), `${group}.${role} references unknown ${property}`)
+    }
+  }
+
+  assert.deepEqual([...chrome.THEMES], ["dark", "light"])
+  for (const [name, block] of [["dark", DARK_BLOCK], ["light", LIGHT_BLOCK]]) {
+    const declared = new Set(block.keys())
+    const missing = [...referenced].filter((property) => !declared.has(property))
+    const extra = [...declared].filter((property) => !referenced.has(property))
+    assert.deepEqual(missing, [], `${name} never defines: ${missing.join(", ")}`)
+    assert.deepEqual(extra, [], `${name} defines unreferenced: ${extra.join(", ")}`)
+  }
+
+  // Host pages own `<html>` too, so nothing here may claim an unprefixed name.
+  for (const property of referenced) assert.match(property, /^--de-/)
+})
+
+check("the light theme is a recomputation, not the dark one copied across", () => {
+  /*
+   * Two roles are the same in both themes on purpose, and they are the two that
+   * are not drawn on the chrome.
+   *
+   * Everything else here pairs an ink with a surface this stylesheet painted,
+   * so a value that did not change between the blocks is a value somebody
+   * forgot to recompute. These three are painted over the APP: the note pin's
+   * numeral sits on a colour the user picked, and the two tones of the pin's
+   * focus ring sit on whatever the page has there. The editor's theme is not
+   * evidence about any of them, so flipping them with it is how the numeral
+   * came to measure 3.4:1 in light — see `onUserColor` in `tokens.ts`.
+   *
+   * Listed by name rather than skipped by rule, so adding a fourth is a
+   * decision somebody writes down instead of a test quietly covering less
+   * ground.
+   */
+  const OVER_THE_APP = new Set([
+    "--de-color-on-user-color",
+    "--de-color-focus-halo",
+    "--de-color-focus-core",
+    /*
+     * `onAccent` joined this list when the palette moved to Figma's blues, and
+     * for a related reason rather than the same one.
+     *
+     * It used to flip: near-black on the dark theme's light indigo, white on
+     * the light theme's dark one. Both accent fills are now a saturated blue
+     * — Figma's `bg-brand`, `#0c8ce9` in dark and `#007be5` in light — and
+     * white is the ink that carries on each. So the value is identical across
+     * the blocks BECAUSE the two fills are the same kind of colour, not
+     * because anybody forgot to recompute it.
+     */
+    "--de-color-on-accent",
+  ])
+  const shared = [...DARK_BLOCK.keys()].filter(
+    (property) =>
+      !OVER_THE_APP.has(property) && DARK_BLOCK.get(property) === LIGHT_BLOCK.get(property)
+  )
+  assert.deepEqual(shared, [], `these roles never left the dark theme: ${shared.join(", ")}`)
+  for (const property of OVER_THE_APP) {
+    assert.equal(
+      DARK_BLOCK.get(property),
+      LIGHT_BLOCK.get(property),
+      `${property} is drawn over the app, so it must not differ between themes`
+    )
+  }
+  /*
+   * And the DIRECTION is the point: each theme cuts its quiet steps out of the
+   * other's ground. Dark mixes white in, light mixes the near-black ink in.
+   *
+   * Asserted as "light mixes its INK in" rather than the old "light does not
+   * mention `#ffffff`". That negative worked only while the light ground was
+   * the off-white `#f4f5f7`; the ground is plain `#ffffff` now, so every light
+   * step legitimately names white as the base it is mixing INTO and the old
+   * form failed on a palette that is correct. What actually matters — and what
+   * the "muddy grey" note was reaching for — is which substance is being mixed,
+   * not which string appears.
+   */
+  for (const property of ["--de-color-bg-hover", "--de-color-field", "--de-color-field-hover"]) {
+    assert.match(DARK_BLOCK.get(property), /#ffffff \d+%/, `dark ${property} stopped lifting`)
+    assert.match(LIGHT_BLOCK.get(property), /#1a1a1a \d+%/, `light ${property} stopped pressing`)
+  }
+})
+
+/*
+ * The dark theme is the appearance the editor shipped with, and this pins it.
+ *
+ * The conversion to custom properties is supposed to be invisible in dark: same
+ * pixels, resolved a layer later. Spot values rather than the whole block,
+ * because the block is generated and re-asserting all of it here would just be
+ * the same table written twice.
+ */
+check("the dark block still carries the contrast-tuned values it shipped with", () => {
+  assert.deepEqual(
+    Object.fromEntries(
+      [
+        "--de-color-bg",
+        "--de-color-bg-sunken",
+        "--de-color-text",
+        "--de-color-text-muted",
+        "--de-color-text-dim",
+        "--de-color-accent",
+        "--de-color-on-accent",
+        "--de-color-border-interactive",
+      ].map((property) => [property, DARK_BLOCK.get(property)])
+    ),
+    {
+      /*
+       * The palette these pin is Figma's, measured off its own chrome at 2x
+       * and recorded in `.harness/figma-colour-spec.md`. The values this case
+       * carried before were the near-black `#1c1d21` ground and the light
+       * indigo `#a1bbff` accent the editor shipped with.
+       *
+       * Two of them are the whole shape of that change. `bg` is Figma's
+       * neutral panel grey. `bg-sunken` is the control surface and now LIFTS
+       * in dark — `#ffffff 6%` over the ground resolves to `#393939`, against
+       * Figma's measured `#383838` — where it used to sink to `#121316`.
+       * Figma draws its fields lighter than its panels; we drew them darker.
+       *
+       * The three inks all went up because a lighter ground costs a
+       * white-alpha ink its contrast: at the old 0.58, `text-dim` measured
+       * 3.94:1 on a hovered control, under the 4.5:1 this project holds for
+       * body text. 0.70 restores it to 5.35:1.
+       */
+      "--de-color-bg": "#2c2c2c",
+      "--de-color-bg-sunken": "color-mix(in srgb, #ffffff 6%, #2c2c2c)",
+      "--de-color-text": "#ffffff",
+      "--de-color-text-muted": "rgba(255,255,255,0.75)",
+      "--de-color-text-dim": "rgba(255,255,255,0.70)",
+      "--de-color-accent": "#7cc4f8",
+      "--de-color-on-accent": "#ffffff",
+      "--de-color-border-interactive": "color-mix(in srgb, #ffffff 35%, transparent)",
+    }
+  )
+  /*
+   * The light ground is plain white now, not the off-white `#f4f5f7` it was.
+   *
+   * That followed Figma, whose light panel measures `#ffffff` with its controls
+   * a step DOWN at `#f5f5f5`. The old ground was picked to leave `#ffffff` free
+   * to mean "raised"; with the control surface doing the stepping instead, the
+   * ground can be white and `bgRaised` can stay white with it — a popover is
+   * told apart by its shadow, which is what a shadow is for.
+   *
+   * Both accent fills are saturated blue now, so `onAccent` is white in both
+   * themes rather than swapping ends. The case above lists it as a deliberate
+   * cross-theme match.
+   */
+  assert.equal(LIGHT_BLOCK.get("--de-color-bg"), "#ffffff")
+  assert.equal(LIGHT_BLOCK.get("--de-color-bg-raised"), "#ffffff")
+  assert.equal(LIGHT_BLOCK.get("--de-color-text"), "#1a1a1a")
+  assert.equal(LIGHT_BLOCK.get("--de-color-on-accent"), "#ffffff")
+})
+
+/*
+ * Where the palette is declared, which is the half of this that a selector
+ * typo silently breaks.
+ *
+ * `:root` and not `[data-design-editor]`: that attribute is on every element
+ * the chrome builds, so declaring the palette on it re-declares it on every
+ * descendant and a theme flipped on the root would reach nothing inside it.
+ * `:root` is also the only ancestor shared by the four roots this package
+ * mounts on `<body>` — the editor root, the options window, the token popover
+ * and the design-system probe — which is what makes an inline `var()` in a
+ * popover resolve at all.
+ */
+check("the palette is declared where every chrome root can inherit it", () => {
+  assert.match(chrome.paletteCss, /^\/\* -+ palette -+ \*\/\n:root,\n/)
+  assert.match(chrome.paletteCss, /\n:root\[data-de-theme="light"\],\n/)
+  // Dark first and unconditional, so a document that never gets the attribute
+  // written — storage blocked, boot threw — is still the editor as it shipped.
+  assert.ok(
+    chrome.paletteCss.indexOf(":root,") < chrome.paletteCss.indexOf(':root[data-de-theme="light"]'),
+    "the light block no longer wins on order"
+  )
+  // And it leads the sheet: every module after it reads these properties.
+  assert.ok(chrome.baseCss.startsWith(chrome.paletteCss), "the palette is not first in base.ts")
+})
+
+/*
+ * What must NOT have become a variable.
+ *
+ * Two of these scales are read by JavaScript as numbers — `tokens.icon.control`
+ * is handed to `icon()` and `tokens.size.panelInset` to the drag clamp — so a
+ * `var()` there is not a slower colour, it is `NaN` pixels. The rest simply do
+ * not vary by theme, and a token that cannot answer "which value in which
+ * theme" has no business in the palette.
+ */
+/*
+ * Every gap in the chrome is on the kit's spacing scale.
+ *
+ * There was no scale at all before this: a survey of the stylesheets found 1,
+ * 2, 3, 4, 5, 6, 7, 8, 10, 12, 16 and 24 in use, which is not a system but
+ * twelve decisions that happened to land near each other. Six of those were off
+ * the kit entirely, and 6px alone accounted for 61 declarations.
+ *
+ * Asserted against the EMITTED stylesheet rather than the source, because the
+ * point is what ships: a token interpolated into a string is only worth
+ * anything if the number that comes out the other end is on the scale. That
+ * also catches the arithmetic call sites, which the source text cannot.
+ */
+check("every spacing value in the shipped stylesheet is on the kit's scale", () => {
+  const scale = new Set(Object.values(chrome.tokens.space))
+  // Rhythm only. `border-radius` has its own scale, `overflow-clip-margin` is
+  // focus-ring reach, and a `-2px` inset is a hit target being grown past its
+  // control rather than a gap between two things.
+  const RHYTHM = /(?:^|[;{\s])(padding|margin|gap|row-gap|column-gap)(-top|-right|-bottom|-left)?:\s*([^;}]+)/g
+  /*
+   * Derived geometry, exempt by name rather than by silence.
+   *
+   * A value computed to make two things line up is not a designer choosing a
+   * gap, and rounding it onto the scale would break the alignment it exists to
+   * create. Listing the exact declaration keeps the exemption a reviewed act: an
+   * off-scale value cannot hide behind a blanket allowance for arithmetic.
+   *
+   * Empty today, and the entry it used to hold is worth recording. The seam's
+   * hairline has to measure what a plain break between two clusters measures, so
+   * it is the cluster margin minus the bar's own flex gap. That was `space.md`
+   * minus 2, which is 6 and off the scale; the toolbar's two gaps have since
+   * moved up a rung each, and `space.lg` minus `space.sm` lands on `space.md`.
+   * The subtraction is unchanged — it stopped needing an exemption because both
+   * of its operands moved, which is the outcome this set exists to wait for.
+   */
+  const DERIVED = new Set()
+  /*
+   * A concentric container's padding, which is the same exemption arrived at a
+   * second way and is therefore COMPUTED rather than listed.
+   *
+   * `nest()` declares the gap between a container's curve and its children's —
+   * always a step on the scale — and then hands back the padding that leaves
+   * that gap once the container's own border has taken its pixel. So a pill
+   * with a hairline pads by 3 to hold a gap of 4. The 3 is not a rhythm
+   * decision anybody made and putting it back on the scale would knock the
+   * radii out of true, which is exactly the bug `nest()` exists to prevent.
+   *
+   * Generated from the register instead of spelled out, because the listed form
+   * of this exemption would be a set of odd numbers with no way to tell a
+   * derived one from a typo. Only the nests that actually HAVE a hairline are
+   * exempt: an off-scale padding on a borderless container is still a mistake.
+   */
+  /*
+   * A hairline-adjusted step is still a step, and every SIDE is checked rather
+   * than the shorthand being waved through whole. `.de-ann-item` writes
+   * `3px 3px 3px 7px` — a `space.sm` gap on three sides and a `space.md` one on
+   * the leading edge, each a pixel under because the row's own border sits in
+   * the gap. Matching the declaration as a literal string would have meant
+   * regenerating this exemption every time a side moved, and would have let a
+   * genuine typo ride along inside an otherwise-derived shorthand.
+   */
+  const adjusted = new Set()
+  for (const n of chrome.declaredNests()) {
+    if (n.hairline > 0) for (const step of scale) adjusted.add(step - n.hairline)
+  }
+  const derivedPadding = (property, value) =>
+    property === "padding" &&
+    adjusted.size > 0 &&
+    value
+      .trim()
+      .split(/\s+/)
+      .every((side) => {
+        const px = Number.parseFloat(side)
+        return Number.isFinite(px) && (px === 0 || scale.has(px) || adjusted.has(px))
+      })
+
+  const offenders = new Map()
+  for (const match of chrome.shellCss.matchAll(RHYTHM)) {
+    for (const value of match[3].matchAll(/(-?\d+(?:\.\d+)?)px/g)) {
+      const px = Math.abs(Number.parseFloat(value[1]))
+      if (px === 0 || scale.has(px)) continue
+      const decl = `${match[1]}${match[2] ?? ""}: ${match[3].trim()}`
+      if (DERIVED.has(decl)) continue
+      if (derivedPadding(`${match[1]}${match[2] ?? ""}`, match[3])) continue
+      offenders.set(decl, px)
+    }
+  }
+  assert.deepEqual(
+    [...offenders.keys()],
+    [],
+    `off the spacing scale (${[...new Set(offenders.values())].sort((a, b) => a - b).join(", ")})`
+  )
+})
+
+/*
+ * "Disabled" is said with ink, never with `opacity`, and this is what stops it
+ * coming back.
+ *
+ * Three separate controls had shipped an unreadable disabled state and all
+ * three were the same mistake: `opacity` fades a control's ink and its fill by
+ * the same factor toward whatever is behind them, so the pair drifts together
+ * and the resulting ratio depends on a surface the rule cannot see. On the
+ * primary pill it ended at 1.06:1 — near-black text on a near-black plate,
+ * which is the disabled "Send to agent" that started this.
+ *
+ * A grep is the right shape of test. The defect is not that one measured number
+ * came out wrong, it is that a TECHNIQUE is wrong, and the technique is visible
+ * in the source in a way its consequences are not.
+ */
+check("no control says it is disabled by fading itself", () => {
+  const offenders = []
+  for (const rule of chrome.shellCss.matchAll(/(^|\n)([^{}@\n][^{}]*)\{([^{}]*)\}/g)) {
+    const selector = rule[2].trim().replace(/\s+/g, " ")
+    if (!/\[disabled\]|:disabled|aria-disabled="true"/.test(selector)) continue
+    const faded = rule[3].match(/(?:^|[;\s])opacity:\s*([^;]+);/)
+    if (faded) offenders.push(`${selector} { opacity: ${faded[1].trim()} }`)
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    "a disabled state is fading itself instead of naming its ink — use `tokens.color.textDisabled`"
+  )
+})
+
+/*
+ * A fill the theme does not control must not carry ink that it does.
+ *
+ * `--de-ann-color` is one of seven presets the user picks, and it is the same
+ * hex in both themes. `onAccent` is near-black in dark and white in light —
+ * correctly, because the accent it names swaps ends too. Pair them and the
+ * numeral on a note pin measures 5.7:1 in dark and 3.4:1 in light: same pin,
+ * same green, readable in only one of them.
+ */
+check("a user-chosen fill carries ink that does not flip with the theme", () => {
+  const offenders = []
+  for (const rule of chrome.shellCss.matchAll(/(^|\n)([^{}@\n][^{}]*)\{([^{}]*)\}/g)) {
+    if (!/background:[^;]*--de-ann-color/.test(rule[3])) continue
+    const ink = rule[3].match(/(?:^|[;\s])color:\s*([^;]+);/)
+    if (!ink) continue
+    if (!/--de-color-on-user-color/.test(ink[1])) {
+      offenders.push(`${rule[2].trim().replace(/\s+/g, " ")} { color: ${ink[1].trim()} }`)
+    }
+  }
+  assert.deepEqual(offenders, [], "ink on a user-picked fill must be `tokens.color.onUserColor`")
+})
+
+/*
+ * The disabled ink clears the STRICTER of its two floors on every ground.
+ *
+ * Computed rather than pinned, because pinning the string is exactly what let
+ * the last value through: 40% white looked like a considered number and put the
+ * disabled Copy pill's label at 3.2:1. A glyph owes 3:1 and text owes 4.5:1,
+ * one role serves both, so 4.5 is the bar.
+ *
+ * Dark only. Its values are plain `rgba()` over hex grounds and resolve with
+ * arithmetic; the light theme's are `color-mix()`, which needs a browser, and
+ * is checked in the live sweep instead.
+ */
+check("disabled ink is readable on every ground the dark chrome draws", () => {
+  const channel = (v) => {
+    const s = v / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  }
+  const luminance = ({ r, g, b }) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+  const contrast = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+    return (hi + 0.05) / (lo + 0.05)
+  }
+  const hex = (value) => {
+    const m = /^#([0-9a-f]{6})$/i.exec(value.trim())
+    assert.ok(m, `not a plain hex ground: ${value}`)
+    const n = Number.parseInt(m[1], 16)
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+  }
+  // The raised and sunken grounds are `lift()`/`press()` output, so they arrive
+  // as `color-mix(in srgb, <hex> N%, <hex>)` rather than as a plain colour. srgb
+  // mixing is a straight per-channel lerp, which is the one case worth resolving
+  // here — anything else should fail loudly in `hex` rather than be guessed at.
+  const ground = (value) => {
+    const mix = /^color-mix\(in srgb,\s*(#[0-9a-f]{6})\s+([\d.]+)%,\s*(#[0-9a-f]{6})\)$/i.exec(
+      value.trim()
+    )
+    if (!mix) return hex(value)
+    const [a, weight, b] = [hex(mix[1]), Number.parseFloat(mix[2]) / 100, hex(mix[3])]
+    return { r: a.r * weight + b.r * (1 - weight), g: a.g * weight + b.g * (1 - weight), b: a.b * weight + b.b * (1 - weight) }
+  }
+  const over = (fg, bg, alpha) => ({
+    r: fg.r * alpha + bg.r * (1 - alpha),
+    g: fg.g * alpha + bg.g * (1 - alpha),
+    b: fg.b * alpha + bg.b * (1 - alpha),
+  })
+  const alphaOf = (role) =>
+    Number.parseFloat(/rgba\(255,\s*255,\s*255,\s*([\d.]+)\)/.exec(DARK_BLOCK.get(role))[1])
+
+  const alpha = alphaOf("--de-color-text-disabled")
+  const white = { r: 255, g: 255, b: 255 }
+  const measured = ["--de-color-bg", "--de-color-bg-raised", "--de-color-bg-sunken"].map((role) => {
+    const behind = ground(DARK_BLOCK.get(role))
+    return { role, ratio: contrast(over(white, behind, alpha), behind) }
+  })
+  const worst = measured.reduce((a, b) => (a.ratio < b.ratio ? a : b))
+  assert.ok(
+    worst.ratio >= 4.5,
+    `disabled ink is ${worst.ratio.toFixed(2)}:1 on ${worst.role}, under the 4.5:1 a label needs`
+  )
+  // And still visibly OFF. A disabled control that reads as brightly as a live
+  // one is a different defect arriving from the other direction.
+  const live = alphaOf("--de-color-text-dim")
+  assert.ok(alpha < live, `disabled ink (${alpha}) is not quieter than textDim (${live})`)
+})
+
+/*
+ * A selected control's glyph is WHITE, and the fill under it is dark enough to
+ * let it be read as white.
+ *
+ * Both halves, because either one alone is how this broke. The ink was already
+ * `onAccent` and `onAccent` was already `#ffffff`, so by the stylesheet the
+ * pressed Notes and Inspect squares were drawing a white mark — and on screen
+ * they were not: the dark theme's fill was the accent as INK (a light blue
+ * meant for strokes on near-black), and white on it measured 1.9:1. A glyph at
+ * that ratio does not read as white, it reads as a pale smudge the colour of
+ * the chip, which is what the designer reported.
+ *
+ * So asserting the ink token is white proves nothing on its own, and neither
+ * does any single hex. What has to hold is the RELATION between the two halves
+ * of the pair, in both themes: the fill is chosen so that white survives on it.
+ *
+ * 3:1 on the chip, which is the floor a MARK is owed — WCAG 1.4.11, the rule
+ * for a control's non-text parts, and the ratio Figma's own selected tool sits
+ * at. A word needs 4.5:1 and cannot take this fill, which is why the palette
+ * carries a second, darker one: `accentSurfaceText`, checked below at the
+ * stricter floor. Two roles rather than one compromise, because a fill dark
+ * enough for a label is a fill too dark to read as the same accent the strokes
+ * and focus rings are drawn in.
+ *
+ * Arithmetic, not a browser: every role here resolves to plain hex in both
+ * themes. A theme that moves one to a `color-mix()` fails loudly in `hex` below
+ * rather than quietly skipping the measurement.
+ */
+check("a selected control's white glyph is readable on the fill it sits on", () => {
+  const channel = (v) => {
+    const s = v / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  }
+  const luminance = ({ r, g, b }) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+  const hex = (value, what) => {
+    const m = /^#([0-9a-f]{6})$/i.exec(String(value).trim())
+    assert.ok(m, `${what} is "${value}", which this check cannot measure — resolve it to a hex`)
+    const n = Number.parseInt(m[1], 16)
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+  }
+  const ratio = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+    return (hi + 0.05) / (lo + 0.05)
+  }
+  for (const [theme, block] of [
+    ["dark", DARK_BLOCK],
+    ["light", LIGHT_BLOCK],
+  ]) {
+    const ink = block.get("--de-color-on-accent")
+    assert.equal(
+      ink.trim().toLowerCase(),
+      "#ffffff",
+      `the ${theme} theme's selected glyph is "${ink}" — a selected control draws its mark in white`
+    )
+    const white = hex(ink, "the ink")
+    const chip = ratio(white, hex(block.get("--de-color-accent-surface"), `the ${theme} chip`))
+    assert.ok(
+      chip >= 3,
+      `white on the ${theme} accent chip is ${chip.toFixed(2)}:1 — the glyph will read as the chip, not as white`
+    )
+    // The same accent under a WORD, which is a different fill and a stricter
+    // floor. Asserted here rather than wherever the pill is styled, because the
+    // failure is in the palette: a single accent fill serving both is how a
+    // selected glyph and a primary label end up sharing one wrong ratio.
+    const worded = block.get("--de-color-accent-surface-text")
+    if (worded) {
+      const label = ratio(white, hex(worded, `the ${theme} worded fill`))
+      assert.ok(
+        label >= 4.5,
+        `white on the ${theme} worded accent fill is ${label.toFixed(2)}:1, under the 4.5:1 a label needs`
+      )
+    }
+  }
+})
+
+/*
+ * Every corner is a squircle, and the circles are not.
+ *
+ * Both halves matter. Without the first, \`corner-shape\` reaches only the rules
+ * somebody remembered, and one arc-cornered surface among smooth ones is the
+ * kind of wrongness that gets noticed without being identified. Without the
+ * second, `border-radius: 50%` stops meaning a circle: at that radius the
+ * corner box is the whole side, so a superellipse does not smooth the launcher
+ * disc, it reshapes it into a rounded square.
+ */
+check("the chrome's corners are squircles, and its circles are left alone", () => {
+  assert.match(
+    chrome.shellCss,
+    /:where\(\[data-design-editor\], \[data-design-editor\] \*\)[\s\S]{0,160}?corner-shape:\s*superellipse\(2\)/,
+    "no chrome-wide `corner-shape` — every corner falls back to a circular arc"
+  )
+  const optOut = chrome.shellCss.match(/([^{}]*)\{\s*corner-shape:\s*round;\s*\}/)
+  assert.ok(optOut, "nothing opts out, so the chrome's round things are no longer round")
+  for (const circle of [".de-launcher", ".de-ann-marker", ".de-ann-index"]) {
+    assert.ok(optOut[1].includes(circle), `${circle} is a circle and is not opting out`)
+  }
+})
+
+check("the literal scales are still literal", () => {
+  const { icon, size, type, radius, duration, ease, easeSpring, font } = chrome.tokens
+  for (const [group, values] of [["icon", icon], ["size", size]]) {
+    for (const [role, value] of Object.entries(values)) {
+      assert.equal(typeof value, "number", `${group}.${role} is no longer a number`)
+    }
+  }
+  assert.deepEqual(
+    { ...icon },
+    { mark: 10, row: 12, control: 16, launcher: 20, display: 24, hero: 32 }
+  )
+  /*
+   * The design kit's own scales, asserted as sets rather than as a floor.
+   *
+   * Radius and spacing are enumerations the kit hands over — 4/8/12/… and
+   * 2/4/8/12/14/… — so a value that is merely "big enough" is still wrong here.
+   * Type is the exception and is checked as a floor above, because its three
+   * steps are ours to place and only the bottom of the ramp was specified.
+   */
+  assert.deepEqual(Object.values(radius), [
+    "4px", "8px", "12px", "16px", "20px", "24px", "28px", "32px", "36px",
+  ])
+  assert.deepEqual(Object.values(chrome.tokens.space), [2, 4, 8, 12, 14, 16, 18, 20, 24, 30, 36])
+  for (const [role, value] of Object.entries(chrome.tokens.space)) {
+    assert.equal(typeof value, "number", `space.${role} must stay a number for arithmetic`)
+  }
+  /*
+   * The type floor, pinned as a floor rather than as three values.
+   *
+   * It has moved twice: 11/10/9 was density tuned on a large display, 13/12/12
+   * was a hard 12px brief that spent a rung to buy legibility, and 12/11/10 is
+   * the kit's own floor with all three steps real again. Asserting the MINIMUM
+   * keeps the hierarchy free to move and the one number that was specified
+   * fixed — which is what stopped the 11px body from surviving a third time.
+   */
+  for (const [role, value] of Object.entries(type)) {
+    if (typeof value !== "string" || !value.endsWith("px")) continue
+    assert.ok(
+      Number.parseFloat(value) >= 10,
+      `type.${role} is ${value} — nothing in the chrome may be set below 10px`
+    )
+  }
+  assert.equal(type.body, "12px")
+  assert.equal(type.weightSection, 600)
+  assert.equal(duration.base, "180ms")
+  assert.match(ease, /^cubic-bezier\(/)
+  assert.match(easeSpring, /^cubic-bezier\(/)
+
+  const flat = [
+    ...Object.values(radius),
+    ...Object.values(duration),
+    ...Object.values(type),
+    ...Object.values(font),
+    ease,
+    easeSpring,
+  ].map(String)
+  for (const value of flat) {
+    assert.doesNotMatch(value, /var\(/, `a theme-invariant scale went through a variable: ${value}`)
+  }
+})
 
 console.log("\nDesign-system catalog")
 

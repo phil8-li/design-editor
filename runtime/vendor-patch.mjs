@@ -33,7 +33,7 @@ function buildInteractionPatch(config) {
     // `Element.closest("")` throws SyntaxError, so a host that declares no dev
     // chrome must short-circuit rather than call it.
     'function designEditorElementIsTrustedChrome(e){return e instanceof Element&&(e.id==="react-rewrite-root"||!!designEditorChromeSelector&&!!e.closest(designEditorChromeSelector))}',
-    'function designEditorInstallBridge(){if(window.__DESIGN_EDITOR_BRIDGE__)return;window.__DESIGN_EDITOR_BRIDGE__={version:1,tokens:{get colors(){return l},get shadows(){return $},get radii(){return L},get font(){return x}},send:Ae,subscribe:ie,discoverFile:at,elementInfo:function(e){try{return Yl(e)}catch{return null}},elementSourceAsync:function(e){return Promise.resolve().then(function(){return zu(e)}).catch(function(){return null})},resolveSourceAt:function(e,t){return vl(e,t)},hitTest:Pt,selectedElement:Wl,refreshGeometry:ot,toast:V,root:Z,store:jo}}',
+    'function designEditorInstallBridge(){if(window.__DESIGN_EDITOR_BRIDGE__)return;window.__DESIGN_EDITOR_BRIDGE__={version:1,tokens:{get colors(){return l},get shadows(){return $},get radii(){return L},get font(){return x}},send:Ae,subscribe:ie,discoverFile:at,elementInfo:function(e){try{return Yl(e)}catch{return null}},elementSourceAsync:function(e){return Promise.resolve().then(function(){return zu(e)}).catch(function(){return null})},resolveSourceAt:function(e,t){return vl(e,t)},hitTest:Pt,selectedElement:Wl,refreshGeometry:ot,toast:V,root:Z,store:Object.create(jo,{removePendingPropertyOperation:{value:su,enumerable:!0}})}}',
     'function designEditorEventIsInsideTrustedChrome(e){return e.composedPath().some(designEditorElementIsTrustedChrome)}',
     'function designEditorEventIsInsideLevaChrome(e){return!!designEditorDockChromeSelector&&e.composedPath().some(t=>t instanceof Element&&!!t.closest(designEditorDockChromeSelector))}',
     'function designEditorLevaPanel(){if(!designEditorDockSelector)return null;let e=document.querySelector(designEditorDockSelector);if(e)return e;if(!designEditorDockFallbackSelector)return null;return[...document.querySelectorAll(designEditorDockFallbackSelector)].find(t=>getComputedStyle(t).position==="fixed")||null}',
@@ -97,6 +97,26 @@ const BORROWED_DECLARATIONS = [
   ].map((name) => `function ${name}(`),
   // Functions the injected interaction guards call.
   ...["Je", "Mt", "Ut", "cr", "dr", "ur"].map((name) => `function ${name}(`),
+  /*
+   * `su` — the vendor's own per-property withdrawal from the pending store.
+   *
+   * It is the exact inverse of `addPendingPropertyOperation`: given a merge key
+   * and a list of property keys, it drops those entries from the merged
+   * operation and deletes the whole record when nothing is left. The vendor
+   * calls it from its canvas-undo path and does not put it on the namespace
+   * object the bridge is handed, so the patch adds it there.
+   *
+   * We borrow rather than reimplement because the pending store is the vendor's
+   * data structure: a second writer walking `mt` would have to agree with
+   * `Hi` about how `updates` and `propertyKeys` stay parallel, and about
+   * firing `Ee()` so `hasChanges` repaints. Two implementations of that
+   * invariant is one more than can be kept correct across a version bump.
+   *
+   * Listed here so a bundle that stops declaring it fails the build loudly
+   * instead of silently giving the Changes tab a delete button that removes a
+   * row and leaves the write queued behind it.
+   */
+  "function su(",
   // Every method `RewriteStore` declares, as defined on the store object.
   ...[
     "getActiveTool",

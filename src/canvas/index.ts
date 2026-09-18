@@ -11,7 +11,7 @@
 import { isCanvasElement, isChrome } from "../core/dom"
 import { canvasAction, isDeepSelect, NUDGE, ownsCanvasKeys } from "../core/keymap"
 import { getResolver, toSelectable } from "../core/resolve"
-import { editorOwnsInput, isLocked } from "../core/store"
+import { isLocked, selectionOwnsInput } from "../core/store"
 import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
 import type { LayerElement } from "../core/types"
@@ -65,14 +65,14 @@ export function installCanvas(context: EditorContext): void {
     pointerX = event.clientX
     pointerY = event.clientY
     pointerHit = hitFor(event)
-    if (!editorOwnsInput()) return
+    if (!selectionOwnsInput()) return
     if (isChrome(event.target)) return
     setHovered(targetFor(pointerHit, isDeepSelect(event)))
   }
 
   const onPointerDown = (event: PointerEvent) => {
     if (isChrome(event.target)) return
-    if (!editorOwnsInput()) return
+    if (!selectionOwnsInput()) return
     // Right-click belongs to the layer-stack menu, which selects for itself.
     if (event.button !== 0) return
 
@@ -105,7 +105,7 @@ export function installCanvas(context: EditorContext): void {
   /** Double-click descends exactly one level and takes the scope with it. */
   const onDoubleClick = (event: MouseEvent) => {
     if (isChrome(event.target)) return
-    if (!editorOwnsInput()) return
+    if (!selectionOwnsInput()) return
     const hit = hitFor(event)
     if (!hit) return
 
@@ -143,8 +143,30 @@ export function installCanvas(context: EditorContext): void {
     context.setState({ scope })
   }
 
+  /**
+   * Delete, and then have nothing selected.
+   *
+   * Figma leaves the selection empty rather than guessing at a neighbour, and
+   * so does this — but the clear is not a UX choice here, it is a correctness
+   * one. A `Selection` holds the element, the overlay's frame is drawn from its
+   * box, and the layers tree walks it; leaving a detached node in the store
+   * would keep every one of those describing something that is no longer on the
+   * page. The scope goes with it for the same reason, when it was inside what
+   * just went away.
+   */
+  const deleteSelection = () => {
+    const state = context.getState()
+    if (!state.selection.length) return
+    const scope = state.scope
+    writer.applyDelete(state.selection)
+    context.select(null)
+    if (scope && !scope.isConnected) context.setState({ scope: null })
+    context.bridge.refreshGeometry()
+    context.refresh()
+  }
+
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!editorOwnsInput()) return
+    if (!selectionOwnsInput()) return
     // A held modifier changes what a click would select, so the outline has to
     // follow it even while the pointer is stationary.
     if (event.key === "Meta" || event.key === "Control") {
@@ -161,6 +183,14 @@ export function installCanvas(context: EditorContext): void {
       nudge(event)
       return
     }
+    if (action === "delete") {
+      // Unconditionally, even with nothing selected: Backspace is the browser's
+      // back-navigation key, and a canvas that let it through on an empty
+      // selection would throw away the whole session.
+      event.preventDefault()
+      deleteSelection()
+      return
+    }
 
     const state = context.getState()
     const primary = state.selection[0]?.element ?? null
@@ -168,6 +198,11 @@ export function installCanvas(context: EditorContext): void {
     // Escape clears. It does not select the parent — that is Shift+Enter.
     if (action === "deselect") {
       if (!primary && !state.scope) return
+      // Cancelled even though keydown has no default to cancel, because
+      // `defaultPrevented` is how the shell's Escape fallback is told the key
+      // was spent: it collapses the editor only on a press nothing else took,
+      // and a deselect that stayed silent would deselect and collapse at once.
+      event.preventDefault()
       context.select(null)
       context.setState({ scope: null })
       return
@@ -196,7 +231,7 @@ export function installCanvas(context: EditorContext): void {
   }
 
   const onKeyUp = (event: KeyboardEvent) => {
-    if (!editorOwnsInput()) return
+    if (!selectionOwnsInput()) return
     if (event.key !== "Meta" && event.key !== "Control") return
     setHovered(
       targetFor(pointerHit ?? resolver.hitStack(pointerX, pointerY)[0] ?? null, isDeepSelect(event))
@@ -211,7 +246,7 @@ export function installCanvas(context: EditorContext): void {
   // the mode's whole point rather than a convenience: nothing else in the
   // editor stops the app from responding to a click.
   const onClick = (event: MouseEvent) => {
-    if (!editorOwnsInput()) return
+    if (!selectionOwnsInput()) return
     if (isChrome(event.target) || !isCanvasElement(event.target)) return
     event.preventDefault()
     event.stopPropagation()

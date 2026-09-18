@@ -16,6 +16,7 @@
  */
 
 import { clear, el } from "../core/dom"
+import { focusControl } from "../core/focus"
 import { icon } from "../core/icons"
 import { elementKey, getState } from "../core/store"
 import { createWriter } from "../core/writer"
@@ -32,6 +33,7 @@ import {
 } from "./inventory"
 import type { LevaControl, LevaFolder } from "./inventory"
 import { optionsStore, visibleOptions } from "./store"
+import { tokens } from "../core/tokens"
 
 /** Why each concept can or cannot be written back to source. Shown verbatim. */
 const WHY_NOT: Record<string, string> = {
@@ -277,7 +279,7 @@ function folderNode(
   expand: boolean
 ): HTMLElement {
   const summary = el("summary", { class: "de-opt-summary" }, [
-    el("span", { class: "de-opt-twisty", "aria-hidden": "true" }, [icon("ChevronRight", 10)]),
+    el("span", { class: "de-opt-twisty", "aria-hidden": "true" }, [icon("ChevronRight", tokens.icon.row)]),
     el("span", { class: "de-opt-folder-name" }, [folder.name]),
     el("span", { class: "de-opt-count" }, [
       `${folder.controlCount} control${folder.controlCount === 1 ? "" : "s"}` +
@@ -509,7 +511,7 @@ function variantsTab(editor: EditorContext, query: string): HTMLElement {
 
       return el("details", { class: "de-opt-folder", open: true }, [
         el("summary", { class: "de-opt-summary" }, [
-          el("span", { class: "de-opt-twisty", "aria-hidden": "true" }, [icon("ChevronRight", 10)]),
+          el("span", { class: "de-opt-twisty", "aria-hidden": "true" }, [icon("ChevronRight", tokens.icon.row)]),
           el("span", { class: "de-opt-folder-name" }, [set.label]),
           el("span", { class: "de-opt-count" }, [`${visibleOptions(set).length} saved`]),
           store.hasBaseline(set.key)
@@ -587,7 +589,7 @@ export function installOptionsBrowser(editor: EditorContext): void {
       el(
         "button",
         { class: "de-opt-close", type: "button", "aria-label": "Close", onclick: () => close() },
-        [icon("X", 12)]
+        [icon("X", tokens.icon.row)]
       ),
     ]),
     el("div", { class: "de-opt-tabs", role: "group", "aria-label": "Option kind" }, [
@@ -623,7 +625,7 @@ export function installOptionsBrowser(editor: EditorContext): void {
     // write moved underneath it, dropping focus beats focusing something else.
     const target = returnFocus?.isConnected ? returnFocus : null
     returnFocus = null
-    target?.focus()
+    focusControl(target)
   }
   window.addEventListener(
     "keydown",

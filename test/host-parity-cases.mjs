@@ -219,8 +219,23 @@ async function panelFor(hostConfig, elementId) {
   // settle, one for the repaint that follows it.
   for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
 
+  /*
+   * The ACCESSIBLE NAME, not the text content.
+   *
+   * A section's fold button used to contain its title, so `textContent` was the
+   * name. It does not any more: the header is a grid with the title, the
+   * actions and the chevron laid over an empty full-bleed button, because a `+`
+   * nested inside the fold button would be a button inside a button. The
+   * button's text is therefore `""` for every section, and reading it here made
+   * this suite report that both hosts had lost every section they have — four
+   * failures describing a panel that was in fact rendering correctly.
+   *
+   * `aria-label` is what `section()` pins the name to, precisely so a change to
+   * the header's layout cannot rename a landmark. The fallback keeps any other
+   * `aria-expanded` control in the panel readable.
+   */
   const sections = Array.from(slots.right.querySelectorAll("button[aria-expanded]")).map((b) =>
-    (b.textContent || "").trim()
+    (b.getAttribute("aria-label") || b.textContent || "").trim()
   )
   const controls = Array.from(slots.right.querySelectorAll("input,select,button"))
     .map((c) => c.getAttribute("aria-label") || c.getAttribute("placeholder") || (c.textContent || "").trim())
@@ -241,8 +256,15 @@ console.log("\nEvery section is accounted for on both hosts")
 const reactPanel = await panelFor(REACT, "text")
 const angularPanel = await panelFor(ANGULAR, "text")
 
+// "Ask AI" was the ninth name here and is deliberately absent: a free-text box
+// that posted one element to the agent, next to a Changes tab that already
+// hands over every note and edit with a resolve lifecycle behind it. Two doors
+// to one agent, and the narrower one was in the panel you use for direct
+// manipulation.
+const ALWAYS = ["Position", "Layout", "Appearance", "Fill", "Stroke", "Effects", "Classes"]
+
 check("the React panel draws the sections it always has", () => {
-  for (const name of ["Position", "Layout", "Appearance", "Fill", "Stroke", "Effects", "Classes", "Ask AI"]) {
+  for (const name of ALWAYS) {
     assert.ok(reactPanel.sections.includes(name), `React lost the ${name} section`)
   }
 })
@@ -250,8 +272,14 @@ check("the React panel draws the sections it always has", () => {
 check("Angular draws the same sections, none missing", () => {
   // The whole claim of the Angular lane: the panel is the same product, and
   // only the spelling of a write changes underneath it.
-  for (const name of ["Position", "Layout", "Appearance", "Fill", "Stroke", "Effects", "Classes", "Ask AI"]) {
+  for (const name of ALWAYS) {
     assert.ok(angularPanel.sections.includes(name), `Angular is missing the ${name} section`)
+  }
+})
+
+check("the Design tab offers no second way to message the agent", () => {
+  for (const panel of [reactPanel, angularPanel]) {
+    assert.ok(!panel.sections.includes("Ask AI"), "the Ask AI section is back in the Design tab")
   }
 })
 
@@ -267,10 +295,31 @@ check("the controls are the same set too, not just the headings", () => {
   // its own heading is excluded alongside the rows it owns. Everything else
   // that React can reach, Angular must reach.
   const responsive = /^Responsive$|breakpoint|container/i
+  // Responsive is now the ONLY exemption. There used to be a second — a
+  // component-stack switch whose label named the host it was gathering from,
+  // "React components" on one and "Angular components" on the other. It is
+  // gone (see the case below), so the two panels' control sets match outright.
   const missing = reactPanel.controls.filter(
     (name) => !angularPanel.controls.includes(name) && !responsive.test(name)
   )
   assert.deepEqual(missing, [], `Angular is missing controls: ${missing.join(", ")}`)
+})
+
+check("neither host asks the designer to turn component detection on", () => {
+  /*
+   * The framework is DETECTED, not configured, so there is no row for it.
+   *
+   * The switch this replaces was the one control in the panel whose name had
+   * to differ per host, which is the smell that gave it away: the editor knew
+   * which framework it was attached to well enough to spell the label, and
+   * then asked anyway. `output.ts` reads the stack off whichever host is
+   * present and the brief always carries it; the only thing the switch could
+   * do was withhold it.
+   */
+  const asksAboutComponents = (panel) =>
+    panel.controls.filter((name) => /\bcomponents$/i.test(name))
+  assert.deepEqual(asksAboutComponents(reactPanel), [], "the React panel is back to asking")
+  assert.deepEqual(asksAboutComponents(angularPanel), [], "the Angular panel is back to asking")
 })
 
 check("the options actions are always drawn, on both", () => {
@@ -342,32 +391,84 @@ await checkAsync("Angular's runtime attributes stay out of the source view", asy
 })
 
 /* ---------------------------------------------------------------------- */
-console.log("\nThe agent is briefed for the host it is editing")
+console.log("\nThe handover is written in the host's own vocabulary")
 
+/*
+ * This used to assert against the system prompt the editor sent to the
+ * Anthropic API — a `HOST_GUIDANCE` table telling a model to edit `class` on
+ * Angular and `className` on React. Both the table and the API call are gone
+ * with the "Ask AI" panel that was the only way to reach them, so the claim is
+ * now tested where it still holds: in the handoff record, which is the one
+ * thing this route produces and the only description of the host an agent gets.
+ *
+ * Against the real route rather than the module text, because a grep for a
+ * string in a source file passes just as happily when nothing calls it.
+ */
 {
   const { createAgent } = await import("../server/agent.mjs")
   const { resolveConfig } = await import("../config.mjs")
-  // `createAgent` is constructed per host; the prompt is what is under test, so
-  // it is read back off the module rather than sent anywhere.
-  const agentSource = fs.readFileSync(new URL("../server/agent.mjs", import.meta.url), "utf8")
+  const { handoffQueue } = await import("../server/handoff.mjs")
 
-  check("both hosts have their own briefing", () => {
-    assert.match(agentSource, /HOST_GUIDANCE = \{/)
-    assert.match(agentSource, /react: \{/)
-    assert.match(agentSource, /angular: \{/)
+  /** Files one request through a throwaway project root and reads it back. */
+  async function handoffFor(framework) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `de-parity-${framework}-`))
+    handoffQueue().clear()
+    const agent = createAgent({
+      projectRoot: root,
+      stateDir: path.join(root, ".local", "design-editor"),
+      host: { framework },
+    })
+    const reply = await agent.runAgent({
+      prompt: "1 note and 1 edit from the design editor",
+      origin: "prompts",
+      brief: "### src/overview\n- `<button>` — set `box-shadow` to `0 1px 2px`",
+      files: ["src/overview"],
+      url: "http://127.0.0.1:3456/overview",
+      selection: {
+        tagName: "button",
+        componentName: "Overview",
+        className: "btn btn--outlined",
+        text: "Continue",
+        source: { filePath: "src/overview", lineNumber: 31 },
+      },
+      ancestry: [],
+    })
+    const body = fs.readFileSync(path.join(root, reply.handoffPath), "utf8")
+    const queued = handoffQueue().get(reply.changeId)
+    fs.rmSync(root, { recursive: true, force: true })
+    handoffQueue().clear()
+    return { reply, body, queued }
+  }
+
+  const react = await handoffFor("react")
+  const angular = await handoffFor("angular")
+
+  check("React is told className, Angular is told class", () => {
+    assert.match(react.body, /- className: btn btn--outlined/)
+    assert.match(angular.body, /- class: btn btn--outlined/)
+    assert.ok(
+      !/- className:/.test(angular.body),
+      "an Angular template has no className, and saying so sends the agent to a file that does not exist"
+    )
   })
 
-  check("the Angular briefing names the attribute Angular actually uses", () => {
-    const angularBlock = agentSource.slice(
-      agentSource.indexOf("angular: {"),
-      agentSource.indexOf("function systemPromptFor")
-    )
-    assert.match(angularBlock, /`class`, not `className`/)
-    assert.match(angularBlock, /ngClass|\[class\.x\]/, "bindings are not protected")
-    assert.ok(
-      !/Tailwind utility classes already used/.test(angularBlock),
-      "Tailwind advice reached Angular"
-    )
+  check("the queue entry names the host too, so a waiting agent knows before it reads", () => {
+    assert.equal(react.queued.framework, "react")
+    assert.equal(angular.queued.framework, "angular")
+  })
+
+  check("the durable record carries the brief on both hosts", () => {
+    // Without this the file on disk is a count and nothing else — see the
+    // comment on `writeHandoff`.
+    for (const { body } of [react, angular]) assert.match(body, /box-shadow/)
+  })
+
+  check("neither host reaches a model from here", () => {
+    // The prose in this module is allowed to recount the transport that left;
+    // the code is not allowed to grow it back without someone reading this.
+    const agentSource = fs.readFileSync(new URL("../server/agent.mjs", import.meta.url), "utf8")
+    assert.ok(!/@anthropic-ai\/sdk/.test(agentSource), "the direct-apply transport is back")
+    assert.ok(!/process\.env/.test(agentSource), "the route reads the environment again")
   })
 
   check("the agent is constructible for both", () => {

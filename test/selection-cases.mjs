@@ -1,13 +1,45 @@
 /**
  * Selection-model cases for the design editor.
  *
+ * The model is one rule over (hit, scope, modifiers) and every surface has to
+ * ask it the same question, so the ways it breaks are quiet ones: nothing
+ * throws, the editor just selects the wrong thing forever. Four claims are
+ * pinned here, each for a failure that is invisible from the outside.
+ *
+ * 1. With nothing drilled into, a plain click answers with the object that was
+ *    VISUALLY clicked, and a deep click (Cmd on a Mac, Ctrl elsewhere) with the
+ *    exact leaf. The old rule took the direct layer child of the scope root.
+ *    That is Figma's rule and it is right on a Figma canvas, where a page's
+ *    children are frames — but a document's child is the one element wrapping
+ *    the entire app, so measured live before the change EVERY plain click,
+ *    anywhere on the page, selected `app-root`. The modifier was the only way
+ *    to reach anything, which is exactly backwards. `visualLayer` in
+ *    `core/resolve` replaces it, and the "visual layer" cases below are the
+ *    only place its geometry is pinned: coincidence, the sole-child wrapper
+ *    climb, the area cap, the component-instance stop, the zero-area floor.
+ * 2. Once the user HAS drilled in, the direct-child-of-scope rule governs
+ *    again, unchanged. Inside a frame the Figma rule is the correct one, and it
+ *    is what keeps Enter, Tab, the layers tree and a click agreeing about which
+ *    node a gesture can reach. When they disagree the hover outline promises a
+ *    selection the click does not make, and no assertion below the rule itself
+ *    would notice.
+ * 3. The gestures AROUND the rule — double-click drilling, Enter/Shift+Enter,
+ *    Tab, shift-toggle, marquee, Escape, the overlap menu — read a resolved
+ *    value but must not depend on which one. They are asserted from their new
+ *    starting points so that a later change to the resolver cannot quietly take
+ *    one of them with it.
+ * 4. Ctrl is not deep select on a Mac, and `aria-hidden` is not hidden. Both
+ *    are one-line mistakes that leave every other case green.
+ *
  * Level 1 exercises the resolver and the keymap as units. Level 2 mounts the
  * real canvas lane over a jsdom fixture and drives it with genuine events, so
  * the assertions cover the wiring — which modifier reaches which branch, what
  * the scope becomes — and not just the pure functions underneath.
  *
  * jsdom is the sanctioned DOM-test path here: the selection model is a rule
- * over hit/scope/modifiers, and none of that needs a compositor.
+ * over hit/scope/modifiers, and none of that needs a compositor. It performs no
+ * layout, though, and the new rule is a rule about geometry, so the geometry is
+ * declared per element — see `BOXES`.
  *
  * Usage: node design-editor/test/selection-cases.mjs
  */
@@ -70,8 +102,80 @@ const SOURCE = {
   title2: ["Card", "Card@20", "Page@2"],
 }
 
+/**
+ * A second fixture, used only by the visual-layer cases, with a real layout.
+ *
+ * The shared fixture above deliberately keeps one box for every element (see
+ * `BOXES`), which makes every parent read as coincident — good for pinning the
+ * component-boundary stop, useless for pinning anything about extent. So the
+ * geometry rules get markup shaped like the page they were written for:
+ *
+ * - `app` is the `app-root` analogue, and `view` > `hero` > `tagline` is a
+ *   component instance inside a wrapper, all four drawing the same pixels.
+ * - `bare` > `plain` is that same chain with the component boundary removed,
+ *   which is the pre-change failure in miniature.
+ * - `panel` is a card: real extent of its own, and two children, so it is a
+ *   grouping decision rather than plumbing.
+ * - `cta` is a padded button around its label, the case coincidence cannot
+ *   carry.
+ * - `collapsed` > `pin` is an empty wrapper: zero area, and zero-coincident
+ *   with everything else that is zero.
+ * - `stage` > `mark` is a sole-child wrapper far bigger than its child, the
+ *   case the area cap exists to refuse.
+ * - `sheet` > `fill` is a parent a fraction of a pixel off its child, which is
+ *   what `SLOP` exists for, with `badge` alongside so sole-childhood cannot
+ *   carry the case instead.
+ */
+const VISUAL_MARKUP = `
+<div id="app">
+  <div id="view"><section id="hero"><p id="tagline">Ship it</p></section></div>
+  <div id="bare"><p id="plain">Same shape, no component</p></div>
+  <section id="panel">
+    <button id="cta"><span id="cta-label">Set up</span></button>
+    <p id="note">Takes a minute</p>
+  </section>
+  <div id="collapsed"><span id="pin"></span></div>
+  <div id="stage"><span id="mark">x</span></div>
+  <div id="sheet"><div id="fill">Filled</div><span id="badge">3</span></div>
+</div>`
+
+/**
+ * One component boundary in the whole second fixture, on purpose: every other
+ * stop in those cases has to be earned by geometry, not handed over by
+ * `isLayerRoot`. Kept out of `SOURCE` so the reachability case, which walks
+ * `Object.keys(SOURCE)`, still means "the shared fixture".
+ */
+const VISUAL_SOURCE = {
+  hero: ["Hero", "Hero@3", "App@1"],
+  tagline: ["Hero", "Hero@3", "App@1"],
+}
+
+/** `[left, top, width, height]`, in the same coordinates a real page would report. */
+const VISUAL_BOXES = {
+  app: [0, 0, 1000, 800],
+  view: [0, 0, 1000, 800],
+  hero: [0, 0, 1000, 800],
+  tagline: [0, 0, 1000, 800],
+  bare: [0, 0, 1000, 800],
+  plain: [0, 0, 1000, 800],
+  panel: [40, 600, 600, 160],
+  cta: [60, 620, 120, 40],
+  // Inset from the button by its padding, which is the entire point: a label
+  // and the button around it are never coincident in real markup.
+  "cta-label": [70, 630, 100, 20],
+  note: [60, 680, 400, 24],
+  collapsed: [0, 0, 0, 0],
+  pin: [0, 0, 0, 0],
+  stage: [0, 0, 800, 400],
+  mark: [10, 10, 40, 20],
+  sheet: [100, 100, 300, 200],
+  // 0.4px off the top of its parent, the sub-pixel drift a flex row produces.
+  fill: [100, 100.4, 300, 199.6],
+  badge: [380, 104, 16, 16],
+}
+
 function elementInfo(element) {
-  const entry = element?.id ? SOURCE[element.id] : null
+  const entry = element?.id ? (SOURCE[element.id] ?? VISUAL_SOURCE[element.id]) : null
   if (!entry) return null
   const [componentName, ...frames] = entry
   return {
@@ -92,6 +196,41 @@ function elementInfo(element) {
   }
 }
 
+/**
+ * Declared geometry, because jsdom performs no layout at all.
+ *
+ * Every rect is 0x0 here unless something says otherwise, and the resolver
+ * reads zero area as "hidden" — which would empty the hit stack before any rule
+ * ran. So an element with nothing declared gets one uniform 100x100 box, the
+ * value the shared fixture and every Level 2 case are written against: with one
+ * box for everything, every parent is coincident with every child, so the
+ * visual climb there is decided purely by the component boundary.
+ *
+ * `layout()` overrides that per element. A case that means to test coincidence
+ * or area MUST use it — against the uniform box those branches are vacuously
+ * true and would pass with the comparison deleted.
+ */
+const BOXES = new WeakMap()
+
+const box = (left, top, width, height) => ({
+  x: left,
+  y: top,
+  left,
+  top,
+  right: left + width,
+  bottom: top + height,
+  width,
+  height,
+})
+
+const DEFAULT_BOX = box(0, 0, 100, 100)
+
+const layout = (window, spec) => {
+  for (const [name, [left, top, width, height]] of Object.entries(spec)) {
+    BOXES.set(window.document.getElementById(name), box(left, top, width, height))
+  }
+}
+
 function installDom() {
   const dom = new JSDOM(`<!doctype html><html><body>${MARKUP}</body></html>`, {
     pretendToBeVisual: true,
@@ -103,10 +242,11 @@ function installDom() {
   window.document.elementsFromPoint = () => window.__stack ?? []
   // jsdom has no geometry interfaces either; the drag lane reads the current
   // translate off one, and with no layout every fixture sits at the origin.
-  // Without layout every rect is 0x0, and the resolver reads zero area as
-  // "hidden" — which would empty the hit stack before any rule ran.
-  window.Element.prototype.getBoundingClientRect = function box() {
-    return { x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }
+  // A fresh object per call, as a real browser returns: callers are entitled to
+  // hold one, and handing back the shared default would let one of them edit
+  // the geometry every other case reads.
+  window.Element.prototype.getBoundingClientRect = function rect() {
+    return { ...(BOXES.get(this) ?? DEFAULT_BOX) }
   }
   window.Element.prototype.scrollIntoView = function scrollIntoView() {}
   globalThis.DOMMatrixReadOnly = class {
@@ -181,8 +321,19 @@ async function resolverCases(window) {
     assert.notEqual($("card"), $("card2"))
   })
 
-  check("plain click takes the scope root's direct layer, not the deepest hit", () => {
-    assert.equal(nameOf(resolver.resolve($("title"), null)), "root")
+  check("plain click takes the object that was clicked, not the page and not the leaf", () => {
+    // This case used to demand `root`, the direct layer child of the scope
+    // root. That is Figma's rule, and on this page it meant every plain click
+    // anywhere selected the one element wrapping the whole app — `app-root`
+    // live, `root` here. Clicking inside a card now selects the card.
+    //
+    // Every box in this fixture is the same 100x100 stub, so every parent here
+    // reads as coincident and the climb would run to `root` on geometry alone.
+    // What stops it at the card is the component boundary: `card` is an
+    // instance root, `head` and `wrap` are not. The geometry half of the rule
+    // is pinned under "visual layer" below, where the boxes are real.
+    assert.equal(nameOf(resolver.resolve($("title"), null)), "card")
+    assert.notEqual(nameOf(resolver.resolve($("title"), null)), "title")
   })
 
   check("deep click takes the deepest layer, and an icon is one", () => {
@@ -200,7 +351,15 @@ async function resolverCases(window) {
   })
 
   check("a click outside the scope leaves the scope", () => {
-    assert.equal(nameOf(resolver.resolve($("title2"), $("card"))), "root")
+    // The claim is unchanged: a hit the scope does not contain falls back to
+    // the scope root rather than resolving to nothing, because a click that
+    // selects nothing for no visible reason is the worst of the three answers.
+    // What the fallback then answers with has changed — the visual rule, so the
+    // second card, not the page wrapper above it.
+    const found = resolver.resolve($("title2"), $("card"))
+    assert.equal(nameOf(found), "card2")
+    // The point of the case is that the old scope no longer holds the result.
+    assert.equal($("card").contains(found), false)
   })
 
   check("layer children are the direct selectable HTML graph", () => {
@@ -283,7 +442,121 @@ async function resolverCases(window) {
     )
   })
 
-  console.log("\nLevel 1 — keymap")
+  console.log("\nLevel 1 — visual layer")
+
+  // A fixture of its own, with declared boxes, removed again at the end of the
+  // section so the Level 2 canvas lane still mounts over the shared one.
+  const holder = window.document.createElement("div")
+  holder.innerHTML = VISUAL_MARKUP
+  const app = holder.firstElementChild
+  window.document.body.append(app)
+  layout(window, VISUAL_BOXES)
+
+  check("a plain click inside a component instance selects the instance", () => {
+    // `tagline`, `hero`, `view` and `app` all draw exactly the same pixels, so
+    // no measurement can separate them. `isLayerRoot` can: the component
+    // boundary is the one edge on this walk that the person who wrote the page
+    // declared, so it beats every box comparison and the climb stops there.
+    assert.equal(nameOf(resolver.resolve($("tagline"), null)), "hero")
+  })
+
+  check("with no boundary to stop it the same climb reaches the app root", () => {
+    // The pre-change failure, reproduced deliberately: `bare` > `plain` is the
+    // chain above with the component taken out, and the answer is `app` — the
+    // `app-root` result that made every plain click on the live page select the
+    // whole product. It is the honest answer HERE, because nobody declared an
+    // object between the word and the page and all of them draw one rectangle.
+    // The fix was never "climb less"; it was to stop at a declared boundary.
+    assert.equal(nameOf(resolver.resolve($("plain"), null)), "app")
+  })
+
+  check("Cmd+click pinpoints the leaf the plain click climbed past", () => {
+    const plain = resolver.resolve($("tagline"), null)
+    const deep = resolver.resolve($("tagline"), null, true)
+    assert.equal(nameOf(deep), "tagline")
+    // The pairing the user asked for only exists while these two differ. A deep
+    // branch that agreed with the plain one would leave no way into an instance
+    // at all, and every other assertion here would still pass.
+    assert.notEqual(deep, plain)
+    assert.equal(nameOf(plain), "hero")
+  })
+
+  check("a padded wrapper around a single child is climbed, not selected", () => {
+    const label = $("cta-label")
+    const button = $("cta")
+    // Padding is the whole case. A `<button>` insets its label, so the two are
+    // never coincident, and before the sole-child branch existed a click on
+    // "Set up" selected the `<span>` — the one node a designer never means.
+    // Asserted, because if these boxes ever became coincident the case would
+    // pass through the other branch and prove nothing.
+    assert.notEqual(label.getBoundingClientRect().left, button.getBoundingClientRect().left)
+    assert.notEqual(label.getBoundingClientRect().right, button.getBoundingClientRect().right)
+    assert.equal(nameOf(resolver.resolve(label, null)), "cta")
+  })
+
+  check("the climb stops at a parent that groups several children", () => {
+    // `panel` is a card holding a button and a note: real extent of its own and
+    // more than one child, so it is a grouping decision, not plumbing. Neither
+    // child may swallow it — that is the bound on the sole-child climb, and
+    // without it a click on a word walks to the whole section.
+    assert.equal(nameOf(resolver.resolve($("note"), null)), "note")
+    assert.equal(nameOf(resolver.resolve($("cta-label"), null)), "cta")
+    // And the card stays reachable by clicking the card, where no child is.
+    assert.equal(nameOf(resolver.resolve($("panel"), null)), "panel")
+  })
+
+  check("a sole-child wrapper far bigger than its child is not climbed", () => {
+    // Sole-childhood alone would swallow this: `mark` is the only child of
+    // `stage`, so without the area cap a click on one word would hand back a
+    // wrapper 400 times its size, and a chain of such wrappers would walk to
+    // the page. Four times the ink is where a wrapper stops being a wrapper.
+    const mark = $("mark")
+    assert.deepEqual(resolver.layerChildren($("stage")).map(nameOf), ["mark"])
+    assert.equal(nameOf(resolver.resolve(mark, null)), "mark")
+  })
+
+  check("a parent a fraction of a pixel off its child is still the same object", () => {
+    // `sheet` is 0.4px taller than the `fill` inside it, which is what a flex
+    // row routinely produces. An exact comparison would stop the climb at the
+    // first such wrapper and hand back the inner div — the same class of answer
+    // the whole change was made to stop giving.
+    const sheet = $("sheet")
+    const fill = $("fill")
+    assert.notEqual(fill.getBoundingClientRect().top, sheet.getBoundingClientRect().top)
+    // Two children, so the sole-child branch cannot be what carries this: the
+    // case is coincidence-within-slop or nothing.
+    assert.deepEqual(resolver.layerChildren(sheet).map(nameOf), ["fill", "badge"])
+    assert.equal(nameOf(resolver.resolve(fill, null)), "sheet")
+  })
+
+  check("a zero-area hit answers with itself rather than climbing", () => {
+    const pin = $("pin")
+    const collapsed = $("collapsed")
+    // An empty wrapper and the empty child inside it are coincident by
+    // arithmetic — every edge is zero — so the coincidence branch would take
+    // the wrapper, and on a page where nothing under the pointer has measured
+    // extent that runs all the way up. A hit with no extent has nothing to
+    // compare against, so it is its own answer.
+    assert.deepEqual(pin.getBoundingClientRect(), collapsed.getBoundingClientRect())
+    assert.equal(nameOf(resolver.resolve(pin, null)), "pin")
+  })
+
+  check("with a scope active the direct-child-of-scope rule still governs", () => {
+    // Drilled in, the original Figma rule takes over unchanged: one click
+    // reaches exactly the direct children of the scope, which is the set Enter,
+    // Tab and the layers tree can reach from there. If a click could land
+    // somewhere the tree cannot, the two surfaces stop describing one model.
+    assert.equal(nameOf(resolver.resolve($("tagline"), $("app"))), "view")
+    assert.equal(nameOf(resolver.resolve($("cta-label"), $("app"))), "panel")
+    // Two rules rather than one rule asserted twice: the same hits resolve
+    // elsewhere with no scope held.
+    assert.equal(nameOf(resolver.resolve($("tagline"), null)), "hero")
+    assert.equal(nameOf(resolver.resolve($("cta-label"), null)), "cta")
+  })
+
+  app.remove()
+
+console.log("\nLevel 1 — keymap")
   const keymap = await load(`export * from "./src/core/keymap"`)
 
   const platform = (value) =>
@@ -411,10 +684,16 @@ async function canvasCases(window) {
       new window.KeyboardEvent("keydown", { bubbles: true, ...init })
     )
 
-  check("a plain click selects the top layer and not the leaf", () => {
+  check("a plain click selects the clicked object, not the leaf and not the page", () => {
     reset()
     pointer($("title"))
-    assert.deepEqual(selection(), ["root"])
+    // Through the real lane, not just the resolver: `hitFor` -> `targetFor` ->
+    // `selectOne`. This asserted `root` while the old rule stood, which is the
+    // live `app-root` failure written down as if it were the goal — one click
+    // anywhere, the whole app selected, and no modifier-free way to anything.
+    assert.deepEqual(selection(), ["card"])
+    // Untouched by the change: the click still does not take the leaf.
+    assert.notDeepEqual(selection(), ["title"])
   })
 
   check("Cmd+click selects the exact leaf and re-points the scope", () => {
@@ -427,7 +706,12 @@ async function canvasCases(window) {
   check("Ctrl+click is not deep select on a Mac", () => {
     reset()
     pointer($("title"), { ctrlKey: true })
-    assert.deepEqual(selection(), ["root"])
+    // Ctrl is a plain click here, so it answers with the object — the same
+    // `card` an unmodified press gives, and pointedly not the `title` that Cmd
+    // gives above. Treating Ctrl as deep on a Mac breaks nothing loudly; it
+    // just makes Control-click (which is a right-click here) select a leaf.
+    assert.deepEqual(selection(), ["card"])
+    assert.notDeepEqual(selection(), ["title"])
   })
 
   check("double-click drills exactly one level", () => {
@@ -437,8 +721,11 @@ async function canvasCases(window) {
     $("title").dispatchEvent(
       new window.MouseEvent("dblclick", { bubbles: true, clientX: 10, clientY: 10 })
     )
-    assert.equal(scope(), "root")
-    assert.deepEqual(selection(), ["wrap"])
+    // One level, counted from wherever the click landed. The click now lands on
+    // the card, so one level in is its head — the count is the claim, not the
+    // names, and a drill that moved two levels would still be a bug.
+    assert.equal(scope(), "card")
+    assert.deepEqual(selection(), ["head"])
   })
 
   check("double-clicking SVG geometry drills to the icon, then stops", () => {
@@ -459,10 +746,14 @@ async function canvasCases(window) {
   check("shift+click toggles rather than only appending", () => {
     reset()
     pointer($("title"))
-    // At the top scope both clicks resolve to the same layer, so the second one
-    // removes it. Append-only would have left it selected.
+    // The two cards are separate objects at the top scope now, where the old
+    // rule collapsed both clicks onto the page wrapper. So the toggle has to be
+    // shown the other way round: add the second card, then take it back out by
+    // clicking it again. Append-only would leave two selected.
     pointer($("title2"), { shiftKey: true })
-    assert.deepEqual(selection(), [])
+    assert.deepEqual(selection(), ["card", "card2"])
+    pointer($("title2"), { shiftKey: true })
+    assert.deepEqual(selection(), ["card"])
     store.setState({ selection: [], scope: id(window, "wrap") })
     pointer($("title"), { shiftKey: true })
     pointer($("title2"), { shiftKey: true })
@@ -475,8 +766,11 @@ async function canvasCases(window) {
     reset()
     pointer($("title"))
     press({ key: "Enter" })
-    assert.deepEqual(selection(), ["wrap"])
-    assert.equal(scope(), "root")
+    // Enter descends from whatever is selected, so the new starting point moves
+    // the answer one level down with it: card -> its head. The scope must
+    // follow, or the next plain click would climb back out of the descent.
+    assert.deepEqual(selection(), ["head"])
+    assert.equal(scope(), "card")
   })
 
   check("Shift+Enter selects the parent", () => {
@@ -484,8 +778,12 @@ async function canvasCases(window) {
     pointer($("title"))
     press({ key: "Enter" })
     press({ key: "Enter", shiftKey: true })
-    assert.deepEqual(selection(), ["root"])
-    assert.equal(scope(), "null")
+    // Back up to the card, and the scope up to the card's parent. The old case
+    // happened to end at the top of the tree, where the scope is null; this one
+    // ends in the middle, which is the case that can actually go wrong — a
+    // scope left pointing at the layer you just left traps the next click.
+    assert.deepEqual(selection(), ["card"])
+    assert.equal(scope(), "wrap")
   })
 
   check("Tab and Shift+Tab walk siblings", () => {
@@ -493,31 +791,43 @@ async function canvasCases(window) {
     pointer($("title"))
     press({ key: "Enter" })
     press({ key: "Enter" })
+    // Two Enters from the card reach the title, whose siblings inside the head
+    // are [title, more]. A shallower start would have walked the two cards; the
+    // claim is the walk at one depth, not which depth.
     press({ key: "Tab" })
-    assert.deepEqual(selection(), ["card2"])
+    assert.deepEqual(selection(), ["more"])
     press({ key: "Tab", shiftKey: true })
-    assert.deepEqual(selection(), ["card"])
+    assert.deepEqual(selection(), ["title"])
   })
 
-  check("a click outside a drilled scope exits to the top layer", () => {
+  check("a click outside a drilled scope leaves it", () => {
     reset()
     pointer($("title"))
-    press({ key: "Enter" })
-    press({ key: "Enter" })
+    // One Enter reaches the state the old case needed three for: scope on the
+    // card, selection inside it. The click then lands in the OTHER card, which
+    // the scope does not contain.
     press({ key: "Enter" })
     assert.equal(scope(), "card")
     pointer($("title2"))
-    assert.deepEqual(selection(), ["root"])
-    assert.equal(scope(), "null")
+    // It used to land on the page wrapper, because that was all a click outside
+    // the scope could reach. It lands on the card that was clicked now, and the
+    // scope re-points to that card's parent — what matters either way is that
+    // the scope did not stay on the card the user just clicked out of, which
+    // would leave the next click resolving against a container it is not in.
+    assert.deepEqual(selection(), ["card2"])
+    assert.equal(scope(), "wrap")
+    assert.notEqual(scope(), "card")
   })
 
   check("Shift+drag is reachable over full-bleed content and toggles swept layers", () => {
     reset()
     pointer($("title"))
-    press({ key: "Enter" })
-    press({ key: "Enter" })
+    // Same drilled state as before the change — scope on the card, head
+    // selected — reached in one Enter rather than three, because the click
+    // starts a level deeper.
     press({ key: "Enter" })
     assert.deepEqual(selection(), ["head"])
+    assert.equal(scope(), "card")
     at($("title"))
     $("title").dispatchEvent(
       new window.PointerEvent("pointerdown", {
@@ -552,13 +862,18 @@ async function canvasCases(window) {
     $("title").dispatchEvent(
       new window.PointerEvent("pointermove", { bubbles: true, clientX: 10, clientY: 10 })
     )
-    assert.equal(nameOf(store.getState().hovered), "root")
+    // Hover and click go through one `targetFor`, so the outline traces the
+    // card the click would take — and follows a held modifier down to the leaf
+    // and back up on release. An outline that answered the old rule while the
+    // click answered the new one is the exact failure this guards: nothing
+    // throws, the highlight simply promises the wrong element.
+    assert.equal(nameOf(store.getState().hovered), "card")
     press({ key: "Meta", metaKey: true })
     assert.equal(nameOf(store.getState().hovered), "title")
     window.document.body.dispatchEvent(
       new window.KeyboardEvent("keyup", { bubbles: true, key: "Meta", metaKey: false })
     )
-    assert.equal(nameOf(store.getState().hovered), "root")
+    assert.equal(nameOf(store.getState().hovered), "card")
   })
 
   check("clicking empty background clears both selection and scope", () => {
@@ -618,7 +933,9 @@ async function canvasCases(window) {
     window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
     assert.equal(menu.style.display, "none")
     assert.equal(window.document.activeElement, invoker)
-    assert.deepEqual(selection(), ["root"])
+    // Closing the menu returns focus and nothing else: the selection is still
+    // whatever the click before it made, which is now the card.
+    assert.deepEqual(selection(), ["card"])
     window.document.documentElement.style.removeProperty("--de-left")
     window.document.documentElement.style.removeProperty("--de-right")
     invoker.remove()

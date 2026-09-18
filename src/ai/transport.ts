@@ -25,6 +25,7 @@ export async function requestAgent(apiBase: string, request: AgentRequest): Prom
       message: payload.message,
       handoffPath: payload.handoffPath,
       filesChanged: payload.filesChanged,
+      changeId: payload.changeId ?? null,
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown error"

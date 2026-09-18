@@ -1,5 +1,13 @@
 /**
- * The right panel's Code tab, and the generator behind it.
+ * The LEFT panel's Code tab, and the generator behind it.
+ *
+ * The view itself is still `panels/inspector/tab-code.ts` and still hands back
+ * an `InspectorTab`; what moved is the mount point. It hangs off the left
+ * rail's strip now, beside Layers, because both tabs answer "what IS this" and
+ * the inspector is otherwise entirely controls you change things with. So this
+ * suite installs BOTH panels: everything below is asked of the left strip, and
+ * one case is asked of the right one, pinning that the move did not quietly
+ * undo itself.
  *
  * This tab is the one view in the editor that is REBUILT rather than read: no
  * route hands back a source file, so the panel derives everything from the live
@@ -54,6 +62,11 @@ window.document.elementsFromPoint = () => []
 window.Element.prototype.getBoundingClientRect = function box() {
   return { x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }
 }
+// JSDOM ships no `scrollIntoView` at all, and the layer tree — mounted by the
+// left panel alongside the code view — calls it unguarded when the selection
+// moves, which is every case below. Stubbed the way `layers-cases.mjs` stubs
+// it: the panel under test here is not the one doing the scrolling.
+window.Element.prototype.scrollIntoView = function scrollIntoView() {}
 globalThis.DOMMatrixReadOnly = class {
   constructor() {
     this.m41 = 0
@@ -81,11 +94,31 @@ for (const key of [
   Object.defineProperty(globalThis, key, { value: window[key], configurable: true, writable: true })
 }
 
+/**
+ * A server that answers the two requests the inspector's Design system tab
+ * makes on its first `update()`.
+ *
+ * Nothing in this file is about libraries or the audit — but `installInspector`
+ * boots every tab once, and an unstubbed `fetch` in Node reaches undici, which
+ * refuses a relative URL outright. That lands as a `TypeError: Failed to parse
+ * URL` in the middle of the run, which is noise a reader has to rule out before
+ * they can read the failures that matter. Both payloads are the well-formed
+ * empty answer, because "there is nothing installed" is the state that keeps
+ * the tab quiet.
+ */
+globalThis.fetch = async (input) => {
+  const path = new URL(String(input), "http://localhost").pathname
+  const payload = path.endsWith("/lint/tools") ? { tools: [] } : { libraries: [] }
+  return { ok: true, status: 200, json: async () => payload }
+}
+window.fetch = globalThis.fetch
+
 const { build } = await import("esbuild")
 const bundled = await build({
   stdin: {
     contents: `
       export { createContext } from "./src/core/context"
+      export { installLeftPanel } from "./src/panels/left"
       export { installInspector } from "./src/panels/inspector/index"
       export { setState } from "./src/core/store"
       export { CODE_VIEWS, codeText, elementCode } from "./src/core/element-code"
@@ -244,25 +277,41 @@ const bridge = {
     pageToViewport: (x, y) => ({ x, y }),
   },
 }
+/*
+ * Both panels, because the claim under test spans the two of them.
+ *
+ * The left one is where the view lives and where every case below reads it
+ * from; the right one is installed so that "the inspector does not carry a Code
+ * tab any more" can be asked of a real inspector rather than of an empty div.
+ */
+const left = slot()
 const right = slot()
 const context = editor.createContext(bridge, {
   overlay: slot(),
   toolbar: slot(),
-  left: slot(),
+  left,
   right,
 })
+editor.installLeftPanel(context)
 editor.installInspector(context)
 
-const codeTabButton = () =>
-  Array.from(right.querySelectorAll('[role="tab"]')).find(
-    (node) => node.textContent.trim() === "Code"
-  )
-/** Clicking the tab is also how the host tells it to re-read the world. */
+const tabsIn = (panel) => Array.from(panel.querySelectorAll('[role="tab"]'))
+const codeTabButton = () => tabsIn(left).find((node) => node.textContent.trim() === "Code")
+/**
+ * Clicking the tab is also how the host tells it to re-read the world.
+ *
+ * Deliberately the whole path a user takes, and deliberately not a wait: the
+ * click reaches `activate("code")`, which calls `update()` in the same task, so
+ * everything below reads a pane that is already current. The panel's other
+ * route to the same call — the selection subscription — is throttled through
+ * `requestAnimationFrame`, and a case that leaned on it would be asserting
+ * against a frame that has not been painted yet.
+ */
 const openCode = () => {
   codeTabButton().dispatchEvent(new window.MouseEvent("click", { bubbles: true }))
-  return right.querySelector(".de-code")
+  return left.querySelector(".de-code")
 }
-const pane = () => right.querySelector(".de-code")
+const pane = () => left.querySelector(".de-code")
 const codeView = () => pane().querySelector(".de-code-view")
 /**
  * What the view says, read back as text.
@@ -286,6 +335,41 @@ const showView = (id) => {
 }
 
 console.log("\nCode tab")
+
+/*
+ * Where the tab IS, which is the one claim this move could undo in silence.
+ *
+ * Every other case here would pass just as well against a Code tab back in the
+ * inspector — they ask the pane about itself, and the pane does not care which
+ * strip opened it. So the position is asserted from both ends: present in the
+ * left strip, absent from the right one. The left half is read off the strip
+ * rather than off the pane, because a pane appended to the left slot with no
+ * tab pointing at it is unreachable and would still satisfy `.de-code`.
+ */
+check("the Code view is in the left rail, and the inspector no longer carries one", () => {
+  const strip = left.querySelector(".de-tabs")
+  assert.ok(strip, "the left panel has no tab strip")
+  assert.ok(
+    codeTabButton(),
+    `the left strip is ${JSON.stringify(tabsIn(left).map((node) => node.textContent.trim()))}`
+  )
+  assert.equal(codeTabButton().parentElement, strip, "the Code tab is not in the left strip")
+  assert.equal(
+    codeTabButton().getAttribute("aria-controls"),
+    "de-left-tabpanel-code",
+    "the Code tab points at a pane that is not the left panel's"
+  )
+  assert.equal(
+    tabsIn(right).find((node) => node.textContent.trim() === "Code"),
+    undefined,
+    "the inspector grew a Code tab back, so the view is now in two places"
+  )
+  // And the pane it controls is the one the cases below read.
+  assert.ok(
+    window.document.getElementById("de-left-tabpanel-code")?.contains(pane()),
+    "the code view is not inside the pane the left tab names"
+  )
+})
 
 check("with nothing selected the pane offers the empty state, not a blank <pre>", () => {
   editor.setState({ selection: [] })

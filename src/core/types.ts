@@ -103,7 +103,15 @@ export interface LayerNode {
   children: LayerNode[]
 }
 
-/** Context handed to the AI agent alongside the user's prompt. */
+/**
+ * What the editor hands its coding agent.
+ *
+ * One surface builds this — the outbox tab's handover button — so `selection`
+ * and `ancestry` are always empty in practice and the substance is in `brief`.
+ * They stay on the type because the queue entry an agent reads still has those
+ * fields, and `/agent` is a plain POST that must describe an element when a
+ * caller names one.
+ */
 export interface AgentRequest {
   prompt: string
   selection: {
@@ -117,6 +125,28 @@ export interface AgentRequest {
   /** Sibling/parent context so the agent can locate the node in source. */
   ancestry: Array<{ tagName: string; className: string; componentName: string }>
   url: string
+  /**
+   * Which surface sent this, and the only one there is.
+   *
+   * It says the request is a finished ledger of work rather than a question:
+   * the intent is already written in `brief`, so an agent should act on it, not
+   * ask the designer what they meant. There was a second value, `"ask-ai"`, for
+   * a free-text box in the Design tab that sent one element — that panel is
+   * gone, and a request arriving without this field is recorded as `unknown`
+   * rather than being assumed to be either.
+   */
+  origin?: "prompts"
+  /**
+   * The markdown the outbox tab's Copy button writes, verbatim.
+   *
+   * Sent rather than rebuilt server-side so the two handoff paths cannot
+   * diverge: what the designer reads in the Brief region is exactly what the
+   * agent receives, and the clipboard stays a true fallback rather than a
+   * second, slightly different format.
+   */
+  brief?: string
+  /** Distinct source files the brief touches, for the agent's first read. */
+  files?: string[]
 }
 
 export interface AgentResponse {
@@ -127,4 +157,6 @@ export interface AgentResponse {
   handoffPath?: string
   /** Files the agent edited, when it applied changes directly. */
   filesChanged?: string[]
+  /** The queue id an attached coding agent sees, when one was created. */
+  changeId?: string | null
 }

@@ -13,7 +13,9 @@
  */
 
 import { clamp, clear, el } from "../../core/dom"
+import { focusControl } from "../../core/focus"
 import { icon } from "../../core/icons"
+import { tokens } from "../../core/tokens"
 
 /** What the leading 16px slot draws. `none` keeps the name column aligned. */
 export type TokenPreview =
@@ -67,6 +69,27 @@ export interface TokenFieldOptions {
   fallback: { preview: TokenPreview; text: string }
   onCommit(id: string): void
   custom?: TokenCustomValue
+  /**
+   * Drop the field's own leading slot, because the caller already drew one.
+   *
+   * For the paint rows, and it exists because of what they looked like without
+   * it. A fill, a stroke and a text colour are each `[well] [value]`, where the
+   * well is a live `input[type=color]` — so folding the token binding in where
+   * the value used to sit put a SECOND chip, the field's own preview, 4px to
+   * the right of the first. Two swatches of one colour, only one of which
+   * opens a picker.
+   *
+   * The one that goes is the field's. It is a read-out of the same value the
+   * well already shows, and the well is the half you can act on; Figma draws
+   * exactly one swatch per paint row for the same reason. Rows the picker still
+   * leads — a radius, a text style, a shadow — are untouched, because they have
+   * no well beside them and their preview is the only mark they get.
+   *
+   * The POPOVER keeps its previews either way: this hides the closed field's
+   * slot, not the list's, and a list of colour names with no colours in it
+   * would be the opposite of what the picker is for.
+   */
+  hidePreview?: boolean
 }
 
 const POPOVER_WIDTH = 264
@@ -150,7 +173,7 @@ export function tokenField(options: TokenFieldOptions): HTMLElement {
       "data-de-field": options.id,
     },
     [
-      previewNode(selected ? selected.preview : options.fallback.preview),
+      options.hidePreview ? null : previewNode(selected ? selected.preview : options.fallback.preview),
       el(
         "span",
         { class: selected ? "de-token-field-name" : "de-token-field-name de-token-field-name--plain" },
@@ -191,7 +214,7 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
   const closeButton = el(
     "button",
     { class: "de-mini", type: "button", title: "Close", "aria-label": "Close" },
-    [icon("X", 12)]
+    [icon("X", tokens.icon.row)]
   )
   /**
    * The escape hatch, as a fourth child rather than a second control on the
@@ -211,7 +234,7 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
       el("span", { class: "de-token-popover-title" }, [options.title]),
       closeButton,
     ]),
-    el("div", { class: "de-token-search" }, [icon("Search", 12), search]),
+    el("div", { class: "de-token-search" }, [icon("Search", tokens.icon.row), search]),
     list,
     customInput
       ? el("div", { class: "de-token-custom" }, [
@@ -247,7 +270,7 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
     window.removeEventListener("scroll", onScroll, true)
     popover.remove()
     field.setAttribute("aria-expanded", "false")
-    if (restoreFocus) field.focus()
+    if (restoreFocus) focusControl(field)
   }
 
   const commit = (choice: TokenChoice) => {
@@ -289,7 +312,7 @@ function openPicker(field: HTMLElement, options: TokenFieldOptions): void {
         previewNode(choice.preview),
         el("span", { class: "de-token-row-name" }, [choice.leaf]),
         choice.detail ? el("span", { class: "de-token-row-detail" }, [choice.detail]) : null,
-        chosen ? el("span", { class: "de-token-row-check" }, [icon("Check", 12)]) : null,
+        chosen ? el("span", { class: "de-token-row-check" }, [icon("Check", tokens.icon.row)]) : null,
       ]
     )
     row.addEventListener("click", () => commit(choice))

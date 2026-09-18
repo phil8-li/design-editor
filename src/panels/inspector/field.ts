@@ -7,6 +7,7 @@
 
 import { el, round } from "../../core/dom"
 import { icon } from "../../core/icons"
+import { tokens } from "../../core/tokens"
 
 /**
  * Panel-level memory. Collapse and expander state belong to the *panel*, not to
@@ -117,12 +118,41 @@ export function evaluateNumeric(raw: string): number | null {
 export interface NumberFieldOptions {
   /** Stable identity so focus survives the panel rebuild after a write. */
   id?: string
-  label: string
+  /**
+   * What is printed in the field's leading strip — a letter, or a drawn mark.
+   *
+   * A `Node` is allowed because Figma's fields label themselves with a GLYPH
+   * wherever one exists (the four padding sides, the gap, the opacity) and with
+   * a single letter where one does not (`W`, `H`, `X`, `Y`). What it never uses
+   * is a word: the strip is about 20px wide inside an 88px control, so a word
+   * either eats the number beside it or gets clipped, and the word belongs in
+   * the caption above the group anyway.
+   *
+   * This existed as a workaround before it existed as an option —
+   * `section-autolayout.ts` carried a `withSideGlyph()` helper that reached into
+   * the returned DOM and replaced `.de-field-label`'s children, because the
+   * type said `string`. That is a section reaching through a primitive's
+   * skin to change something the primitive owns, and it silently stops working
+   * the moment the field's internals move.
+   *
+   * `title` stays the accessible name in both cases, which is what makes a
+   * glyph label legal at all: a mark with no text needs the name stated.
+   */
+  label: string | Node
   title?: string
   value: number | null
   /** Shown when `value` is null — `Mixed` across a multi-selection, say. */
   placeholder?: string
   suffix?: string
+  /**
+   * The field's trailing slot — Figma's `W 708 ⌄`.
+   *
+   * A node rather than a string so the caller can hand over a real control:
+   * today it is the sizing-mode menu button, which has to be pressable and
+   * therefore cannot be a `suffix`. `suffix` stays for the inert case (`px`,
+   * `%`), because a unit is printed ON a field and a menu is a thing IN one.
+   */
+  trailing?: Node
   min?: number
   max?: number
   step?: number
@@ -135,13 +165,27 @@ export interface NumberFieldOptions {
   onCommit(value: number): void
 }
 
+/**
+ * The accessible name for a field whose label may be a drawn mark.
+ *
+ * `title` wins when it is given, which is the normal case. Falling back to the
+ * label only works while the label is text — a glyph has no name of its own, so
+ * a field that passes a `Node` and no `title` would otherwise be announced as
+ * nothing at all. The empty string is deliberate rather than a guess: it makes
+ * the omission visible in an accessibility audit instead of shipping
+ * `[object SVGSVGElement]` as a control's name, which is what string coercion
+ * would have produced.
+ */
+const accessibleName = (title: string | undefined, label: string | Node): string =>
+  title ?? (typeof label === "string" ? label : "")
+
 /** Figma-style scrubbable number input: drag the label, or type a value. */
 export function numberField(options: NumberFieldOptions): HTMLElement {
   const initial = options.value === null ? "" : String(round(options.value))
   const input = el("input", {
     type: "text",
     inputmode: "decimal",
-    "aria-label": options.title ?? options.label,
+    "aria-label": accessibleName(options.title, options.label),
     value: initial,
     placeholder: options.placeholder ?? "",
     disabled: options.disabled,
@@ -180,9 +224,11 @@ export function numberField(options: NumberFieldOptions): HTMLElement {
   })
   input.addEventListener("blur", () => commit(input.value))
 
-  const label = el("span", { class: "de-field-label", title: options.title ?? options.label }, [
-    options.label,
-  ])
+  const label = el(
+    "span",
+    { class: "de-field-label", title: accessibleName(options.title, options.label) },
+    [options.label]
+  )
 
   // Drag the label to scrub, the way Figma and Leva both behave. The commit is
   // deferred to pointerup: committing per pointermove queues a source write and
@@ -227,7 +273,126 @@ export function numberField(options: NumberFieldOptions): HTMLElement {
     label,
     input,
     options.suffix ? el("span", { class: "de-field-suffix" }, [options.suffix]) : null,
+    options.trailing ?? null,
   ])
+}
+
+/**
+ * A control group under a small grey label — Figma's `Alignment`, `Gap`,
+ * `Padding`.
+ *
+ * Takes the caption rather than exporting the two class names, so the pairing
+ * cannot be half-applied. A group with no caption is a plain `.de-stack`; this
+ * exists for the ones that need naming, which in Figma's panel is most of them.
+ */
+export function group(caption: string, ...children: Array<Node | null>): HTMLElement {
+  return el("div", { class: "de-group" }, [
+    el("div", { class: "de-group-caption" }, [caption]),
+    ...children,
+  ])
+}
+
+export interface IconChoice {
+  value: string
+  label: string
+  glyph: Node
+  disabled?: boolean
+}
+
+/**
+ * One-of-several, drawn as glyphs on a continuous rail.
+ *
+ * The icon twin of `segmented` — Auto layout's flow strip, the sizing modes,
+ * both text-alignment triples. Exactly one cell is chosen at a time, which is
+ * the invariant that earns the rail: it says the choice is among THESE.
+ */
+export function iconSegmented(options: {
+  label: string
+  value: string
+  options: IconChoice[]
+  onCommit(value: string): void
+}): HTMLElement {
+  return el(
+    "div",
+    { class: "de-iseg", role: "group", "aria-label": options.label },
+    options.options.map((choice) => {
+      const button = iconButton({
+        label: choice.label,
+        glyph: choice.glyph,
+        pressed: choice.value === options.value,
+        onClick: () => options.onCommit(choice.value),
+      })
+      if (choice.disabled) (button as HTMLButtonElement).disabled = true
+      return button
+    })
+  )
+}
+
+export interface ActionChoice {
+  label: string
+  glyph: Node
+  /** Present only for a cell that HOLDS a state; omit for a pure action. */
+  pressed?: boolean
+  disabled?: boolean
+  onClick(): void
+}
+
+/**
+ * Two to four buttons drawn as one joined block — Figma's align and flip
+ * triples.
+ *
+ * Unlike `iconSegmented` there is no invariant that one of them is on: these
+ * are actions, and `pressed` is optional per cell. The visual difference is a
+ * hairline of panel ground between the cells instead of a continuous rail, so
+ * the two never have to be told apart by reading the handler.
+ */
+export function actionGroup(options: { label: string; buttons: ActionChoice[] }): HTMLElement {
+  return el(
+    "div",
+    { class: "de-agroup", role: "group", "aria-label": options.label },
+    options.buttons.map((entry) => {
+      const button = iconButton({
+        label: entry.label,
+        glyph: entry.glyph,
+        pressed: entry.pressed,
+        onClick: entry.onClick,
+      })
+      if (entry.disabled) (button as HTMLButtonElement).disabled = true
+      return button
+    })
+  )
+}
+
+/**
+ * The 3x3 position field — one filled block with nine rests and one mark.
+ *
+ * `cells` arrives row-major, nine of them. The chosen cell carries its glyph
+ * and the other eight draw the stylesheet's dot, which is why `glyph` is only
+ * read when `pressed` is true: a dot is not an icon and must not come off the
+ * ramp.
+ */
+export function alignPad(options: {
+  label: string
+  cells: Array<{ label: string; pressed: boolean; glyph: Node; onClick(): void }>
+}): HTMLElement {
+  return el(
+    "div",
+    { class: "de-pad", role: "group", "aria-label": options.label },
+    options.cells.map((cell) =>
+      el(
+        "button",
+        {
+          class: "de-pad-cell",
+          type: "button",
+          title: cell.label,
+          "aria-label": cell.label,
+          "aria-pressed": String(cell.pressed),
+          onclick: cell.onClick,
+        },
+        [cell.pressed ? cell.glyph : null]
+      )
+    )
+  )
 }
 
 /** Shift coarsens, Alt/Cmd refines — Figma's two scrub gears. */
@@ -239,16 +404,20 @@ function modifierScale(event: { shiftKey: boolean; altKey: boolean; metaKey: boo
 
 export interface TextFieldOptions {
   id?: string
-  label: string
+  /** A letter or a drawn mark, never a word — see `NumberFieldOptions.label`. */
+  label: string | Node
+  /** The accessible name, required once `label` can be a glyph with no text. */
+  title?: string
   value: string
   placeholder?: string
   onCommit(value: string): void
 }
 
 export function textField(options: TextFieldOptions): HTMLElement {
+  const name = accessibleName(options.title, options.label)
   const input = el("input", {
     type: "text",
-    "aria-label": options.label,
+    "aria-label": name,
     value: options.value,
     placeholder: options.placeholder ?? "",
     "data-de-field": options.id,
@@ -261,7 +430,7 @@ export function textField(options: TextFieldOptions): HTMLElement {
     input.blur()
   })
   return el("div", { class: "de-field" }, [
-    el("span", { class: "de-field-label", style: "cursor:default", title: options.label }, [options.label]),
+    el("span", { class: "de-field-label", style: "cursor:default", title: name }, [options.label]),
     input,
   ])
 }
@@ -274,6 +443,25 @@ export interface SelectFieldOptions {
   onCommit(value: string): void
 }
 
+/**
+ * A select, and a chevron so it looks like one.
+ *
+ * `appearance: none` is what lets `.de-select` wear the panel's own well
+ * instead of the operating system's, and it takes the platform's disclosure
+ * mark away with it. Nothing put one back, so every dropdown in the inspector —
+ * the font weight, the stroke style, the effect type — was drawn as a text
+ * field that happened to open a menu when pressed. The only way to discover it
+ * was a dropdown was to click it.
+ *
+ * The mark is a SIBLING laid over the control rather than a `::after` on it,
+ * because a `<select>` is a replaced element and its pseudo-elements are not
+ * reliably drawn. That means the glyph sits on top of the thing it decorates
+ * and would swallow the click that opens the menu — `css/base.ts` forces
+ * `pointer-events: all` onto every `<svg>` in inspecting mode, which beats a
+ * plain `pointer-events: none` on the wrapper. The rule in `css/panels.ts`
+ * therefore targets `.de-select-caret svg` directly, which outranks it on
+ * specificity rather than on source order.
+ */
 export function selectField(options: SelectFieldOptions): HTMLElement {
   const select = el("select", {
     class: "de-select",
@@ -286,7 +474,12 @@ export function selectField(options: SelectFieldOptions): HTMLElement {
     select.append(node)
   }
   select.addEventListener("change", () => options.onCommit(select.value))
-  return select
+  return el("span", { class: "de-select-shell" }, [
+    select,
+    el("span", { class: "de-select-caret", "aria-hidden": "true" }, [
+      icon("ChevronDown", tokens.icon.row),
+    ]),
+  ])
 }
 
 export interface SegmentedOptions {
@@ -374,40 +567,89 @@ export function miniButton(options: {
  * the panel to re-render: a rebuild here would drop focus from whatever the
  * user was editing two controls down.
  */
-export function section(title: string, body: HTMLElement, actions?: HTMLElement): HTMLElement {
+export function section(
+  title: string,
+  body: HTMLElement,
+  actions?: HTMLElement,
+  /**
+   * Whether this section starts folded the FIRST time it is drawn.
+   *
+   * Only consulted when the panel has no memory of the title yet, so it is a
+   * default rather than a state: once the user has folded or unfolded it, their
+   * choice wins for the rest of the session and this argument is ignored.
+   *
+   * It exists for Settings in the Changes tab, which is the one section in the
+   * panel that should not be open on arrival — it is somewhere you go once,
+   * below a list you are reading every time, and unfolded by default it pushes
+   * that list up by the height of six rows for a block nobody asked for.
+   */
+  collapsedByDefault = false
+): HTMLElement {
+  if (collapsedByDefault && !collapsedSections.has(title)) {
+    collapsedSections.set(title, true)
+  }
   const collapsed = collapsedSections.get(title) === true
   const wrapped = el("div", { class: "de-section-body" }, [body])
   wrapped.hidden = collapsed
 
-  // The toggle is a sibling of the actions, not their parent: a `+` nested
-  // inside the fold button would be a button inside a button, which is invalid
-  // and leaves the inner one unreachable by keyboard.
-  const toggle = el(
-    "button",
-    {
-      class: "de-section-toggle",
-      type: "button",
-      "aria-expanded": String(!collapsed),
-      title: `${collapsed ? "Expand" : "Collapse"} ${title}`,
-    },
-    [el("span", { class: "de-chevron", "aria-hidden": "true" }, [icon("ChevronRight", 10)]), title]
-  )
+  /*
+   * Title first, chevron last, and the fold button behind both.
+   *
+   * The chevron used to lead the header, which pushed every section title one
+   * glyph plus a gap to the right of the rows it heads — the panel's left edge
+   * read as bent, because the titles started on a column nothing else in the
+   * body used. Moving it to the trailing edge puts the title back on the 8px
+   * the body pads to, and gives the chevrons a column of their own against the
+   * panel's right edge.
+   *
+   * That splits one control across a third thing that has to stay separately
+   * clickable: the `+` some sections carry. A `+` nested inside the fold button
+   * would be a button inside a button — invalid, and unreachable by keyboard.
+   * So the button holds no content at all. It is an empty layer stretched over
+   * the whole bar (see `.de-section-toggle`), with the title, the actions and
+   * the chevron laid over it as grid items; only the actions take their own
+   * clicks back.
+   */
+  const toggle = el("button", {
+    class: "de-section-toggle",
+    type: "button",
+    "aria-expanded": String(!collapsed),
+    // The button has no text of its own now, so the name has to be stated.
+    "aria-label": title,
+    title: `${collapsed ? "Expand" : "Collapse"} ${title}`,
+  })
 
-  toggle.addEventListener("click", () => {
+  const header = el("div", { class: "de-section-header de-section-header--collapsible" }, [
+    toggle,
+    el("span", { class: "de-section-title" }, [title]),
+    actions ? el("span", { class: "de-section-actions" }, [actions]) : null,
+    el("span", { class: "de-chevron", "aria-hidden": "true" }, [icon("ChevronRight", tokens.icon.row)]),
+  ])
+
+  /*
+   * The listener sits on the header, not on the button, and catches the
+   * button's own click on the way up.
+   *
+   * The chevron is no longer inside the button, and `pointer-events: none` is
+   * not enough to make a click on it reach the layer underneath: inspecting
+   * mode forces `pointer-events: all` onto every `<svg>` in the document so
+   * that icons in the APP can be selected, and that sweeps up the chrome's own
+   * glyphs. That was harmless while every glyph sat inside the control it
+   * belonged to and its click merely bubbled there. Listening one level up
+   * restores that, and keeps working whatever the glyph's hit behaviour is.
+   */
+  header.addEventListener("click", (event) => {
+    // The `+` is inside the bar but is not part of the fold: a press on it must
+    // add a fill, not collapse the section the new row would land in.
+    if ((event.target as HTMLElement | null)?.closest(".de-section-actions")) return
     const next = !(collapsedSections.get(title) === true)
     collapsedSections.set(title, next)
     wrapped.hidden = next
     toggle.setAttribute("aria-expanded", String(!next))
     toggle.setAttribute("title", `${next ? "Expand" : "Collapse"} ${title}`)
-    toggle.classList.toggle("de-section-toggle--collapsed", next)
+    header.classList.toggle("de-section-header--collapsed", next)
   })
-  toggle.classList.toggle("de-section-toggle--collapsed", collapsed)
+  header.classList.toggle("de-section-header--collapsed", collapsed)
 
-  return el("div", { class: "de-section" }, [
-    el("div", { class: "de-section-header de-section-header--collapsible" }, [
-      toggle,
-      actions ? el("span", { class: "de-section-actions" }, [actions]) : null,
-    ]),
-    wrapped,
-  ])
+  return el("div", { class: "de-section" }, [header, wrapped])
 }

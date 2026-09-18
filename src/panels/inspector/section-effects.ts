@@ -4,11 +4,29 @@
  * `box-shadow` is a comma list, so this is Figma's row model for real: add,
  * reorder-free stacking, a per-row eye that parks an effect without losing its
  * values, and a remove. Everything is serialised back into one declaration.
+ *
+ * ## The two token rows that moved in
+ *
+ * The `Design system` section is gone and its rows went to whichever section
+ * owns their property (`token-row.ts` carries the argument). Two landed here.
+ *
+ * `shadow` is the obvious one and the awkward one — see the comment on the
+ * binding below. `motion-duration` is neither: a transition is not an effect in
+ * Figma's sense at all, because Figma has no transitions. It is here because
+ * this is the only section in the panel about how the box PRESENTS itself
+ * rather than where it sits or what it contains, and how long that presentation
+ * takes to arrive is the same kind of question as how far the shadow is thrown.
+ * The alternative was a `Motion` section holding exactly one row, which is a
+ * header, a chevron and a fold state spent on a single select — more panel for
+ * less information, and one more place a designer has to look.
  */
 
 import { el, round } from "../../core/dom"
+import { icon } from "../../core/icons"
+import { tokens } from "../../core/tokens"
 import { swatch, toHex } from "./color"
 import { miniButton, numberField, section, selectField } from "./field"
+import { hasUtility, tokenRow } from "./token-row"
 import type { InspectorSection } from "./index"
 
 interface Shadow {
@@ -67,7 +85,12 @@ function serialize(shadow: Shadow): string {
   return `${shadow.inset ? "inset " : ""}${lengths} ${shadow.color}`
 }
 
-export const effectsSection: InspectorSection = ({ selection, computed, writer, invalidate }) => {
+export const effectsSection: InspectorSection = (context) => {
+  // Destructured here rather than in the parameter list: the token helpers below
+  // take the whole `SectionContext`, and a partial rebuilt from four of its
+  // fields is a second, silently divergent copy of the panel's own state.
+  const { selection, computed, writer, invalidate } = context
+
   const visible =
     computed.boxShadow === "none" ? [] : splitLayers(computed.boxShadow).map(parseShadow).filter((s): s is Shadow => s !== null)
 
@@ -95,13 +118,44 @@ export const effectsSection: InspectorSection = ({ selection, computed, writer, 
 
   const add = miniButton({
     label: "Add effect",
-    glyph: "+",
+    glyph: icon("Plus", tokens.icon.row),
     onClick: () => commit([...rows, { shadow: DEFAULT_SHADOW, hidden: false }], "Add effect"),
   })
 
-  if (rows.length === 0) {
-    return section("Effects", el("div", { class: "de-hint" }, ["No effects."]), add)
-  }
+  /*
+   * The shadow binding, and it sits ABOVE the stack on purpose.
+   *
+   * This section models `box-shadow` as a list of parsed layers with an eye
+   * each; a shadow token binds the whole declaration in one write. Those are two
+   * views of one property, and they cannot both be authoritative — so the panel
+   * has to say which wins, and it is the token: picking one replaces the
+   * declaration, layers and all, and the cards below redraw as whatever the
+   * token turned out to be. Nothing here merges a token into layer three. The
+   * parked rows are the one thing that survives it, and should: the eye is a
+   * statement about a layer the designer switched off, not about the value that
+   * happened to be painted when they did.
+   *
+   * Placement is how that gets said without a sentence. Under the cards it would
+   * read as a fifth field on the last one, and a control that overwrites the
+   * four cards above it must not look like it belongs to one of them. Above
+   * them, before the list, it reads as what it is: the whole effect, with the
+   * per-layer breakdown underneath as the long form of the same answer.
+   */
+  const shadowBinding =
+    computed.boxShadow !== "none" || hasUtility(selection.element, "shadow")
+      ? tokenRow(context, "shadow", "Shadow / effect")
+      : null
+
+  /*
+   * Last, and outside the stack entirely — this one is about time, not paint.
+   * A transition the element does not have is a row with nothing to bind, so
+   * the gate is the duration itself rather than a class stem: `transition-*`
+   * utilities set a property each and none of them implies a duration.
+   */
+  const motionBinding =
+    Number.parseFloat(computed.transitionDuration) > 0
+      ? tokenRow(context, "motion-duration", "Motion duration")
+      : null
 
   const cards = rows.map((row, index) => {
     const preview = (patch: Partial<Shadow>) => {
@@ -155,7 +209,7 @@ export const effectsSection: InspectorSection = ({ selection, computed, writer, 
         }),
         miniButton({
           label: "Remove effect",
-          glyph: "−",
+          glyph: icon("Minus", tokens.icon.row),
           danger: true,
           onClick: () => commit(rows.filter((_, at) => at !== index), "Remove effect"),
         }),
@@ -166,5 +220,29 @@ export const effectsSection: InspectorSection = ({ selection, computed, writer, 
     ])
   })
 
-  return section("Effects", el("div", { class: "de-stack" }, cards), add)
+  /*
+   * No layers is no longer the end of the section.
+   *
+   * It used to return early with a bare `No effects.` hint, which was true about
+   * the stack and wrong about everything else: an element with a transition and
+   * no shadow still has a motion duration to bind, and an element wearing a
+   * `shadow-*` utility that computes to `none` — a `shadow-none` override, a
+   * variant that only paints on hover — still has a shadow axis to point at a
+   * token. Both were unreachable, because the row that would have said so was
+   * below a `return`.
+   *
+   * The hint now describes the stack rather than the section, and it stays: the
+   * cards are the only thing here a designer adds to, so the empty list needs a
+   * word where the rows would be. The `+` rides on the header in both states, as
+   * it always did.
+   */
+  const body = el("div", { class: "de-stack" }, [
+    shadowBinding,
+    cards.length
+      ? el("div", { class: "de-stack" }, cards)
+      : el("div", { class: "de-hint" }, ["No effects."]),
+    motionBinding,
+  ])
+
+  return section("Effects", body, add)
 }

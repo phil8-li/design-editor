@@ -27,8 +27,7 @@ const $ = (id) => document.getElementById(id)
 const el = {
   form: $("form"), url: $("url"),
   apps: $("apps"), appsNote: $("apps-note"), appsError: $("apps-error"),
-  path: $("folder-path"), change: $("folder-change"),
-  folderNote: $("folder-note"), folderError: $("folder-error"),
+  path: $("folder-path"), folderError: $("folder-error"),
   scriptRow: $("script-row"), script: $("script"),
   submit: $("submit"), hint: $("hint"), submitError: $("submit-error"),
   waiting: $("waiting"), progress: $("progress"), waitingNote: $("waiting-note"),
@@ -152,19 +151,21 @@ function appRow(app) {
  * The row says nothing about where its source is, so whatever folder is in the
  * field belongs to the app that was picked before it. Left standing, Start is
  * enabled and the editor boots pointed at THIS server with THAT app's source
- * tree — every edit written into the wrong project. Clearing it costs a trip to
- * the picker; leaving it costs the other project.
+ * tree — every edit written into the wrong project. Clearing it costs the path
+ * being typed again; leaving it costs the other project.
  *
  * The sentence is only said when something was actually taken away. A field
  * that was already empty is the ordinary first-load state, and the hint under
- * the button already asks for the folder.
+ * the button already asks for the folder. When it is said it points at the
+ * field, because typing a path there is now the only way to close the gap it
+ * reports.
  */
 function forgetProject(app) {
   const had = root !== null || el.path.value.trim() !== ""
   root = null
   devScript = null
   el.path.value = ""
-  if (had) show(el.folderError, "The editor cannot work out where " + app.title + " keeps its source. Choose its folder.")
+  if (had) show(el.folderError, "The editor cannot work out where " + app.title + " keeps its source. Type the path to its folder below.")
 }
 
 async function chooseApp(app) {
@@ -181,42 +182,19 @@ async function chooseApp(app) {
 }
 
 /*
- * The machine's own folder dialog, opened by the server on the machine the
- * files are on. It is Finder or Explorer, with the sidebar, the favourites and
- * the search this page could never reproduce — so the page's job is only to say
- * where to open, to stay out of the way while it is up, and to take the one
- * path back. Dismissing it is not an error and leaves the field untouched.
- */
-async function browse() {
-  clearErrors()
-  el.change.disabled = true
-  el.change.textContent = "Choosing…"
-  // The panel belongs to the server's process, not the browser's, so it opens
-  // as a window of its own and can land behind this one. Without this line a
-  // lost panel is a button stuck on "Choosing…" beside an empty field, which
-  // reads as a press that did nothing rather than a dialog waiting offscreen.
-  show(el.folderNote, "The folder panel is open — it may be behind this window.")
-  const data = await askServer("/api/browse", el.folderError, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ startIn: el.path.value.trim() }),
-  })
-  show(el.folderNote, "")
-  el.change.disabled = false
-  el.change.textContent = "Browse"
-  el.change.focus()
-  if (!data || data.canceled) return
-  adoptProject(data.project)
-  render()
-}
-
-/*
  * The typed path, resolved once the typing stops.
  *
- * This is the fast way in and, for a project the machine will not name — a dev
- * server whose cwd macOS refuses to report — the only one that is not a walk
- * down from the home directory. Finder's Copy as Pathname and the shell both
- * produce exactly what this field takes.
+ * This is how a project folder is named. A native folder panel used to sit
+ * beside this field; it was dropped, because it put a second, slower way to say
+ * the same thing on screen — one that also had to be built three times, once
+ * per desktop, and could open behind the browser window with nothing on the
+ * page to explain where it had gone.
+ *
+ * What is left has to carry the cases the panel used to: a project the machine
+ * will not name for itself — a dev server whose cwd macOS refuses to report —
+ * is reachable only by saying where it is. Finder's Copy as Pathname, the
+ * shell's pwd, and a folder dragged onto a terminal all produce exactly what
+ * this field takes, which is what makes that a fair trade rather than a loss.
  */
 async function resolveTyped() {
   const value = el.path.value.trim()
@@ -246,8 +224,6 @@ el.path.addEventListener("input", () => {
   clearTimeout(typing)
   typing = setTimeout(resolveTyped, ${TYPING_MS})
 })
-
-el.change.addEventListener("click", browse)
 
 el.url.addEventListener("input", () => {
   clearErrors()
@@ -448,12 +424,8 @@ export function startScreenPage() {
 
     <div class="section">
       <label class="label" for="folder-path">Project folder</label>
-      <div class="folder">
-        <input id="folder-path" class="path" type="text" spellcheck="false"
-               placeholder="Paste a folder path, or browse">
-        <button type="button" class="ghost" id="folder-change">Browse</button>
-      </div>
-      <p class="note" id="folder-note" hidden></p>
+      <input id="folder-path" class="path" type="text" spellcheck="false"
+             placeholder="/Users/you/Projects/your-app">
       <p class="error" id="folder-error" hidden></p>
     </div>
 

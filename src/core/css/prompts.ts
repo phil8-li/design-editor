@@ -22,12 +22,12 @@ export const promptsCss = `/* ---------- change prompts ---------- */
 .de-prompts-list {
   flex: 1; min-height: 0;
   overflow-y: auto;
-  padding: 6px;
-  display: flex; flex-direction: column; gap: 4px;
+  padding: ${t.space.sm}px;
+  display: flex; flex-direction: column; gap: ${t.space.sm}px;
 }
 .de-prompt {
-  display: flex; align-items: flex-start; gap: 4px;
-  padding: 5px 4px 6px 8px;
+  display: flex; align-items: flex-start; gap: ${t.space.sm}px;
+  padding: ${t.space.sm}px ${t.space.sm}px ${t.space.sm}px ${t.space.md}px;
   border: 1px solid ${t.color.border};
   border-radius: ${t.radius.md};
   background: ${t.color.bgRaised};
@@ -36,11 +36,11 @@ export const promptsCss = `/* ---------- change prompts ---------- */
   transition: border-color ${t.duration.fast} ${t.ease};
 }
 .de-prompt:hover { border-color: ${t.color.borderInteractive}; }
-.de-prompt-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.de-prompt-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: ${t.space.xs}px; }
 
 /* Line one: which thing, and where it lives. */
 .de-prompt-where {
-  display: flex; align-items: baseline; gap: 5px; min-width: 0;
+  display: flex; align-items: baseline; gap: ${t.space.sm}px; min-width: 0;
   font-size: ${t.type.caption};
 }
 .de-prompt-component {
@@ -70,7 +70,7 @@ export const promptsCss = `/* ---------- change prompts ---------- */
  * that gives way — the one you just typed is the one you are checking.
  */
 .de-prompt-change {
-  display: flex; align-items: baseline; gap: 4px; min-width: 0;
+  display: flex; align-items: baseline; gap: ${t.space.sm}px; min-width: 0;
   font-family: ${t.font.mono}; font-size: ${t.type.caption};
 }
 .de-prompt-from, .de-prompt-to {
@@ -86,7 +86,7 @@ export const promptsCss = `/* ---------- change prompts ---------- */
  * a queued change are per-row, and an affordance that only exists under the
  * pointer is one a keyboard never finds and a first-time reader never learns.
  */
-.de-prompt-row-actions { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.de-prompt-row-actions { flex: none; display: inline-flex; align-items: center; gap: ${t.space.xs}px; }
 
 /* ---------- the brief, in place ---------- */
 .de-prompt-brief {
@@ -98,8 +98,8 @@ export const promptsCss = `/* ---------- change prompts ---------- */
 .de-prompt-brief-toggle {
   flex: none;
   height: ${t.size.rowHeight}px;
-  display: flex; align-items: center; gap: 4px;
-  padding: 0 8px;
+  display: flex; align-items: center; gap: ${t.space.sm}px;
+  padding: 0 ${t.space.md}px;
   border: none; background: transparent;
   color: ${t.color.text};
   font-family: inherit; font-size: ${t.type.body}; font-weight: ${t.type.weightSection};
@@ -121,7 +121,7 @@ export const promptsCss = `/* ---------- change prompts ---------- */
  * pane — the brief is there to be checked, not to be lived in.
  */
 .de-prompt-brief-text {
-  margin: 0; padding: 8px 10px;
+  margin: 0; padding: ${t.space.md}px;
   max-height: 180px; overflow: auto;
   border-top: 1px solid ${t.color.border};
   background: ${t.color.bgSunken};
@@ -141,14 +141,20 @@ export const promptsCss = `/* ---------- change prompts ---------- */
  */
 .de-prompt-footer {
   flex: none;
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px;
-  padding: 8px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: ${t.space.md}px;
+  padding: ${t.space.md}px;
   border-top: 1px solid ${t.color.border};
 }
 .de-prompt-count { flex: 1 1 100%; font-size: ${t.type.caption}; color: ${t.color.textDim}; }
-.de-prompt-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+/*
+ * Same reasoning as the count, one step further. "Send to agent" and "Copy
+ * change prompts" on one 260px row wrap both labels; on rows of their own
+ * neither does, at any panel width the shell allows.
+ */
+.de-prompt-send { flex: 1 1 100%; justify-content: center; }
+.de-prompt-actions { display: inline-flex; align-items: center; gap: ${t.space.sm}px; margin-left: auto; }
 .de-prompt-actions button { white-space: nowrap; }
-.de-prompts-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.de-prompts-empty { display: flex; flex-direction: column; align-items: center; gap: ${t.space.md}px; }
 .de-prompts-empty-glyph { color: ${t.color.accent}; }
 .de-prompts-empty-detail { font-size: ${t.type.caption}; text-align: left; }
 `

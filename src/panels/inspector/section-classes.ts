@@ -70,7 +70,7 @@ export const classesSection: InspectorSection = ({ editor, selection, writer, in
           "aria-label": `Remove class ${name}`,
           onclick: () => remove(name),
         },
-        [icon("X", 12)]
+        [icon("X", t.icon.row)]
       ),
     ])
   )

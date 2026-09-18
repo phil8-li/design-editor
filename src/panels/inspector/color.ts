@@ -93,9 +93,20 @@ export function colorField(options: ColorFieldOptions): HTMLElement {
     text.blur()
   })
 
-  const field = el("div", { class: "de-field", style: "flex:1" }, [
-    el("span", { class: "de-field-label", style: "cursor:default" }, [options.label]),
-    text,
-  ])
+  /*
+   * NO LEADING LABEL, because the swatch already is one.
+   *
+   * The row read `[swatch] Color #ffffff`, which names the thing twice before
+   * it gets to the value: a filled well is the universal mark for "this is a
+   * colour", and printing the word beside it spent a fifth of the field on
+   * saying so again. Figma's paint rows are a swatch and a value with nothing
+   * between them, and the caption above the group carries the noun.
+   *
+   * Only the DRAWING is dropped, not the name — the swatch and the text input
+   * both keep their `aria-label`, so the pair is still announced as "Color" and
+   * "Color swatch". `options.label` is therefore still required, and is now
+   * exactly what it says: the accessible name.
+   */
+  const field = el("div", { class: "de-field", style: "flex:1" }, [text])
   return el("div", { class: "de-row" }, [well, field])
 }

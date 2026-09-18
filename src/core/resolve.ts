@@ -12,7 +12,7 @@
  * Layers all walk the same filtered HTML graph.
  */
 
-import { isCanvasElement } from "./dom"
+import { DELETED_ATTRIBUTE, isCanvasElement } from "./dom"
 import { iconNameOf } from "./icon-set"
 import type { LayerElement } from "./types"
 import type { RewriteElementInfo } from "./bridge"
@@ -33,9 +33,20 @@ export interface LayerMeta {
 const NAME_MAX = 28
 const NON_VISUAL = /^(SCRIPT|STYLE|LINK|META|TEMPLATE)$/
 
-/** Chrome is excluded by `isCanvasElement`; only non-visual document nodes remain. */
+/**
+ * Chrome is excluded by `isCanvasElement`; non-visual document nodes and
+ * deleted ones are excluded here.
+ *
+ * A deleted element is still in the DOM — `DELETED_ATTRIBUTE` in `core/dom`
+ * says why taking it out breaks the framework that rendered it — so "is this
+ * gone" has to be answered somewhere, and this is the one place every surface
+ * asks. The layers tree, hit-testing, the marquee and the stack menu all run
+ * through here, which is what stops a deleted layer from vanishing in one of
+ * them and lingering in the other three.
+ */
 export function isLayerCandidate(node: Node | null): node is Element {
   if (!isCanvasElement(node)) return false
+  if (node.hasAttribute(DELETED_ATTRIBUTE)) return false
   return !NON_VISUAL.test(node.tagName)
 }
 
@@ -168,6 +179,88 @@ function createResolver(bridge: LayerBridge): Resolver {
     return siblings.includes(element as LayerElement) ? siblings : []
   }
 
+  /**
+   * The outermost ancestor that still occupies the same pixels as the hit.
+   *
+   * This is the web's answer to "which thing did I just click", and it is a
+   * question about the RENDERING rather than the markup. A `<button>` wrapping
+   * a `<span>` wrapping the word "Set up" is three nodes drawing one object,
+   * and a designer who clicks the word means the button. The card around it is
+   * a different object, and they mean that only when they click the card.
+   *
+   * So: climb while the parent adds no visual extent, stop the moment it does.
+   * That is the same judgement a person makes by eye, which is why it needs no
+   * heuristic about tag names, class names or component boundaries — all three
+   * of which vary per project and none of which say what was drawn where.
+   *
+   * `SLOP` absorbs sub-pixel layout: a flex parent is routinely a few
+   * hundredths taller than its only child, and an exact comparison would stop
+   * the climb at the first such wrapper and hand back the `<span>` again.
+   *
+   * Cmd-click never reaches here \u2014 `deep` returns the leaf before this runs \u2014
+   * which is exactly the Figma pairing the user asked for: plain click for the
+   * object, modifier to pinpoint inside it.
+   */
+  const visualLayer = (target: LayerElement, limit: Element): LayerElement => {
+    const SLOP = 1
+    const area = (rect: DOMRect) => rect.width * rect.height
+    let node: LayerElement = target
+    let box = node.getBoundingClientRect()
+    // A zero-area hit has no extent to compare against, so the climb would
+    // swallow every ancestor up to the app root. The node itself is the answer.
+    if (area(box) <= 0) return node
+
+    for (;;) {
+      const parent = layerParent(node)
+      if (!parent || parent === limit || !limit.contains(parent)) return node
+      /*
+       * Never climb out of the component instance that was clicked.
+       *
+       * A ceiling, not a stop. The first attempt stopped the moment `node`
+       * reported itself a layer root, which reads correctly and is wrong on a
+       * host that answers the question differently: on the Angular app under
+       * test the label `<span>` claims to be a `ButtonComponent` root, so the
+       * climb ended on the span and the modifier made no difference at all —
+       * the exact complaint this whole change exists to fix.
+       *
+       * Comparing the instance PATH either side of the step is framework
+       * neutral. It says "the parent belongs to something else, so the thing I
+       * clicked ends here", which is true whoever answered. And where the host
+       * resolves no components at all — every path the empty string — it
+       * quietly costs nothing and the geometry below governs alone.
+       */
+      if (ownerPath(meta(parent).info) !== ownerPath(meta(node).info)) return node
+      const next = parent.getBoundingClientRect()
+      const coincident =
+        Math.abs(next.left - box.left) <= SLOP &&
+        Math.abs(next.top - box.top) <= SLOP &&
+        Math.abs(next.right - box.right) <= SLOP &&
+        Math.abs(next.bottom - box.bottom) <= SLOP
+      /*
+       * A parent with one child is plumbing, not a grouping decision.
+       *
+       * Coincidence alone was not enough, and a button is why: `<button>` wraps
+       * its label `<span>` with padding, so the two are never coincident, and a
+       * plain click on "Set up" selected the span — the one node a designer
+       * never means. Nobody drew a span; they drew a button with a word in it.
+       *
+       * Sole-childhood is the signal that the wrapper is structural. It is
+       * bounded by the same containment test as the coincidence climb, so it
+       * still cannot escape the scope, and by the area cap below so a chain of
+       * single-child wrappers cannot walk from a word to the whole page.
+       */
+      const onlyChild = layerChildren(parent).length === 1
+      // Four times the ink is not the same object any more. This is the one
+      // arbitrary number here, and it earns its place by stopping the
+      // sole-child climb at the point where a wrapper stops being a wrapper —
+      // a button around a word passes it, a page section around a card does not.
+      const modest = area(next) <= area(box) * 4
+      if (!coincident && !(onlyChild && modest)) return node
+      node = parent
+      box = next
+    }
+  }
+
   const resolve = (hit: Element, scope: Element | null, deep = false): LayerElement | null => {
     if (!isLayerCandidate(hit)) return null
     const target = toSelectable(hit)
@@ -183,6 +276,22 @@ function createResolver(bridge: LayerBridge): Resolver {
     const inScope = Boolean(scope && scope.isConnected && scope.contains(target))
     const container = inScope && scope ? scope : scopeRoot()
     if (container === target) return target
+
+    // Nothing drilled into: answer with the thing that was VISUALLY clicked.
+    //
+    // Figma's "direct child of the scope" rule is right inside a frame and
+    // useless at the top of a web page, because the two hierarchies are not the
+    // same shape. A Figma page's children are frames; a document's child is the
+    // one element wrapping the entire app — `app-root` here, `#__next` in Next.
+    // So the rule that selects a frame on a Figma canvas selected the whole
+    // product on this one: every plain click, anywhere, reported `app-root`,
+    // and the only way to reach a button was to hold a modifier for it.
+    //
+    // See `visualLayer` for what replaces it while the scope is the root. Once
+    // the user HAS drilled in, the original rule takes over again unchanged —
+    // inside a scope the Figma rule is the correct one, and it is what makes
+    // Enter, Tab and the layers tree agree about what a click can reach.
+    if (container === scopeRoot()) return visualLayer(target, container)
 
     // Climb the shared graph until `node` is a direct child of the active
     // scope. This is the exact node Enter/Tab/Layers can reach later.

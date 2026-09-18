@@ -10,21 +10,41 @@
  * Nothing here knows the host's attribute name — `config.icons.attribute` does.
  * A host with no icon set configured gets an empty list and the icon section
  * never renders.
+ *
+ * An added icon LIBRARY lands in the same two functions, behind the host's own
+ * drawings and deduplicated by name with the host winning. That order is the
+ * whole policy and it is the conservative one: the host's set is what the
+ * app on the page actually renders, so a library shipping its own `Check` must
+ * not be able to change what `Check` means to an element that is already
+ * drawing one. Everything the library adds beyond the clash is new and is
+ * offered. The short-circuit survives the addition — a host with no icons and
+ * no library that ships glyphs still makes no request at all — and so does the
+ * request count, because the library's drawings are a separate endpoint that is
+ * only asked when a library that has some is enabled. The attribute follows the
+ * same precedence for the same reason: the host names its icons if it names
+ * them at all, and a library's convention is only consulted when it does not.
  */
 
 import { config } from "./config"
-import type { IconData } from "./icons"
+import { libraryIconAttribute, loadLibraryIcons, loadedLibraryIcons } from "../libraries/store"
+import type { HostIconData } from "./icons"
 
-export interface IconVariant extends IconData {
+export interface IconVariant extends HostIconData {
   name: string
+  /**
+   * True for a glyph named by an icon font rather than drawn: `nodes` is empty
+   * and the name is the whole of what the library knows. Carried through the
+   * merge so a surface listing it can say so instead of painting an empty box.
+   */
+  glyph?: boolean
 }
 
 let cache: IconVariant[] | null = null
 let inFlight: Promise<IconVariant[]> | null = null
 
-/** The attribute an icon names itself with, or "" when the host declared none. */
+/** The attribute an icon names itself with, or "" when nothing declared one. */
 export function iconAttribute(): string {
-  return config.icons.attribute
+  return config.icons.attribute || libraryIconAttribute()
 }
 
 /**
@@ -40,8 +60,15 @@ export function iconNameOf(element: Element | null): string {
   return element.getAttribute(attribute)?.trim() ?? ""
 }
 
-/** The set, loaded once. Empty when the host configured none, or on failure. */
-export function loadIconSet(apiBase: string): Promise<IconVariant[]> {
+/** Host first, then whatever a library adds that the host has not already named. */
+function withLibraries(host: IconVariant[], library: IconVariant[]): IconVariant[] {
+  if (!library.length) return host
+  const named = new Set(host.map((icon) => icon.name))
+  return [...host, ...library.filter((icon) => !named.has(icon.name))]
+}
+
+/** The host's own set, loaded once. Empty when it configured none, or on failure. */
+function hostIconSet(apiBase: string): Promise<IconVariant[]> {
   if (cache) return Promise.resolve(cache)
   if (!config.icons.available) return Promise.resolve([])
   inFlight ??= fetch(`${apiBase}/icons`, { headers: { accept: "application/json" } })
@@ -60,7 +87,14 @@ export function loadIconSet(apiBase: string): Promise<IconVariant[]> {
   return inFlight
 }
 
+/** The set a picker offers: the host's, plus every enabled library's. */
+export function loadIconSet(apiBase: string): Promise<IconVariant[]> {
+  return Promise.all([hostIconSet(apiBase), loadLibraryIcons(apiBase)]).then(([host, library]) =>
+    withLibraries(host, library)
+  )
+}
+
 /** What is already loaded, for a synchronous render that must not wait. */
 export function loadedIconSet(): IconVariant[] {
-  return cache ?? []
+  return withLibraries(cache ?? [], loadedLibraryIcons())
 }

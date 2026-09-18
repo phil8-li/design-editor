@@ -25,6 +25,7 @@ import type { LevaControl, LevaFolder } from "./inventory"
 import { optionsStore, visibleOptions } from "./store"
 import type { InspectorSection, SectionContext } from "../panels/inspector/index"
 import type { ElementOption, ElementOptionSet } from "../core/types"
+import { tokens } from "../core/tokens"
 
 function controlsIn(folders: readonly LevaFolder[]): LevaControl[] {
   const controls: LevaControl[] = []
@@ -118,7 +119,7 @@ function optionRow(context: SectionContext, option: ElementOption, active: boole
       "aria-label": `Delete ${option.name}`,
       onclick: () => store.remove(selection, writer, option.id),
     },
-    [icon("X", 12)]
+    [icon("X", tokens.icon.row)]
   )
 
   name.addEventListener("dblclick", (event) => {

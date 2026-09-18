@@ -166,16 +166,17 @@ code { font-family: var(--mono); color: var(--text); }
 .app-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-port { font-family: var(--mono); font-size: var(--size-label); color: var(--text-muted); }
 
-.folder { display: flex; align-items: center; gap: 8px; }
 /*
- * A field rather than a label, because pasting a path is the fast way in and
- * the only way into a project the machine will not name for itself. It scrolls
- * to the caret like any text input, so the tail — the identifying part of a
- * path — is what stays in view while it is being typed.
+ * A field rather than a label, because typing or pasting a path is the way a
+ * project folder is named — the only way, since the native folder panel that
+ * used to sit beside it was dropped. It spans the section for that reason: it
+ * shared a flex row with a Browse button, and with the button gone there is
+ * nothing to share it with. It scrolls to the caret like any text input, so the
+ * tail — the identifying part of a path — is what stays in view while it is
+ * being typed.
  */
 .path {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
   padding: 7px 10px;
   font-family: var(--mono);
   font-size: var(--size-label);
@@ -199,9 +200,7 @@ button { font: inherit; cursor: pointer; }
   font-size: var(--size-label);
   transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
 }
-.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
-/* While the machine's folder dialog is up, this button is only a label for it. */
-.ghost:disabled { color: var(--text-dim); cursor: default; }
+.ghost:hover { color: var(--text); border-color: var(--accent); }
 
 select {
   align-self: flex-start;

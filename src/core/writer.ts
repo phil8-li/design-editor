@@ -7,6 +7,7 @@
  * untrustworthy is a preview that the code write silently drops.
  */
 
+import { dropLastEdit, recordEdit } from "../annotations/journal"
 import {
   isAngularHost,
   queueAngularClasses,
@@ -15,9 +16,13 @@ import {
 } from "./angular"
 import { resolveElementSource, type RewriteBridge, type UpdateClassOperation } from "./bridge"
 import { previewOnlyChanges, recordPreviewOnly } from "./change-prompt"
-import { record } from "./history"
+import { DELETED_ATTRIBUTE } from "./dom"
+import { describeTarget, type ElementTarget } from "./element-target"
+import { record, type HistoryStep } from "./history"
 import { iconAttribute, type IconVariant } from "./icon-set"
-import { drawIcon } from "./icons"
+import { drawHostIcon } from "./icons"
+import { queueRemoval, unqueueRemoval, type RemovalOperation } from "./removal"
+import { isLocked } from "./store"
 import { propertyKey, toClassUpdate, type ClassUpdate } from "./tailwind"
 import type { LayerElement, Selection, SourceRef } from "./types"
 
@@ -32,15 +37,73 @@ export interface ClassWrite {
   add: string[]
 }
 
+/** One element's share of a batched style write. */
+export interface StyleBatchEdit {
+  selection: Selection
+  writes: StyleWrite[]
+}
+
 export interface Writer {
   /** Applies inline styles now and queues the equivalent utilities for source. */
   applyStyles(selection: Selection, writes: StyleWrite[], summary: string): void
+  /**
+   * The same write across several elements as ONE edit.
+   *
+   * Looping `applyStyles` would be the obvious way to align five selected
+   * boxes, and it is wrong in three separate places at once: five history
+   * steps, so Cmd+Z takes back a fifth of what the user did; five toasts for
+   * one click; and five outbox rows that an agent reads as five decisions
+   * rather than one. Handed the whole set, this reads every "before" while all
+   * of them are still untouched, then records one step whose undo and redo
+   * replay the batch — the same shape `applyDelete` uses, and for the same
+   * reason.
+   */
+  applyStylesBatch(edits: StyleBatchEdit[], summary: string): void
   /** Swaps utility classes now and queues them for the source writer. */
   applyClasses(selection: Selection, write: ClassWrite, summary: string): void
   /** Replaces the element's text content. */
   applyText(selection: Selection, text: string): void
   /** Redraws a selected `<svg>` as another variant from the host's icon set. */
   applyIcon(selection: Selection, variant: IconVariant): void
+  /**
+   * Sets one DOM attribute as a PREVIEW, and files it for an agent. `null`
+   * removes it.
+   *
+   * The only write in here that is preview-only by construction rather than by
+   * accident, alongside `applyIcon`. Neither rewrite lane can edit a
+   * component's prop in source — the pinned React engine has no JSX-attribute
+   * operation, and `AngularOperation` is `setStyles | setClasses | setText` —
+   * so the attribute changes on the page, the change goes to the ledger, and an
+   * agent makes it real. See `panels/inspector/section-instance.ts` for why
+   * that is still worth offering, and for the evidence gate that decides which
+   * props get a control at all.
+   *
+   * `class` and `style` are refused. Both have real write lanes above, and
+   * routing either through here would strand an edit that could have reached
+   * the file.
+   *
+   * `target` is the element to write ON, and it defaults to the selected one.
+   * It exists because a component's inputs are not necessarily on the node the
+   * user clicked: an Angular component renders a template, the click usually
+   * lands on something INSIDE it, and `variant="filled"` is on the host tag
+   * further up. The selection still describes what was picked — it is what the
+   * ledger entry and the source lookup are about — so the two are passed
+   * separately rather than the caller fabricating a `Selection` for an element
+   * nobody selected.
+   */
+  applyAttribute(
+    selection: Selection,
+    name: string,
+    value: string | null,
+    target?: Element
+  ): void
+  /**
+   * Deletes elements: off the page now, out of the source at "Apply to code".
+   * Takes the whole selection rather than one entry, because what has to be
+   * captured before the first removal — where each element sat, and which
+   * sibling it was — is only true while every one of them is still in place.
+   */
+  applyDelete(selections: Selection[]): void
   /** CSS properties the source writer cannot express, newest first. */
   untranslated(): string[]
 }
@@ -76,11 +139,20 @@ function nthOfType(element: LayerElement): number {
  * A stranded CSS property is NOT filtered. It is in the ledger precisely
  * because it could not be written, which is exactly what the toast reports —
  * the translator could spell it, but there was no file to spell it into.
+ *
+ * `remove` is filtered on both counts: a deletion is not a declaration, and it
+ * has already said so in its own toast at the moment it happened.
  */
 export function untranslatedProperties(): string[] {
   const seen = new Set<string>()
   for (const change of previewOnlyChanges()) {
     if (change.property === "icon" || change.property === "class") continue
+    if (change.property === "remove") continue
+    // A component prop previewed as an attribute, for the icon's reason: it
+    // toasts "— preview only" at the moment it happens, and it is an ATTRIBUTE
+    // — listing `attribute:variant` among the declarations that "cannot be
+    // written to code" would name a CSS property that does not exist.
+    if (change.property.startsWith("attribute:")) continue
     seen.add(change.property)
   }
   return [...seen]
@@ -104,7 +176,7 @@ function currentValue(element: LayerElement, property: string): string {
 }
 
 /**
- * The attributes `drawIcon` decides, and therefore the ones a swap owns.
+ * The attributes `drawHostIcon` decides, and therefore the ones a swap owns.
  *
  * `width`, `height` and `class` are deliberately absent: the size and the
  * colour of an icon belong to the call site that placed it, and a variant swap
@@ -128,12 +200,152 @@ function readIconState(element: SVGSVGElement, attribute: string): IconState {
 }
 
 function iconStateOf(variant: IconVariant): IconState {
-  const drawn = drawIcon(variant)
+  const drawn = drawHostIcon(variant)
   return {
     name: variant.name,
     markup: drawn.innerHTML,
     root: ICON_ROOT_ATTRIBUTES.map((name) => [name, drawn.getAttribute(name)]),
   }
+}
+
+/* -------------------------------------------------------------------------
+ * Deleting
+ * ---------------------------------------------------------------------- */
+
+/** An element marked deleted, and everything needed to bring it back. */
+interface Removal {
+  selection: Selection
+  element: LayerElement
+  /** Read while the element is still a layer, which is the only time it is true. */
+  target: ElementTarget
+  componentName: string
+  label: string
+  /** The inline `display` to put back — usually none, but the eye may have set one. */
+  display: string
+  displayPriority: string
+}
+
+/**
+ * What a delete actually removes.
+ *
+ * Two rules, both of them Figma's. A locked layer is not deleted, by any route —
+ * the tree can still select one, because that is the only way back out of the
+ * lock, so the tree is also the one place a locked layer could be deleted from
+ * if this gate sat on the canvas instead of here. And a selection that contains
+ * one of its own ancestors deletes the ancestor and nothing else: the descendant
+ * is going anyway, and queueing it separately would ask the server to splice two
+ * overlapping ranges out of one file, which it correctly refuses to do.
+ *
+ * Document order is not needed for undo any more — nothing is detached, so no
+ * sibling reference can go stale — but it is still what the toast counts and the
+ * order the operations reach the server in, and a list that matches the page
+ * reads better in a failure report than the order the user happened to click in.
+ */
+function planRemovals(selections: Selection[], name: (element: LayerElement) => string): Removal[] {
+  const elements = selections.map((entry) => entry.element)
+  const roots = selections.filter((entry) => {
+    const element = entry.element
+    if (!element.isConnected || !element.parentElement) return false
+    if (isLocked(element)) return false
+    return !elements.some((other) => other !== element && other.contains(element))
+  })
+
+  const seen = new Set<LayerElement>()
+  const unique = roots.filter((entry) => {
+    if (seen.has(entry.element)) return false
+    seen.add(entry.element)
+    return true
+  })
+
+  unique.sort((a, b) => {
+    const relation = a.element.compareDocumentPosition(b.element)
+    if (relation & Node.DOCUMENT_POSITION_FOLLOWING) return -1
+    if (relation & Node.DOCUMENT_POSITION_PRECEDING) return 1
+    return 0
+  })
+
+  return unique.map((selection) => ({
+    selection,
+    element: selection.element,
+    target: describeTarget(selection.element),
+    componentName: selection.componentName,
+    label: name(selection.element),
+    display: selection.element.style.getPropertyValue("display"),
+    displayPriority: selection.element.style.getPropertyPriority("display"),
+  }))
+}
+
+/**
+ * A readable name for the toast and the history entry.
+ *
+ * The layers panel has a much better answer and this is not it — that one knows
+ * about component boundaries. This one only has to be recognisable in a
+ * sentence, and `<div class="card stat">` reads as `.card` there.
+ */
+function elementLabel(element: LayerElement): string {
+  const tag = element.tagName.toLowerCase()
+  const first = element.classList[0]
+  return first ? `${tag}.${first}` : tag
+}
+
+/** One edit as the annotation outbox remembers it. */
+interface JournalEdit {
+  property: string
+  from: string
+  to: string
+  element: Element | null
+  /**
+   * Whether it reached the source queue, answered at the fork that already
+   * decides it: `writeStyles` hands back the properties it could not
+   * translate, and an icon swap is preview-only by construction.
+   *
+   * A class, a text change and a delete are dispatched, so they are recorded
+   * as written, and a LATE strand — resolution answering with a bundler chunk
+   * half a second after the keystroke — is not read back here. Nothing is lost
+   * by that: recording the late strand is what the change-prompt ledger is
+   * for, and a row that changed its mind long after the edit would be the
+   * outbox contradicting itself while the user watches.
+   */
+  written: boolean
+}
+
+/**
+ * Pushes a step onto the timeline and the same edit into the outbox, and makes
+ * undo take BOTH back.
+ *
+ * An undone edit left in the outbox is the worst thing this feature can do:
+ * the panel would hand an agent a change the designer explicitly reversed, and
+ * the agent would go and put it back. Cmd+Z has to mean the same thing to the
+ * page and to the brief, so the journal entry is dropped by the step's own
+ * undo and re-recorded by its redo — which keeps the outbox describing what is
+ * on screen rather than everything that was ever typed.
+ *
+ * Only the PUBLIC write functions come through here. The private `writeStyles`
+ * / `writeClasses` / `writeText` / `writeIcon` / `writeRemovals` that a replay
+ * calls stay untouched, so "replaying does not re-record" remains the same
+ * structural property `history.ts` relies on rather than a flag.
+ *
+ * Journaled before `record`, for the reason `applyIcon` already documents:
+ * pushing the history step repaints the toolbar, and the toolbar counts what
+ * is waiting to be handed over.
+ */
+function journalStep(step: HistoryStep, edits: JournalEdit[]): void {
+  // Counted rather than assumed: an edit that ends on the value it started
+  // from is not recorded, and dropping more than was recorded would eat the
+  // previous step's entry.
+  const journal = () => edits.filter((edit) => recordEdit(edit) !== null).length
+  let recorded = journal()
+  record({
+    label: step.label,
+    undo: () => {
+      step.undo()
+      for (let index = 0; index < recorded; index += 1) dropLastEdit()
+    },
+    redo: () => {
+      step.redo()
+      recorded = journal()
+    },
+  })
 }
 
 export function createWriter(bridge: RewriteBridge): Writer {
@@ -523,6 +735,110 @@ export function createWriter(bridge: RewriteBridge): Writer {
   }
 
   /**
+   * A deletion that will never reach source, written down instead.
+   *
+   * `remove` is its own property name in the ledger for the same reason `icon`
+   * and `class` are: an agent told to "set remove to true" would go looking for
+   * a CSS declaration. `change-prompt` spells this one as a sentence.
+   */
+  const strandRemoval = (removal: Removal) => {
+    recordPreviewOnly({
+      filePath: removal.selection.source?.filePath ?? null,
+      componentName: removal.componentName,
+      tagName: removal.target.tagName,
+      className: removal.target.classes.join(" "),
+      property: "remove",
+      from: removal.label,
+      to: "",
+    })
+  }
+
+  /**
+   * Queues the source half of one deletion.
+   *
+   * The two hosts need different things and the split is not cosmetic. The
+   * Angular server locates an element by component name and descriptor, so it
+   * can be handed the job immediately and the file it eventually names is its
+   * own answer. The React server has only a file to open, so there is nothing
+   * to send until resolution lands — the same "synchronous when the file is
+   * known, deferred when it is not" shape as `queue`, and the same ending: a
+   * change with nowhere to go is written to the ledger rather than dropped.
+   */
+  const queueSourceRemoval = (removal: Removal) => {
+    const operation = (source: SourceRef | null): RemovalOperation => ({
+      op: "removeElement",
+      componentName: removal.componentName,
+      filePath: source?.filePath ?? null,
+      lineNumber: source?.lineNumber ?? 0,
+      columnNumber: source?.columnNumber ?? 0,
+      target: removal.target,
+    })
+
+    if (isAngularHost()) {
+      if (!removal.componentName) {
+        strandRemoval(removal)
+        return
+      }
+      const queued = queueRemoval(removal.element, operation(removal.selection.source ?? null))
+      // Not awaited and not required: the server finds the template from the
+      // component name. The path is filled in only so an Apply that happens to
+      // race resolution still reports the file it wrote.
+      void ensureSource(removal.selection).then((source) => {
+        if (source && !queued.filePath) queued.filePath = source.filePath
+      })
+      return
+    }
+
+    const known = removal.selection.source
+    if (known?.filePath) {
+      queueRemoval(removal.element, operation(known))
+      return
+    }
+    void ensureSource(removal.selection).then((source) => {
+      // Undone while resolution was in flight. The element is back, and queueing
+      // now would delete from source something the user has already taken back.
+      if (!removal.element.hasAttribute(DELETED_ATTRIBUTE)) return
+      if (source?.filePath) queueRemoval(removal.element, operation(source))
+      else strandRemoval(removal)
+    })
+  }
+
+  /**
+   * Gone from the page, and owed to source. No toast and no history entry.
+   *
+   * `!important` because the preview has to beat the element's own class, and a
+   * card whose stylesheet says `display: flex` would otherwise stay on screen
+   * looking deleted to the layers tree and present to the user.
+   */
+  const writeRemovals = (removals: Removal[]): void => {
+    for (const removal of removals) {
+      removal.element.setAttribute(DELETED_ATTRIBUTE, "")
+      removal.element.style.setProperty("display", "none", "important")
+      queueSourceRemoval(removal)
+    }
+  }
+
+  /**
+   * Back on the page, and owed to nobody.
+   *
+   * The `display` it had before is restored rather than simply cleared: the eye
+   * in the layers panel writes `display: none` as a real edit, so an element
+   * that was hidden and then deleted has to come back hidden — clearing would
+   * silently undo the other change too.
+   */
+  const undoRemovals = (removals: Removal[]): void => {
+    for (const removal of removals) {
+      removal.element.removeAttribute(DELETED_ATTRIBUTE)
+      if (removal.display) {
+        removal.element.style.setProperty("display", removal.display, removal.displayPriority)
+      } else {
+        removal.element.style.removeProperty("display")
+      }
+      unqueueRemoval(removal.element)
+    }
+  }
+
+  /**
    * Both directions of a swap, with no toast and no history entry — the same
    * split as `writeStyles`, for the same reason.
    *
@@ -530,6 +846,25 @@ export function createWriter(bridge: RewriteBridge): Writer {
    * removed rather than blanked: a stroke-drawn glyph swapped for a filled one
    * must lose `stroke-width`, not carry it as an empty string.
    */
+  /**
+   * Both directions of an attribute write, with no toast and no history entry —
+   * the same split every other write in here has, for the same reason.
+   *
+   * `null` removes rather than blanks, because the two are different states for
+   * a native boolean: `disabled=""` is disabled and no `disabled` is not, while
+   * `disabled="false"` is still disabled. An undo that blanked would put the
+   * element back in a state it was never in.
+   */
+  // `Element` and not `LayerElement`: this only ever calls two methods every
+  // element has, and the one caller that needs it can be aiming at a component
+  // HOST tag — `<app-button>` — which is neither an `HTMLElement` the layers
+  // tree would offer nor an `<svg>`. Narrowing the parameter to the tree's own
+  // union would exclude exactly the node this exists to write.
+  const writeAttribute = (element: Element, name: string, value: string | null): void => {
+    if (value === null) element.removeAttribute(name)
+    else element.setAttribute(name, value)
+  }
+
   const writeIcon = (element: SVGSVGElement, attribute: string, state: IconState): void => {
     if (state.name === null) element.removeAttribute(attribute)
     else element.setAttribute(attribute, state.name)
@@ -560,11 +895,28 @@ export function createWriter(bridge: RewriteBridge): Writer {
         (entry) => currentValue(selection.element, entry.property) !== entry.value
       )
       if (changed) {
-        record({
-          label: summary,
-          undo: () => writeStyles(selection, before),
-          redo: () => writeStyles(selection, writes),
-        })
+        // `dropped` is the fork that already decided which of these will never
+        // reach source — the translator could not spell them — so it is also
+        // the honest answer to "is this edit in the file or only in pixels".
+        // Filtered to the writes that moved for the same reason the step is:
+        // a field re-committing the value it was showing is not an edit, and
+        // the outbox is read by an agent that would act on it.
+        journalStep(
+          {
+            label: summary,
+            undo: () => writeStyles(selection, before),
+            redo: () => writeStyles(selection, writes),
+          },
+          before
+            .filter((entry) => currentValue(selection.element, entry.property) !== entry.value)
+            .map((entry) => ({
+              property: entry.property,
+              from: entry.value,
+              to: currentValue(selection.element, entry.property),
+              element: selection.element,
+              written: !dropped.includes(entry.property),
+            }))
+        )
       }
 
       // An unqualified success toast on a partly-dropped write is worse than no
@@ -586,12 +938,27 @@ export function createWriter(bridge: RewriteBridge): Writer {
       // Same rule as `applyStyles`: re-picking the radius already applied is
       // not a step, and the class list is the honest reading of whether the
       // add/remove pair moved anything.
-      if ((selection.element.getAttribute("class") ?? "") !== before) {
-        record({
-          label: summary,
-          undo: () => writeClasses(selection, { remove: write.add, add: write.remove }),
-          redo: () => writeClasses(selection, write),
-        })
+      const after = selection.element.getAttribute("class") ?? ""
+      if (after !== before) {
+        // One entry for the whole write, matching the ledger: what an agent
+        // needs is the class attribute to end up with, and a variant swap is
+        // half a dozen tokens moving together.
+        journalStep(
+          {
+            label: summary,
+            undo: () => writeClasses(selection, { remove: write.add, add: write.remove }),
+            redo: () => writeClasses(selection, write),
+          },
+          [
+            {
+              property: "class",
+              from: before,
+              to: after,
+              element: selection.element,
+              written: true,
+            },
+          ]
+        )
       }
       bridge.toast(summary, "info")
     },
@@ -600,11 +967,14 @@ export function createWriter(bridge: RewriteBridge): Writer {
       const before = selection.element.textContent ?? ""
       if (text === before) return
       writeText(selection, text)
-      record({
-        label: "Edit text",
-        undo: () => writeText(selection, before),
-        redo: () => writeText(selection, text),
-      })
+      journalStep(
+        {
+          label: "Edit text",
+          undo: () => writeText(selection, before),
+          redo: () => writeText(selection, text),
+        },
+        [{ property: "text", from: before, to: text, element: selection.element, written: true }]
+      )
     },
 
     applyIcon(selection, variant) {
@@ -641,12 +1011,190 @@ export function createWriter(bridge: RewriteBridge): Writer {
       void ensureSource(selection).then((source) => {
         if (source && !entry.filePath) entry.filePath = source.filePath
       })
-      record({
-        label: `Swap icon to ${variant.name}`,
-        undo: () => writeIcon(element, attribute, before),
-        redo: () => writeIcon(element, attribute, after),
-      })
+      // `written: false`, always: the JSX still names the component it always
+      // did, so this one reaches source only by an agent editing the import
+      // and the tag — which is the same thing the ledger entry above says.
+      journalStep(
+        {
+          label: `Swap icon to ${variant.name}`,
+          undo: () => writeIcon(element, attribute, before),
+          redo: () => writeIcon(element, attribute, after),
+        },
+        [
+          {
+            property: "icon",
+            from: before.name ?? "",
+            to: variant.name,
+            element,
+            written: false,
+          },
+        ]
+      )
       bridge.toast(`Swapped to ${variant.name} — preview only`, "info")
+    },
+
+    applyAttribute(selection, name, value, target) {
+      // The host when the caller named one, the selection otherwise. Every
+      // read below — the "before", the tag, the class list the ledger records —
+      // comes off this element rather than off the selection, because the whole
+      // point of the parameter is that they can be different nodes and it is
+      // the one being written that an agent has to go and find.
+      const element = target ?? selection.element
+      // `class` and `style` have lanes of their own that reach the file; an
+      // attribute write that quietly took one of them over would turn a
+      // committable edit into a preview nobody asked for.
+      if (!name || name === "class" || name === "style") return
+      const before = element.getAttribute(name)
+      if (before === value) return
+
+      writeAttribute(element, name, value)
+
+      // BEFORE `record`, the ordering `applyIcon` documents: pushing the
+      // history step repaints the toolbar, and the toolbar decides whether
+      // "Copy change prompts" is live by reading this ledger.
+      const property = `attribute:${name}`
+      const entry = recordPreviewOnly({
+        filePath: selection.source?.filePath ?? null,
+        componentName: selection.componentName,
+        tagName: element.tagName.toLowerCase(),
+        className: element.getAttribute("class") ?? "",
+        property,
+        from: before ?? "",
+        to: value ?? "",
+      })
+      void ensureSource(selection).then((source) => {
+        if (source && !entry.filePath) entry.filePath = source.filePath
+      })
+
+      const summary = value === null ? `Clear ${name}` : `Set ${name} to ${value}`
+      // `written: false`, always: the template still spells the attribute it
+      // always did, so this reaches source only by an agent editing it — which
+      // is the same thing the ledger entry above says.
+      journalStep(
+        {
+          label: summary,
+          undo: () => writeAttribute(element, name, before),
+          redo: () => writeAttribute(element, name, value),
+        },
+        [{ property, from: before ?? "", to: value ?? "", element, written: false }]
+      )
+      bridge.toast(`${summary} — preview only`, "info")
+    },
+
+    applyDelete(selections) {
+      const removals = planRemovals(selections, elementLabel)
+      if (!removals.length) return
+      writeRemovals(removals)
+
+      const summary =
+        removals.length === 1 ? `Delete ${removals[0].label}` : `Delete ${removals.length} layers`
+      // One entry per element, not one per keystroke: deleting three cards at
+      // once is three things an agent has to take out of the source, and a
+      // single row naming the count would not say which three.
+      journalStep(
+        {
+          label: summary,
+          undo: () => undoRemovals(removals),
+          redo: () => writeRemovals(removals),
+        },
+        removals.map((removal) => ({
+          // The ledger's sentinel, spelled the same way here. `to` is empty
+          // because a deletion has no value to end on — the instruction is the
+          // property, and `change-prompt` renders it as a sentence.
+          property: "remove",
+          from: removal.label,
+          to: "",
+          element: removal.element,
+          written: true,
+        }))
+      )
+      bridge.toast(summary, "info")
+    },
+
+    applyStylesBatch(edits, summary) {
+      if (!edits.length) return
+
+      /*
+       * Every "before" is read while every element is still untouched.
+       *
+       * Reading them inside the write loop would be correct only for as long
+       * as the elements are independent, and the writes this exists to make
+       * are not: `align-self` on the first child of a flex row changes what
+       * the browser computes for its siblings' `align-items`-derived values,
+       * so an element read after its neighbour has already moved would record
+       * a "before" that was never on screen — and undo would put THAT back.
+       */
+      const planned = edits.map((edit) => ({
+        selection: edit.selection,
+        writes: edit.writes,
+        before: edit.writes.map((write) => ({
+          property: write.property,
+          value: currentValue(edit.selection.element, write.property),
+        })),
+        // Filled by the write below, per element rather than per batch: the
+        // React lane drops a property the translator cannot spell, which is
+        // the same answer for every element, but the Angular lane drops one
+        // it could not place in a template, which is not.
+        dropped: [] as string[],
+      }))
+
+      for (const edit of planned) edit.dropped = writeStyles(edit.selection, edit.writes)
+
+      // The same "a write that changed nothing is not a step" rule the
+      // single-element path applies, asked per element: aligning a row where
+      // two of the five were already at the top is three elements' worth of
+      // edit, and replaying the other two on undo would write values nobody
+      // set. An element that did not move is dropped from the step entirely,
+      // so it is also absent from the outbox.
+      const moved = planned
+        .map((edit) => ({
+          ...edit,
+          before: edit.before.filter(
+            (entry) => currentValue(edit.selection.element, entry.property) !== entry.value
+          ),
+        }))
+        .filter((edit) => edit.before.length > 0)
+
+      if (moved.length) {
+        // ONE step for the whole batch, and one journal entry per element —
+        // `applyDelete`'s split, for its reason: a single row saying "aligned
+        // 5" would not say which five an agent has to change in source.
+        journalStep(
+          {
+            label: summary,
+            undo: () => {
+              for (const edit of moved) writeStyles(edit.selection, edit.before)
+            },
+            redo: () => {
+              for (const edit of moved) writeStyles(edit.selection, edit.writes)
+            },
+          },
+          moved.flatMap((edit) =>
+            edit.before.map((entry) => ({
+              property: entry.property,
+              from: entry.value,
+              to: currentValue(edit.selection.element, entry.property),
+              element: edit.selection.element,
+              written: !edit.dropped.includes(entry.property),
+            }))
+          )
+        )
+      }
+
+      // One toast, in the three branches `applyStyles` uses, counted across
+      // the whole batch. Aggregated by PROPERTY NAME rather than by
+      // occurrence: five elements that all failed to spell `align-self` lost
+      // one thing, said once, not the same word five times in a row.
+      const dropped = planned.flatMap((edit) => edit.dropped)
+      const names = [...new Set(dropped)]
+      const total = planned.reduce((count, edit) => count + edit.writes.length, 0)
+      if (dropped.length === 0) {
+        bridge.toast(summary, "info")
+      } else if (dropped.length === total) {
+        bridge.toast(`${summary} — preview only (${names.join(", ")})`, "error")
+      } else {
+        bridge.toast(`${summary} — ${names.join(", ")} is preview only`, "error")
+      }
     },
 
     untranslated() {

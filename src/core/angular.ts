@@ -20,7 +20,17 @@
  */
 
 import { config } from "./config"
+import { describeTarget, type ElementTarget } from "./element-target"
 import type { LayerElement, SourceRef } from "./types"
+
+/**
+ * Re-exported because this lane's wire types are written in terms of it and
+ * every Angular caller already imports from here. The descriptor itself is not
+ * Angular's: `core/element-target` owns it, so the React lane can send the same
+ * shape rather than a second one that means the same thing.
+ */
+export { describeTarget }
+export type AngularTarget = ElementTarget
 
 /** The subset of Angular's dev-mode global this module relies on. */
 interface AngularGlobal {
@@ -34,25 +44,6 @@ declare global {
   }
 }
 
-/**
- * Enough of an element's identity for the server to find the one template node
- * that produced it.
- *
- * Deliberately all STATIC facts. Angular adds classes at runtime through
- * `[class.x]` and `[ngClass]`, and stamps `_ngcontent-*` onto everything, so
- * the server treats the template's class list as a subset of this one rather
- * than an equal — which only works if what we send is the live truth.
- */
-export interface AngularTarget {
-  tagName: string
-  classes: string[]
-  id: string | null
-  nthOfType: number
-  parentTagName: string | null
-  parentClasses: string[]
-  attributes: Record<string, string>
-}
-
 export type AngularOperation =
   | { op: "setStyles"; componentName: string; target: AngularTarget; declarations: Record<string, string> }
   | { op: "setClasses"; componentName: string; target: AngularTarget; add: string[]; remove: string[] }
@@ -60,7 +51,13 @@ export type AngularOperation =
 
 export interface AngularApplyResult {
   applied: Array<{ op: string; filePath: string; lineNumber: number }>
-  failed: Array<{ reason: string; operation: { op: string; componentName: string } }>
+  // The WHOLE operation, not just its op and component name. The server echoes
+  // it back already; narrowing it here meant a refused write could be counted
+  // and named in a toast but never described, so the only thing a caller could
+  // do with a refusal was mention it and drop it. Everything needed to file it
+  // as a change that still wants making — which element, and what was being set
+  // on it — is in the operation.
+  failed: Array<{ reason: string; operation: AngularOperation }>
 }
 
 export function isAngularHost(): boolean {
@@ -91,53 +88,6 @@ export function owningComponentName(element: Element | null): string | null {
     if (typeof name === "string" && name) return name
   }
   return null
-}
-
-/** Index among preceding siblings of the same tag — matches the template scan. */
-function nthOfType(element: Element): number {
-  let index = 0
-  let sibling = element.previousElementSibling
-  while (sibling) {
-    if (sibling.tagName === element.tagName) index += 1
-    sibling = sibling.previousElementSibling
-  }
-  return index
-}
-
-/**
- * Static attributes worth sending, which is to say: the ones that could have
- * been written in a template.
- *
- * `class`, `style` and `id` travel as their own fields. Angular's own
- * `_nghost-*` / `_ngcontent-*` markers and `ng-reflect-*` are stamped at
- * runtime and appear in no template, so matching on them would score every
- * candidate identically — worse than not matching at all, because it would
- * turn a clean miss into a tie.
- */
-function staticAttributes(element: Element): Record<string, string> {
-  const attributes: Record<string, string> = {}
-  for (const attribute of Array.from(element.attributes)) {
-    const name = attribute.name
-    if (name === "class" || name === "style" || name === "id") continue
-    if (name.startsWith("_ng") || name.startsWith("ng-reflect-")) continue
-    if (name.startsWith("data-de-")) continue
-    if (attribute.value.length > 120) continue
-    attributes[name] = attribute.value
-  }
-  return attributes
-}
-
-export function describeTarget(element: Element): AngularTarget {
-  const parent = element.parentElement
-  return {
-    tagName: element.tagName.toLowerCase(),
-    classes: Array.from(element.classList),
-    id: element.getAttribute("id"),
-    nthOfType: nthOfType(element),
-    parentTagName: parent ? parent.tagName.toLowerCase() : null,
-    parentClasses: parent ? Array.from(parent.classList) : [],
-    attributes: staticAttributes(element),
-  }
 }
 
 /* -------------------------------------------------------------------------
@@ -216,6 +166,54 @@ export function clearAngularQueue(): void {
   if (!pending.size) return
   pending.clear()
   announce()
+}
+
+/**
+ * Take one property back out, leaving the rest of the element's entry standing.
+ *
+ * The Changes tab lets a designer drop any single row, in any order, and a row
+ * is one (element, property). This queue merges by ELEMENT, so dropping a row
+ * cannot mean dropping the entry: an element with a colour change and a padding
+ * change is one entry and two rows, and retracting the padding has to leave the
+ * colour queued behind it.
+ *
+ * `property` speaks the vocabulary the journal and the ledger already use — CSS
+ * property names plus the sentinels `class` and `text`. That is deliberate. A
+ * row carries a property string and nothing else identifying, so keying a
+ * withdrawal on anything richer would force the caller to know which of these
+ * three maps its row landed in, which is precisely the knowledge this module
+ * exists to keep to itself.
+ *
+ * The entry is deleted outright once nothing is left in it, so an element whose
+ * every row was dropped stops counting toward `angularQueueSize()` and the bar
+ * goes quiet. Returns whether anything was actually withdrawn, because a caller
+ * has to be able to tell a real retraction from a no-op.
+ */
+export function unqueueAngularProperty(element: LayerElement, property: string): boolean {
+  const entry = pending.get(element)
+  if (!entry) return false
+
+  let removed = false
+  if (property === "class") {
+    removed = entry.classAdd.size > 0 || entry.classRemove.size > 0
+    entry.classAdd.clear()
+    entry.classRemove.clear()
+  } else if (property === "text") {
+    removed = entry.text !== null
+    entry.text = null
+  } else {
+    removed = entry.declarations.delete(property)
+  }
+  if (!removed) return false
+
+  const empty =
+    entry.declarations.size === 0 &&
+    entry.classAdd.size === 0 &&
+    entry.classRemove.size === 0 &&
+    entry.text === null
+  if (empty) pending.delete(element)
+  announce()
+  return true
 }
 
 /**

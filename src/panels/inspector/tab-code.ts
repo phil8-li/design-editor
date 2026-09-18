@@ -26,6 +26,7 @@ import { clear, el } from "../../core/dom"
 import { icon } from "../../core/icons"
 import { CODE_VIEWS, codeText, elementCode, type CodeTokenKind, type CodeView } from "../../core/element-code"
 import type { EditorContext } from "../../core/context"
+import { tokens } from "../../core/tokens"
 
 export interface InspectorTab {
   node: HTMLElement
@@ -121,7 +122,7 @@ export function codeTab(editor: EditorContext): InspectorTab {
 
   function setCopyLabel(copied: boolean): void {
     clear(copyButton)
-    copyButton.append(icon(copied ? "Check" : "Copy", 12), copied ? "Copied" : "Copy")
+    copyButton.append(icon(copied ? "Check" : "Copy", tokens.icon.row), copied ? "Copied" : "Copy")
   }
 
   function showCopied(): void {

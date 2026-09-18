@@ -12,6 +12,8 @@
  */
 
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import path from "node:path"
 import { JSDOM } from "jsdom"
 
 import { PACKAGE_DIR } from "./host.mjs"
@@ -37,7 +39,11 @@ globalThis.document = dom.window.document
 const { build } = await import("esbuild")
 const bundled = await build({
   stdin: {
-    contents: `export { icon, ICON_NAMES } from "./src/core/icons"`,
+    contents: `
+      export { icon, drawHostIcon, ICON_NAMES, NATIVE_ICON_NAMES, NATIVE_ICON_SIZES } from "./src/core/icons"
+      export { tokens } from "./src/core/tokens"
+      export { shellCss } from "./src/core/css"
+    `,
     resolveDir: PACKAGE_DIR,
     loader: "ts",
   },
@@ -46,9 +52,137 @@ const bundled = await build({
   write: false,
   logLevel: "silent",
 })
-const { icon, ICON_NAMES } = await import(
+const { icon, drawHostIcon, ICON_NAMES, NATIVE_ICON_NAMES, NATIVE_ICON_SIZES, tokens, shellCss } = await import(
   `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString("base64")}`
 )
+
+console.log("\nThe size ramp")
+
+/*
+ * Five sizes, and every glyph in the chrome is drawn at one of them.
+ *
+ * `IconSize` already makes an off-ramp number a compile error, so what is left
+ * to check is the part TypeScript cannot see: that the ramp is still the five
+ * values it is supposed to be, that the roles land on it, and — the one that
+ * actually rots — that no call site has gone back to passing a literal.
+ *
+ * The set drifted to seven sizes before this existed: 10, 12, 13, 14, 16, 18,
+ * 20. Each was locally reasonable at the call site that introduced it, which is
+ * exactly why nothing caught the family coming apart.
+ */
+// 10 is the floor the design kit sets. It is a MARK rung — a numeral in a chip,
+// a twisty, a dot beside a label — and deliberately not a size anything
+// pressable is drawn at, which `tokens.icon.mark` says at the definition.
+const RAMP = [10, 12, 16, 20, 24, 32]
+
+check("the ramp is 10, 12, 16, 20, 24, 32 and every role lands on it", () => {
+  const roles = Object.entries(tokens.icon)
+  assert.ok(roles.length > 0, "tokens.icon is empty")
+  for (const [role, size] of roles) {
+    assert.ok(RAMP.includes(size), `tokens.icon.${role} is ${size}, which is off the ramp`)
+  }
+  // Every rung is reachable by name, or it is a number nobody can spend.
+  const spent = new Set(roles.map(([, size]) => size))
+  assert.deepEqual([...spent].sort((a, b) => a - b), RAMP)
+})
+
+check("a glyph draws at exactly the size it was asked for", () => {
+  for (const size of RAMP) {
+    const svg = icon("PanelLeft", size)
+    assert.equal(svg.getAttribute("width"), String(size))
+    assert.equal(svg.getAttribute("height"), String(size))
+  }
+})
+
+/*
+ * No call site passes a bare number.
+ *
+ * Read off the source rather than the DOM, because this is a rule about how the
+ * code is written: `icon("X", 12)` type-checks perfectly well and is exactly
+ * how the old spread accumulated. Naming the role is what makes a size legible
+ * at the point of use, and what makes changing a rung one edit instead of
+ * thirty.
+ */
+check("no call site spells its icon size as a number", () => {
+  const offenders = []
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!entry.name.endsWith(".ts")) continue
+      // The generated set declares the ramp and the default; it is the source
+      // of the numbers, not a consumer of them.
+      if (full.endsWith(path.join("core", "icons.ts"))) continue
+      const source = fs.readFileSync(full, "utf8")
+      for (const match of source.matchAll(/\b(?:icon|drawIcon|drawHostIcon)\([^)\n]*?,\s*(\d+)/g)) {
+        offenders.push(`${path.relative(PACKAGE_DIR, full)}: ${match[0].trim()}`)
+      }
+    }
+  }
+  walk(path.join(PACKAGE_DIR, "src"))
+  assert.deepEqual(offenders, [])
+})
+
+/*
+ * A NATIVE glyph may only be drawn at a rung it lands on whole pixels at.
+ *
+ * That family is authored on a 16 lattice and emitted into the shared 24
+ * viewBox, so one authored unit renders at `size / 8` device pixels on a 2x
+ * display — a whole number only when the size is a multiple of 8. 16, 24 and
+ * 32 are crisp; 10 and 12 are not.
+ *
+ * Measured rather than reasoned: in the rendered panel the align mark at 16px
+ * resolves to two ink levels, and the same construction at 12px to four or six.
+ * That soft, half-covered edge is the entire defect the family was built to
+ * remove, so reintroducing it at a smaller rung undoes the work silently.
+ *
+ * Checked against the SOURCE, because it is a rule about what a call site may
+ * ask for and because the mistake is locally reasonable every time it is made:
+ * `tokens.icon.row` is the obvious rung to reach for beside 12px text, and the
+ * glyph looks fine until it is set next to one drawn at 16. Four call sites did
+ * exactly this when the family first landed.
+ *
+ * The rung-name-to-number map is spelled out here rather than read from
+ * `tokens`, so renaming a rung fails this case loudly instead of quietly
+ * emptying it.
+ */
+check("a native glyph is never drawn at a rung it cannot land on", () => {
+  const RUNG = { mark: 10, row: 12, control: 16, launcher: 20, display: 24, hero: 32 }
+  const native = new Set(NATIVE_ICON_NAMES)
+  const allowed = new Set(NATIVE_ICON_SIZES)
+  assert.ok(native.size > 0, "no native glyphs — this case would assert nothing")
+  const offenders = []
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!entry.name.endsWith(".ts")) continue
+      if (full.endsWith(path.join("core", "icons.ts"))) continue
+      const source = fs.readFileSync(full, "utf8")
+      for (const match of source.matchAll(/\bicon\(\s*"([A-Za-z0-9]+)"\s*,\s*tokens\.icon\.([a-z]+)/g)) {
+        const [, name, rung] = match
+        if (!native.has(name)) continue
+        const size = RUNG[rung]
+        if (size === undefined) {
+          offenders.push(`${path.relative(PACKAGE_DIR, full)}: unknown rung tokens.icon.${rung}`)
+        } else if (!allowed.has(size)) {
+          offenders.push(
+            `${path.relative(PACKAGE_DIR, full)}: ${name} at tokens.icon.${rung} (${size}px) — ` +
+              `native glyphs land on whole pixels only at ${[...allowed].join(", ")}`
+          )
+        }
+      }
+    }
+  }
+  walk(path.join(PACKAGE_DIR, "src"))
+  assert.deepEqual(offenders, [])
+})
 
 console.log("\nVendored glyph set")
 
@@ -83,22 +217,296 @@ check("no attribute value is left as an unresolved custom property", () => {
   assert.deepEqual(offenders, [])
 })
 
-check("every stroke-drawn glyph carries the design system's 2-unit weight", () => {
-  const stroked = []
-  for (const name of ICON_NAMES) {
-    const svg = icon(name)
-    const nodes = [svg, ...svg.querySelectorAll("*")]
-    const carrier = nodes.find((node) => node.getAttribute("stroke") === "currentColor")
-    if (!carrier) continue
-    stroked.push(name)
-    const width = nodes.map((node) => node.getAttribute("stroke-width")).find(Boolean)
-    assert.equal(width, "2", `${name} strokes at ${width ?? "the UA default"}, not 2`)
+/*
+ * EVERYTHING strokes, at the weight its rung asks for.
+ *
+ * This assertion used to say the opposite, and the flip is the whole change of
+ * family. The old set was filled, and had to be: each glyph's ink extent was
+ * normalised by widening its own viewBox, and re-windowing scales a stroke
+ * along with the drawing, so a stroked glyph fitted that way arrives correctly
+ * sized and a third too light. Lucide fixes the size problem at the source —
+ * one grid, one drawn weight, no fitting — which is what makes a stroke family
+ * possible here at all.
+ *
+ * What has to be policed now is the other end: that every glyph really does
+ * carry a stroke, in `currentColor`, at the width its size mandates. A glyph
+ * that lost its stroke does not disappear — it renders as an invisible outline
+ * of nothing, present in the DOM and absent on the screen.
+ */
+check("every glyph strokes in currentColor, at its rung's width", () => {
+  const offenders = []
+  for (const size of RAMP) {
+    for (const name of ICON_NAMES) {
+      const svg = icon(name, size)
+      if (svg.getAttribute("stroke") !== "currentColor") {
+        offenders.push(`${name}@${size}: stroke=${svg.getAttribute("stroke")}`)
+      }
+      const width = Number(svg.getAttribute("stroke-width"))
+      if (!(width > 0)) offenders.push(`${name}@${size}: stroke-width=${width}`)
+      // A shape overriding the root would be a second weight inside one glyph.
+      for (const node of svg.querySelectorAll("*")) {
+        if (node.getAttribute("stroke-width")) {
+          offenders.push(`${name}@${size}: ${node.tagName} overrides stroke-width`)
+        }
+      }
+    }
   }
-  // The bug was in this population specifically, so prove the population exists.
-  // Half the set is stroke-drawn — Play, RotateCcw, RotateCw, Search, Check,
-  // ChevronRight, Plus and CursorOutline. The rest are filled paths, including
-  // both panel toggles, and never had the defect.
-  assert.ok(stroked.length >= 8, `expected at least 8 stroke-drawn glyphs, saw ${stroked.length}`)
+  assert.deepEqual(offenders, [])
+})
+
+/*
+ * Rendered stroke thickness, across the ramp.
+ *
+ * The rule a stroke family lives or dies by, and the one a fill family never
+ * has to state. A stroke's width is in GRID units, so what reaches the screen
+ * is `width * size / 24`. Left at Lucide's native 2 for every rung — the
+ * obvious implementation, and the one every `lucide-react` call site uses — the
+ * same mark arrives 0.83px thick at `mark` and 2.67px at `hero`. That is a
+ * threefold spread in apparent weight between two drawings the design system
+ * calls one icon, and the small end is the end that fails: under about 1px a
+ * stroke antialiases into a grey suggestion of itself.
+ *
+ * Which is the mechanism behind "this icon looks too small". It is not the
+ * size — the size is exactly what was asked for — it is that the ink inside
+ * that size is too thin to read.
+ *
+ * So: rendered thickness must rise with size, and stay inside a band no wider
+ * than 2.5x from the smallest rung to the largest. Uncompensated, that ratio is
+ * 3.2 and this fails.
+ */
+check("rendered stroke thickness rises with size, and stays in one band", () => {
+  const rendered = RAMP.map((size) => {
+    const width = Number(icon("Square", size).getAttribute("stroke-width"))
+    return { size, px: (width * size) / 24 }
+  })
+  for (let i = 1; i < rendered.length; i += 1) {
+    assert.ok(
+      rendered[i].px > rendered[i - 1].px,
+      `${rendered[i].size}px is not drawn heavier than ${rendered[i - 1].size}px ` +
+        `(${rendered[i].px.toFixed(2)} vs ${rendered[i - 1].px.toFixed(2)})`
+    )
+  }
+  const thinnest = rendered[0].px
+  const thickest = rendered[rendered.length - 1].px
+  assert.ok(thinnest >= 1.1, `the smallest rung renders at ${thinnest.toFixed(2)}px, under the 1.1 floor`)
+  assert.ok(
+    thickest / thinnest <= 2.5,
+    `the ramp spans ${(thickest / thinnest).toFixed(2)}x in apparent weight, which is two families`
+  )
+})
+
+/*
+ * Every rung's stroke fits inside the grid it is drawn in.
+ *
+ * Half a stroke lies outside the path it is centred on, so compensating the
+ * small rungs upward spends clearance the glyph may not have. Lucide draws to a
+ * 1-unit padding guideline and in practice leaves just under 2 across this set
+ * — but a glyph swapped into the mapping later may be drawn tighter, and the
+ * symptom is a clipped corner nobody reviews for.
+ *
+ * `tools/build-icons.mjs` refuses one at generation time. This is the same rule
+ * measured against what actually reaches the DOM, because the generator can be
+ * bypassed by a hand-edit and the generated file says not to.
+ */
+check("no glyph's stroke is clipped by the viewBox at any rung", () => {
+  const offenders = []
+  for (const name of ICON_NAMES) {
+    const box = inkBox(name)
+    for (const size of RAMP) {
+      const half = Number(icon(name, size).getAttribute("stroke-width")) / 2
+      const clearance = Math.min(box.minX, box.minY, 24 - box.maxX, 24 - box.maxY)
+      if (clearance < half) {
+        offenders.push(`${name}@${size}: ${clearance.toFixed(2)} clearance, needs ${half}`)
+      }
+    }
+  }
+  assert.deepEqual(offenders, [])
+})
+
+/*
+ * ONE drawing per glyph, and the fill is opt-in.
+ *
+ * The old set shipped every glyph twice — an outline and a fill, in two
+ * `<g data-weight>` groups — and the stylesheet swapped between them. Lucide
+ * ships no filled counterparts, and synthesising them by flooding a path with
+ * `currentColor` is legible only for a closed silhouette. So `filled` is a root
+ * fill a caller asks for BY NAME, and `auto` — what every other call site gets
+ * — is the outline.
+ *
+ * `COUNTERPARTS` is the exception list, and it is short on purpose. Two kinds
+ * of mark earn a place on it. One is a drawing whose runs are ALL open, which
+ * floods to nothing — the retired `SlidersHorizontal` came out identical in
+ * both weights and the inspector toggle reported nothing on its mark. The other
+ * is a closed frame with the meaning drawn INSIDE it, which floods over that
+ * meaning: `PanelLeft` and `PanelRight` are one box and one divider, so a flood
+ * turns both into the same solid square and the two toggles stop being
+ * distinguishable in the state where they are on. Those carry a second drawing,
+ * held to the same ink extent by the case further down and by the generator.
+ * Everything else must stay one drawing, because two drawings are two things to
+ * keep in agreement and the set has been that way before.
+ *
+ * `Cursor` joined the list when it stopped being Lucide's and became native,
+ * and it is the FIRST kind rather than a new one. A native outline is not a
+ * stroke, it is an `evenodd` annulus that states its own fill — so the root
+ * flood passes straight over it and paints nothing. It is a toggle: without a
+ * counterpart the mode switch would draw the same hollow arrow whether or not
+ * the editor held the pointer, which is the silent failure this list is for.
+ *
+ * `MessageSquare` was on this list for one round, while it was native too, and
+ * is off it again. It is Lucide's round bubble once more — mirrored and scaled,
+ * but still one closed stroked silhouette — and a flood fills that correctly.
+ * The requirement left with the drawing.
+ */
+const COUNTERPARTS = ["PanelLeft", "PanelRight", "Cursor"]
+
+check("a glyph is one drawing, unless a flood cannot draw it at all", () => {
+  for (const name of ICON_NAMES) {
+    const auto = icon(name, 16)
+    assert.equal(auto.querySelector("g"), null, `${name} is still wrapped in weight groups`)
+    assert.equal(auto.getAttribute("fill"), "none", `${name} fills without being asked`)
+    assert.equal(
+      icon(name, 16, "outline").getAttribute("fill"),
+      "none",
+      `${name} fills on the outline weight`
+    )
+    assert.equal(
+      icon(name, 16, "filled").getAttribute("fill"),
+      "currentColor",
+      `${name} ignored the filled weight`
+    )
+    const shapes = (weight) =>
+      Array.from(icon(name, 16, weight).querySelectorAll("*"))
+        .map((node) => node.getAttribute("d") ?? node.tagName)
+        .join("|")
+    const redrawn = shapes("outline") !== shapes("filled")
+    assert.equal(
+      redrawn,
+      COUNTERPARTS.includes(name),
+      redrawn
+        ? `${name} draws a second mark when filled, and is not in COUNTERPARTS`
+        : `${name} is listed in COUNTERPARTS but draws the same mark in both weights`
+    )
+  }
+})
+
+/*
+ * An authored counterpart INHERITS NOTHING from the root flood.
+ *
+ * `drawIcon` puts `fill="currentColor"` on the <svg> for the filled weight,
+ * because that flood is the counterpart for every glyph not on the list above.
+ * A shape inside an authored counterpart that states no fill of its own picks
+ * that up — and for these two it is fatal in the quietest possible way: the
+ * frame is an 18x18 rounded rect, so it floods to the solid square the second
+ * drawing exists to avoid, and the column authored on top is painted the same
+ * colour against it and cannot be seen. Both toggles then report "open" as an
+ * identical blot, which is the exact failure `COUNTERPARTS` was introduced to
+ * fix, reintroduced one attribute lower down.
+ *
+ * Nothing else here notices. The root fill is correct, the second drawing is
+ * present, the ink extents match, the flooded area is large. Every assertion
+ * that could have caught it was measuring geometry, and the geometry is right —
+ * it is the PAINT that is wrong. So this reads the paint: inside a counterpart,
+ * every shape says what it fills, and the frame says `none`.
+ */
+check("an authored counterpart states every fill, and never floods its frame", () => {
+  for (const name of COUNTERPARTS) {
+    for (const node of icon(name, 16, "filled").querySelectorAll("*")) {
+      const fill = node.getAttribute("fill")
+      assert.ok(
+        fill,
+        `${name}: a <${node.tagName.toLowerCase()}> in the filled drawing states no fill, ` +
+          `so it inherits the root flood`
+      )
+      // The frame is the one shape that must not be solid. Flooding it hides
+      // every mark the counterpart draws inside it.
+      if (node.tagName.toLowerCase() === "rect") {
+        assert.equal(fill, "none", `${name}: the frame floods, swallowing the panel drawn inside it`)
+      }
+    }
+  }
+})
+
+/*
+ * A TOGGLE's glyph has to actually change when it fills.
+ *
+ * This replaces a rule that read the source and asserted only `Cursor` ever
+ * asked for `"filled"`. That rule was right while the fill was a special case
+ * for the pointer and the state lived in stroke weight — and it is what the
+ * change to filled toggles had to argue with rather than delete quietly.
+ *
+ * Why the toggles fill now: half a unit of extra stroke is a RELATIVE signal.
+ * Set the pressed glyph beside the same glyph at rest and it is obvious; look
+ * at one button on its own — which is exactly how "are notes armed?" gets asked
+ * — and there is nothing to compare it against. Solid against hollow needs no
+ * reference.
+ *
+ * What that buys has to be checked, because it is not free. Flooding a mark
+ * made only of open runs paints NOTHING: the glyph is identical in both states,
+ * the toggle silently stops reporting itself, and no assertion above notices —
+ * the attributes are all correct and the drawing is unchanged by design. So
+ * this measures the area the fill actually covers, and the list is the marks
+ * the bar's four toggles draw. A fifth toggle reaching for a mark of bare lines
+ * fails here rather than in a screenshot.
+ */
+const TOGGLE_GLYPHS = ["Cursor", "MessageSquare", "PanelLeft", "PanelRight"]
+
+check("every toggle's mark paints real area when it fills", () => {
+  for (const name of TOGGLE_GLYPHS) {
+    const area = floodedArea(name)
+    assert.ok(
+      area > 20,
+      `${name} floods ${area.toFixed(1)} square units of the 576 in the grid — ` +
+        `a toggle drawing it would look the same on as off`
+    )
+  }
+})
+
+/*
+ * The stylesheet is what makes "on" visible, now that no glyph fills.
+ *
+ * Asserted as CSS text: jsdom parses a stylesheet and lays out nothing, so
+ * there is no rendered stroke width to measure here. The rule going missing
+ * would not throw and would not look broken in any DOM assertion — every toggle
+ * in the chrome would simply stop reporting its state on its glyph, while still
+ * reporting it correctly to assistive tech, which is precisely the kind of
+ * drift the rule was centralised to prevent.
+ */
+check("a pressed or selected control draws its glyph heavier", () => {
+  assert.match(
+    shellCss,
+    /\[aria-pressed="true"\][^{}]*svg\[data-de-glyph\][^{}]*\{[^}]*stroke-width:\s*calc\(var\(--de-icon-stroke/s,
+    "no rule thickens a pressed control's glyph"
+  )
+  assert.match(
+    shellCss,
+    /\[aria-selected="true"\][^{}]*svg\[data-de-glyph\]/s,
+    "a selected tab's glyph is not covered, only a pressed one's"
+  )
+})
+
+/*
+ * The marker that keeps that rule off other people's artwork.
+ *
+ * The state rule leans on `--de-icon-stroke`, which has a fallback, so without
+ * a marker it would also reach the HOST's own icons — rendered by
+ * `drawHostIcon` in the inspector's variant list, exactly as their author drew
+ * them — and any `<svg>` the app being edited happens to place inside a
+ * selected row. Both would be re-weighted on selection: the editor quietly
+ * redrawing artwork it does not own.
+ */
+check("chrome glyphs are marked, and host icons are not", () => {
+  for (const name of ICON_NAMES) {
+    assert.ok(
+      icon(name, 16).hasAttribute("data-de-glyph"),
+      `${name} is unmarked, so the pressed-state rule will not reach it`
+    )
+  }
+  const host = drawHostIcon({ nodes: [["path", { d: "M4 4h16v16H4z" }]], rootFill: "currentColor" }, 16)
+  assert.equal(
+    host.hasAttribute("data-de-glyph"),
+    false,
+    "a host icon is marked as ours, so the chrome will re-weight it on selection"
+  )
 })
 
 /*
@@ -318,12 +726,19 @@ function walkPath(d, push) {
  * root reports RotateCcw as 18x18 and quietly passes it as if it were smaller
  * than the toggles beside it, which is the opposite of the bug.
  */
-function inkBox(name) {
-  const svg = icon(name, 24)
+function inkBox(name, weight = "outline") {
+  // One weight at a time. Asked for neither, a glyph carries both, and measuring
+  // the union of the two would report the larger of the pair for every icon.
+  const svg = icon(name, 24, weight)
+  let maxRadius = 0
   let minX = Infinity
   let minY = Infinity
   let maxX = -Infinity
   let maxY = -Infinity
+  let rawMinX = Infinity
+  let rawMinY = Infinity
+  let rawMaxX = -Infinity
+  let rawMaxY = -Infinity
   for (const node of svg.querySelectorAll("*")) {
     let shapeMinX = Infinity
     let shapeMinY = Infinity
@@ -334,6 +749,9 @@ function inkBox(name) {
       shapeMaxX = Math.max(shapeMaxX, px)
       shapeMinY = Math.min(shapeMinY, py)
       shapeMaxY = Math.max(shapeMaxY, py)
+      // How far the ink gets from the grid centre, which is the other half of
+      // what "the same size" means. See the optical-tier case below.
+      maxRadius = Math.max(maxRadius, Math.hypot(px - 12, py - 12))
     }
     const tag = node.tagName.toLowerCase()
     const attr = (nodeName) => Number(node.getAttribute(nodeName))
@@ -353,58 +771,179 @@ function inkBox(name) {
     maxX = Math.max(maxX, shapeMaxX + half)
     minY = Math.min(minY, shapeMinY - half)
     maxY = Math.max(maxY, shapeMaxY + half)
+    // The AUTHORED geometry as well, with no stroke added. The clipping case
+    // adds its own half-stroke per rung, and would double-count it otherwise.
+    rawMinX = Math.min(rawMinX, shapeMinX)
+    rawMaxX = Math.max(rawMaxX, shapeMaxX)
+    rawMinY = Math.min(rawMinY, shapeMinY)
+    rawMaxY = Math.max(rawMaxY, shapeMaxY)
   }
-  return { width: maxX - minX, height: maxY - minY }
+  return {
+    width: maxX - minX,
+    height: maxY - minY,
+    maxRadius,
+    minX: rawMinX,
+    minY: rawMinY,
+    maxX: rawMaxX,
+    maxY: rawMaxY,
+  }
+}
+
+/**
+ * How much of the grid a flood actually covers, in square units.
+ *
+ * The question a bounding box cannot answer. `SlidersHorizontal` inks 18x18 of
+ * the grid in both weights and covers NOTHING when filled, because nine
+ * straight runs enclose no area — the mark a toggle draws was identical on and
+ * off while every box measurement agreed it was fine.
+ *
+ * Measured as the shoelace area of each subpath the renderer would close, which
+ * is what SVG does to an unclosed path when it fills it. A rect and a circle
+ * are taken analytically; a rounded rect is measured as its box, which
+ * overstates it by the corners and is nowhere near the threshold this is used
+ * at. The points a curve contributes include its extrema out of traversal
+ * order, so the number is approximate — fine for a test that separates "covers
+ * a fifth of the grid" from "covers exactly zero".
+ */
+function floodedArea(name) {
+  const svg = icon(name, 24, "filled")
+  let total = 0
+  for (const node of svg.querySelectorAll("*")) {
+    const tag = node.tagName.toLowerCase()
+    const attr = (key) => Number(node.getAttribute(key))
+    if (tag === "rect") {
+      total += attr("width") * attr("height")
+      continue
+    }
+    if (tag === "circle") {
+      total += Math.PI * attr("r") ** 2
+      continue
+    }
+    const points = []
+    walkPath(node.getAttribute("d"), (x, y) => points.push([x, y]))
+    let shoelace = 0
+    for (let index = 0; index < points.length; index += 1) {
+      const [x1, y1] = points[index]
+      const [x2, y2] = points[(index + 1) % points.length]
+      shoelace += x1 * y2 - x2 * y1
+    }
+    total += Math.abs(shoelace) / 2
+  }
+  return total
 }
 
 /**
  * The window the glyph is drawn through, in grid units.
  *
  * `inkBox` measures the AUTHORED geometry, which is not what reaches the eye:
- * `drawIcon` widens the viewBox around (12,12) for a glyph whose data inks more
- * of the grid than the budget, so the same path lands smaller in the same box of
- * pixels. Rendered ink is therefore the authored box scaled by 24/side, and that
- * — not the path data — is the number the family has to agree on.
+ * `drawIcon` widens the viewBox around (12,12) so a glyph that inks more of the
+ * grid lands smaller in the same box of pixels. Rendered ink is therefore the
+ * authored box scaled by 24/side, and that — not the path data — is the number
+ * the family has to agree on.
  */
 function window24(name) {
   const [minX, minY, side] = icon(name, 24).getAttribute("viewBox").split(/\s+/).map(Number)
   return { minX, minY, side }
 }
 
-function drawnInk(name) {
-  const box = inkBox(name)
+function drawnInk(name, weight = "outline") {
+  const box = inkBox(name, weight)
   const { side } = window24(name)
-  return { width: (box.width * 24) / side, height: (box.height * 24) / side }
+  return {
+    width: (box.width * 24) / side,
+    height: (box.height * 24) / side,
+    maxRadius: (box.maxRadius * 24) / side,
+  }
 }
 
-// Every glyph the bottom strip draws. Two of them — the panel toggles — sit on
-// 22 of the grid where the rest are on 20; the strip is where that difference
-// would show, so the strip is what this measures.
-const TOOLBAR_GLYPHS = [
-  "Layers",
-  "SlidersHorizontal",
-  "RotateCcw",
-  "RotateCw",
-  "Cursor",
-  "CursorOutline",
-]
+/*
+ * The optical tier is GONE, and its absence is the contract now.
+ *
+ * This used to assert that every glyph was normalised to one extent — first the
+ * longest side at exactly 20 of the 24 grid, later a blend of that box with the
+ * radial reach. Both existed because the previous family was assembled from a
+ * source whose own extents ran 15.5 to 22.8, and each glyph had to be fitted by
+ * widening its personal viewBox until it matched the rest.
+ *
+ * None of that survives a stroke family, and it must not:
+ *
+ *   - Re-windowing scales the STROKE along with the drawing. A glyph pulled in
+ *     to match its neighbours arrives correctly sized and proportionally
+ *     lighter, which trades a size error for a weight error — and in a stroke
+ *     family the weight is the thing that has to match.
+ *
+ *   - The extents SHOULD vary. Lucide draws `ChevronRight` at 6x12 of the grid
+ *     and `Layers` at 20x20, on purpose: a chevron is a light directional mark
+ *     and a layer stack is an object, and forcing the chevron out to 20 would
+ *     make it shout. That variation is the family's optical sizing, not drift
+ *     in it.
+ *
+ * So what replaces the tier is the pair of rules a stroke family actually needs
+ * — uniform stroke weight per rung, and no clipping — both asserted above. What
+ * is asserted here is the thing that would silently undo them: that nobody has
+ * reintroduced a per-glyph window.
+ */
+check("no glyph is re-windowed, because a stroke cannot survive it", () => {
+  const offenders = []
+  for (const name of ICON_NAMES) {
+    const viewBox = icon(name, 24).getAttribute("viewBox")
+    if (viewBox !== "0 0 24 24") offenders.push(`${name}: ${viewBox}`)
+  }
+  assert.deepEqual(offenders, [])
+})
 
-check("the toolbar's glyphs all draw to one ink tier", () => {
-  // The tier is 20x20 of the 24 grid. It is asserted on the first glyph as a
-  // number once, and every other glyph is then measured against that glyph
-  // rather than against a second typed number that could drift from it.
-  const [first, ...rest] = TOOLBAR_GLYPHS
-  const reference = drawnInk(first)
-  assert.ok(
-    Math.abs(reference.width - 20) < 0.001 && Math.abs(reference.height - 20) < 0.001,
-    `the reference glyph moved: ${first} now draws ${reference.width.toFixed(3)}x${reference.height.toFixed(3)}`
-  )
-  for (const name of rest) {
-    const box = drawnInk(name)
+/*
+ * Lucide's own optical sizing reaches the DOM intact.
+ *
+ * The rule above says no glyph was re-fitted; this says the variation that
+ * survives is the RIGHT variation, and not an artefact of the vendoring. `X`
+ * and `Plus` are the pair that isolates it: the same two arms, one set rotated
+ * 45 degrees. A designer draws the diagonal one smaller, because its corners
+ * reach further into the eye at the same box size — `X` inks 12 of the grid
+ * where `Plus` inks 14.
+ *
+ * If a future change reintroduced box normalisation, these two would come out
+ * equal and this would fail. That is the point: the naive fix for "the icons
+ * are inconsistent sizes" is exactly the change that breaks them.
+ */
+check("a diagonal glyph is drawn smaller than its axis-aligned twin", () => {
+  const box = (name) => {
+    const ink = drawnInk(name)
+    return Math.max(ink.width, ink.height)
+  }
+  const x = box("X")
+  const plus = box("Plus")
+  assert.ok(x < plus - 1, `X (${x.toFixed(2)}) is not pulled in from Plus (${plus.toFixed(2)})`)
+  // And not so far in that it stops reading as the same size mark.
+  assert.ok(x > plus * 0.75, `X (${x.toFixed(2)}) has been shrunk past recognition`)
+})
+
+/*
+ * Asking for a fill must not resize the mark.
+ *
+ * Structurally guaranteed now rather than arranged: the two weights are one set
+ * of shapes painted two ways, so there is no second drawing to drift. It was
+ * arranged before — the old family drew each weight separately and did not
+ * author them to the same extent, so `Cursor` inked 17.5 as an outline and 16.0
+ * as a fill, and normalising them apart made the glyph jump a few per cent
+ * larger at the exact moment the eye was on it.
+ *
+ * Kept because the guarantee is only structural while the shapes stay shared.
+ * The obvious future edit — hand-tuning a heavier silhouette for the filled
+ * pointer, since it is the one glyph that fills — reintroduces exactly the old
+ * failure, and this is what would catch it.
+ */
+check("a glyph is the same size in both weights", () => {
+  for (const name of ICON_NAMES) {
+    const outline = drawnInk(name, "outline")
+    const filled = drawnInk(name, "filled")
+    const spread = Math.max(
+      Math.abs(outline.width - filled.width),
+      Math.abs(outline.height - filled.height)
+    )
     assert.ok(
-      Math.abs(box.width - reference.width) < 0.001 &&
-        Math.abs(box.height - reference.height) < 0.001,
-      `${name} draws ${box.width.toFixed(3)}x${box.height.toFixed(3)}, not ${reference.width}x${reference.height}`
+      spread < 2,
+      `${name} resizes on press: ${outline.width.toFixed(2)}x${outline.height.toFixed(2)} outline vs ${filled.width.toFixed(2)}x${filled.height.toFixed(2)} filled`
     )
   }
 })
@@ -420,43 +959,32 @@ check("the two panel toggles are told apart from each other", () => {
     Array.from(icon(name, 24).querySelectorAll("*"))
       .map((node) => Array.from(node.attributes).map((a) => `${a.name}=${a.value}`).join(" "))
       .join(" | ")
-  assert.notEqual(shape("Layers"), shape("SlidersHorizontal"), "both toggles draw the same thing")
+  assert.notEqual(shape("PanelLeft"), shape("PanelRight"), "both toggles draw the same thing")
 })
 
 /*
- * Re-windowing is only sound for a FILLED glyph.
- *
- * Widening the viewBox scales the drawing down inside an unchanged box, which
- * fixes an extent. On a stroked glyph it scales the STROKE too, so the glyph
- * arrives the right size and a third too light — trading a size error for a
- * weight error, which is the exact move the comment above `RotateCcw` refuses.
- * A stroked glyph that inks over budget has to be re-solved in its path data.
+ * The case that stood here — "only a filled glyph is fitted by its window" —
+ * is retired. It policed a trade this family no longer makes: it allowed a
+ * per-glyph window as long as the glyph did not stroke. Every glyph strokes
+ * now, so the honest form of the rule is that NOTHING is fitted, which
+ * "no glyph is re-windowed" asserts directly rather than conditionally.
  */
-check("only a filled glyph is fitted by its window", () => {
-  for (const name of ICON_NAMES) {
-    if (window24(name).side === 24) continue
-    const svg = icon(name, 24)
-    for (const node of [svg, ...svg.querySelectorAll("*")]) {
-      const stroke = node.getAttribute("stroke")
-      assert.ok(
-        !stroke || stroke === "none",
-        `${name} is re-windowed but strokes, so it will arrive under weight`
-      )
-    }
-  }
-})
 
 check("the retired panel glyphs are gone, not left drawing nothing", () => {
   const retired = [
-    "PanelLeft",
-    "PanelRight",
     "Move",
     "Hand",
-    // The four-glyph open/collapsed pair the two toggles above replaced.
+    // The four-glyph open/collapsed pair the two toggles replaced, and then the
+    // two contents marks — a layer stack and a slider rack — that replaced
+    // THOSE and have in turn been replaced by `PanelLeft` / `PanelRight`. The
+    // frames are back because a mirrored pair is read rather than learned, and
+    // because a panel's contents move while the edge it hangs off does not.
     "SidebarLeft",
     "SidebarLeftCollapsed",
     "SidebarRight",
     "SidebarRightCollapsed",
+    "Layers",
+    "SlidersHorizontal",
   ]
   for (const name of retired) {
     assert.ok(!ICON_NAMES.includes(name), `${name} is still in the set with nothing drawing it`)
@@ -478,6 +1006,54 @@ check("every glyph is decorative and drawn on a grid centred on the 24 box", () 
     assert.equal(svg.getAttribute("width"), "12", `${name} ignored its size argument`)
     assert.equal(svg.getAttribute("height"), "12", `${name} ignored its size argument`)
   }
+})
+
+console.log("\nRoom to draw in")
+
+/*
+ * A glyph asked for at 16 has to come out at 16, and the stylesheet is where
+ * that is won or lost.
+ *
+ * The note-row actions shipped drawn 4x16 — a quarter of their width, a smear
+ * rather than an icon — and every other check in this file passed the whole
+ * time. They had to: `icon()` emitted a correct 16x16 `<svg>`, the size was on
+ * the ramp, the glyph was centred on its grid. The damage happened afterwards,
+ * in layout, from Chrome's UA `padding: 1px 6px` eating twelve of the eighteen
+ * pixels the button had. Nothing that reads the DOM in jsdom can see it, because
+ * jsdom has no layout at all.
+ *
+ * So these two check the invariants that make the squash impossible, rather
+ * than the rendering that would reveal it. Both live in `css/base.ts`, both are
+ * one line, and either one going missing brings the whole class of bug back.
+ */
+check("the chrome resets the UA's button padding, and at zero specificity", () => {
+  const reset = shellCss.match(/:where\(\[data-design-editor\] button\)\s*\{([^}]*)\}/)
+  assert.ok(
+    reset,
+    "no `:where([data-design-editor] button)` reset — an icon button's content " +
+      "box is 12px narrower than the square it pins, and its glyph gets squashed"
+  )
+  assert.match(reset[1], /padding:\s*0\s*;/, "the button reset no longer zeroes padding")
+  // Unwrapped, the selector is (0,1,1) and outweighs every `.de-` class here —
+  // which would not remove the UA's padding, it would strip the deliberate
+  // padding off every text button in the chrome.
+  assert.ok(
+    !/(^|\n)\[data-design-editor\] button\s*\{/.test(shellCss),
+    "the button padding reset is unwrapped, so it overrules the rules it should lose to"
+  )
+})
+
+check("a glyph that cannot fit its button overflows instead of shrinking", () => {
+  const rule = shellCss.match(/\[data-design-editor\] svg\s*\{([^}]*)\}/)
+  assert.ok(rule, "no base rule for the chrome's `<svg>` elements")
+  // Every icon button here is a flex container, so the glyph is a flex item and
+  // will be shrunk to fit a content box that is too small — silently, still
+  // looking like an icon. `flex: none` turns that into a visible overflow.
+  assert.match(
+    rule[1],
+    /flex:\s*none\s*;/,
+    "the chrome's glyphs can be flex-shrunk again, which fails by looking fine"
+  )
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

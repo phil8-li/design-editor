@@ -7,6 +7,7 @@ import {
   type TailwindTokenAlias,
   type TrackingUnit,
 } from "./config"
+import { activeDesignSystem } from "../libraries/store"
 import { splitVariantChain } from "./responsive"
 
 /**
@@ -299,10 +300,19 @@ export function plainValue(property: DesignTokenProperty, value: string): string
 
 function unique<T>(values: readonly T[]): T[] { return [...new Set(values)] }
 
-/** The catalog tokens a property may be bound to. One owner: panels list these. */
+/**
+ * The catalog tokens a property may be bound to. One owner: panels list these.
+ *
+ * The default registry is the MERGED catalog rather than `config.designSystem`,
+ * and that one substitution is the whole of what libraries cost this module: a
+ * library's tokens arrive in the same arrays, already named for their library,
+ * and nothing below can tell one from a host token. With nothing enabled —
+ * nearly every session — `activeDesignSystem()` hands back the host's own
+ * object, so the default is unchanged in both value and identity.
+ */
 export function tokensForProperty(
   property: DesignTokenProperty,
-  registry: DesignSystemCatalog = config.designSystem
+  registry: DesignSystemCatalog = activeDesignSystem()
 ): DesignSystemToken[] {
   if (property === "text-style") return [...registry.textStyles, ...registry.uiTextStyles]
   return registry[PROPERTY_CATEGORY[property]] as DesignSystemToken[]
@@ -378,7 +388,7 @@ export function authoredTokenMatches(
   property: DesignTokenProperty,
   inlineValue: string,
   classNames: readonly string[],
-  registry: DesignSystemCatalog = config.designSystem
+  registry: DesignSystemCatalog = activeDesignSystem()
 ): DesignSystemMatch[] {
   const tokens = tokensForProperty(property, registry)
   const byId = tokenIndex(registry)
@@ -532,7 +542,7 @@ function rawTokenValues(
 export function computedTokenMatches(
   property: DesignTokenProperty,
   computedValue: string,
-  registry: DesignSystemCatalog = config.designSystem,
+  registry: DesignSystemCatalog = activeDesignSystem(),
   resolveCssVar: (name: string) => string = (name) => `var(${name})`
 ): DesignSystemMatch[] {
   const targetNumber = scalar(computedValue)

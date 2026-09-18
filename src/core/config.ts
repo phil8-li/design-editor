@@ -54,6 +54,24 @@ export interface DesignSystemToken {
   documented?: boolean
   /** Breakpoints only. The source file that owns the number, for the hint line. */
   owner?: string
+  /**
+   * Set when this token came from an added library rather than from the host's
+   * own design system, and left unset on every host token.
+   *
+   * They live here, on the host's own token type, because the merged catalog is
+   * ONE list: a library's colours are concatenated into `designSystem.colors`
+   * and every picker walks that array without knowing where a row came from,
+   * which is what keeps the rest of the editor unaware of the feature. A
+   * parallel type for library tokens would have needed a parallel path through
+   * matching, grouping and writing to go with it.
+   *
+   * `library` is the library's id, which is also the prefix on the token's own
+   * id; `libraryName` is what a person calls it, and is here rather than looked
+   * up because a surface holding a token should not have to hold the library
+   * list as well to be able to say where it came from.
+   */
+  library?: string
+  libraryName?: string
 }
 
 export interface DesignSystemAlias {
@@ -111,6 +129,7 @@ export interface DesignEditorConfig {
    * than no link, because it takes the designer off the page to find out.
    */
   chooserUrl: string | null
+  app: AppConfig
   chrome: {
     /** Comma-joined selector list. Empty means the host has no extra dev chrome. */
     trustedSelector: string
@@ -120,6 +139,37 @@ export interface DesignEditorConfig {
   designSystem: DesignSystemCatalog
   icons: IconSetConfig
   host: HostConfig
+  agentation: AgentationConfig
+}
+
+/**
+ * The annotation toolbar's two settings.
+ *
+ * `endpoint` is a URL this bundle only ever hands to Agentation, which fetches
+ * it itself — so a null is not an error state, it is "keep the notes in this
+ * tab and let the designer copy them out".
+ */
+export interface AgentationConfig {
+  enabled: boolean
+  endpoint: string | null
+}
+
+/**
+ * The app under the overlay: where it is, and what its project calls itself.
+ *
+ * Both exist for the app chooser, which has to name the current app the moment
+ * the chrome draws rather than after a round trip. `url` is the identity the
+ * chooser's rows are addressed by, so the menu can mark which row is the one
+ * already open; `name` is what goes on the control.
+ *
+ * Either can be null, and they go null independently: a launch that has not
+ * resolved a port yet knows the name and not the URL, and a project with no
+ * package.json is the other way round. Neither is a path — see the prelude in
+ * config.mjs for why the host's folder does not travel.
+ */
+export interface AppConfig {
+  url: string | null
+  name: string | null
 }
 
 /**
@@ -194,6 +244,12 @@ function emptyDesignSystem(
 const FALLBACK: DesignEditorConfig = {
   apiBase: "/__design-editor",
   chooserUrl: null,
+  app: { url: null, name: null },
+  // Off when the prelude said nothing. Every other fallback in this object
+  // describes a stock host; this one describes a page the editor was loaded
+  // into by something that predates the setting, and mounting a third-party
+  // toolbar there on a guess is the one failure mode worth refusing outright.
+  agentation: { enabled: false, endpoint: null },
   chrome: {
     trustedSelector: "",
     dockedPanel: {
@@ -273,18 +329,21 @@ function readDesignSystem(
 }
 
 /**
- * The chooser's URL, checked again on this side of the wire.
+ * An origin from the payload, checked again on this side of the wire.
  *
- * The launcher already refuses anything that is not a loopback http URL, so
- * this is a second pass over a value that should already be clean — and it is
- * here anyway because this is the ONE string in the payload that becomes a
- * navigation. Everything else lands in a selector, a class name or a number;
- * this lands in an `href`, where `javascript:` is code and an off-machine host
- * is a page that is not the editor's. A bundle served from a stale `dist/`, or
- * loaded with a prologue written by something other than this package's
- * launcher, must not be the reason a designer leaves the machine.
+ * Written for the chooser's URL, which is the ONE string in the payload that
+ * becomes a navigation. Everything else lands in a selector, a class name or a
+ * number; that one lands in an `href`, where `javascript:` is code and an
+ * off-machine host is a page that is not the editor's. A bundle served from a
+ * stale `dist/`, or loaded with a prologue written by something other than this
+ * package's launcher, must not be the reason a designer leaves the machine.
+ *
+ * `app.url` goes through the same check. Nothing navigates to it today — it is
+ * compared against the chooser's rows and shown — but it is an origin, and an
+ * origin nobody checked is one link away from being the bug above. One
+ * implementation, so the two cannot come to disagree about what loopback means.
  */
-function readChooserUrl(value: unknown): string | null {
+function readLoopbackUrl(value: unknown): string | null {
   if (typeof value !== "string") return null
   try {
     const url = new URL(value)
@@ -293,6 +352,25 @@ function readChooserUrl(value: unknown): string | null {
     return host === "localhost" || host === "127.0.0.1" || host === "::1" ? url.href : null
   } catch {
     return null
+  }
+}
+
+/**
+ * Read per leaf, like `readHost`: a session that knows the app's name but not
+ * its port yet is the normal state during a `--dev` launch, not a broken
+ * payload, and losing the name over the missing URL would blank the control
+ * that exists to show it.
+ */
+function readApp(value: unknown): AppConfig {
+  if (!isRecord(value)) return FALLBACK.app
+  const checked = readLoopbackUrl(value.url)
+  return {
+    // The origin, not the checked href. `URL.href` writes an empty path back as
+    // a trailing slash, and the chooser's rows carry `http://127.0.0.1:3000`
+    // with none — so the two spellings of the same app would never compare
+    // equal and the menu would mark no row as the one already open.
+    url: checked === null ? null : new URL(checked).origin,
+    name: typeof value.name === "string" && value.name.length > 0 ? value.name : null,
   }
 }
 
@@ -342,7 +420,8 @@ function read(): DesignEditorConfig {
 
   return {
     apiBase: str(raw.apiBase, FALLBACK.apiBase),
-    chooserUrl: readChooserUrl(raw.chooserUrl),
+    chooserUrl: readLoopbackUrl(raw.chooserUrl),
+    app: readApp(raw.app),
     chrome: {
       // Not `str()`: an empty list is a documented, meaningful answer ("this
       // host has no dev chrome"), so only an absent key falls back. Treating
@@ -371,7 +450,28 @@ function read(): DesignEditorConfig {
     designSystem: readDesignSystem(raw.designSystem, breakpoints, containerBreakpoints),
     icons: readIconSet(raw.icons),
     host: readHost(raw.host),
+    agentation: readAgentation(raw.agentation),
   }
+}
+
+/**
+ * The endpoint is checked for loopback for the same reason `chooserUrl` is.
+ *
+ * Everything else in this payload is data the bundle reads; this one is an
+ * origin the toolbar POSTs annotations to — element paths, computed styles and
+ * whatever the designer typed. A prelude that named a remote host would exfil
+ * the page, so a non-loopback URL is dropped and the toolbar falls back to
+ * keeping its notes in the tab.
+ */
+function readAgentation(value: unknown): AgentationConfig {
+  if (!isRecord(value) || value.enabled === false) return FALLBACK.agentation
+  // `readLoopbackUrl` answers with `URL.href`, which always carries a trailing
+  // slash on a bare origin. Agentation concatenates `${endpoint}/sessions`, so
+  // the slash that makes the URL canonical is the one that makes its requests
+  // 404 — trimmed here rather than in the server payload, because the server
+  // is not the side that knows how this string gets used.
+  const endpoint = readLoopbackUrl(value.endpoint)
+  return { enabled: true, endpoint: endpoint ? endpoint.replace(/\/+$/, "") : null }
 }
 
 /**

@@ -48,6 +48,61 @@ export interface EditorState {
   locked: ReadonlySet<Element>
   layersOpen: boolean
   inspectorOpen: boolean
+  /**
+   * Which of the inspector's tabs is showing.
+   *
+   * It lives here rather than staying the private variable it was inside
+   * `installInspector`, because the toolbar now has to be able to say "show me
+   * the Changes tab" — the bar's commit button became a status indicator, and
+   * an indicator that cannot take you to the thing it counts is just a number.
+   * The store is how every lane in this editor reaches another one, and a
+   * direct call into the panel would be the first exception to that.
+   *
+   * The inspector still OWNS it: it writes this when a tab is clicked and reads
+   * it to decide what to show, so the two directions are one value rather than
+   * a setter with a second opinion beside it. Anything else wanting a tab asks
+   * the same way and never learns the panel's internals.
+   */
+  inspectorTab: string
+  /**
+   * Which of the left panel's tabs is showing — Layers, Assets, Design system.
+   *
+   * Here for the reason `inspectorTab` is here, arrived at one surface later:
+   * the keyboard has to be able to say "show me Assets" (⌥2, Figma's key), and
+   * the store is how one lane reaches another. `panels/left.ts` still OWNS it —
+   * it writes on a tab click and reads to decide what to show — so the value is
+   * one fact rather than a setter with a second opinion beside it.
+   *
+   * A string rather than a union of the three ids, matching `inspectorTab`: the
+   * panel decides what tabs exist, and a type here would be a second list to
+   * keep in step with the array that actually builds them.
+   */
+  leftTab: string
+  /**
+   * The editor stands down entirely: no panels, no toolbar, no canvas chrome —
+   * one floating button to bring it back, and nothing else.
+   *
+   * Not the same thing as closing both panels. `layersOpen` and `inspectorOpen`
+   * say which surface you want to READ while you work; this one says you are
+   * not working in the editor for a minute, so it hands the pointer back to the
+   * app as well (see `editorOwnsInput`). Closing both panels leaves a toolbar
+   * that still swallows every click, which is the state this exists to replace.
+   *
+   * Deliberately not persisted: a session that started hidden would look like
+   * an editor that failed to load, and the way back is one click.
+   */
+  chromeHidden: boolean
+  /**
+   * Annotation mode: a click pins a note instead of selecting one.
+   *
+   * A mode beside `interactive` rather than a `tool`, for the same reason
+   * `interactive` is one: a tool changes what a canvas gesture MEANS to the
+   * selection lane, and this decides whether the selection lane sees the
+   * gesture at all. The two are mutually exclusive by construction — the
+   * toolbar drops one when it raises the other — because "hand every click to
+   * the app" and "intercept every click" cannot both answer the same question.
+   */
+  annotating: boolean
   /** Option sets keyed by `Selection.key`. */
   optionSets: Record<string, ElementOptionSet>
   dirty: boolean
@@ -64,6 +119,16 @@ const state: EditorState = {
   locked: new Set<Element>(),
   layersOpen: true,
   inspectorOpen: true,
+  // Design, the same tab `installInspector` has always landed on. Named here
+  // rather than left empty so the panel has an answer before it first paints.
+  inspectorTab: "design",
+  // Layers, which is the tab `installLeftPanel` has always landed on — the tree
+  // answers "what is on this page", and that is the question a session opens
+  // with. Named here for the same reason `inspectorTab` is: the panel has an
+  // answer before it first paints.
+  leftTab: "layers",
+  chromeHidden: false,
+  annotating: false,
   optionSets: {},
   dirty: false,
 }
@@ -105,9 +170,70 @@ export function primarySelection(): Selection | null {
  * the double-click that still drills, the pointerdown that still starts a drag
  * — is worse than no mode, because the user has already stopped expecting the
  * editor to intercept anything.
+ *
+ * Hidden chrome answers the same way, and has to: an editor with nothing on
+ * screen that still ate every click would be indistinguishable from a page
+ * that had frozen. Two reasons, one gate — which is the whole point of asking
+ * a function. The painters ask it too, so a stale outline cannot be left over
+ * an app the editor has stood down from.
  */
 export function editorOwnsInput(): boolean {
-  return !state.interactive
+  return !state.interactive && !state.chromeHidden
+}
+
+/**
+ * Whether the SELECTION lane should act on a canvas gesture.
+ *
+ * Narrower than `editorOwnsInput`, and the difference is annotation mode. The
+ * editor owns the pointer more firmly than ever while annotating — it is
+ * intercepting every click — but the thing it does with it is pin a note, not
+ * move a selection. Hover outlines, drag-to-move, marquee, the layer menu and
+ * the arrow-key nudge all ask this instead, so annotation mode cannot leak a
+ * resize handle or a drilled scope out of one handler that forgot.
+ *
+ * Kept here beside `editorOwnsInput` rather than in the annotation lane so
+ * that the canvas has one place to ask, and both answers come from one store.
+ */
+export function selectionOwnsInput(): boolean {
+  return editorOwnsInput() && !state.annotating
+}
+
+/**
+ * What a click does. There are exactly three answers.
+ *
+ * `inspecting` selects, `annotating` pins a note, `interactive` hands the
+ * pointer back to the app. They are stored as two booleans for the same reason
+ * they always were — every gate in the canvas lane reads one of them — but two
+ * booleans spell FOUR states, and the fourth (`interactive` and `annotating`
+ * both true) is not a mode anybody can describe. A user who reached it would be
+ * clicking on a page where nothing happened, with two lit controls and no way
+ * to tell which was lying.
+ *
+ * So the pair is written through `setMode` and read through `editorMode`, and
+ * the illegal combination is unreachable by construction rather than by every
+ * call site remembering to clear the other flag.
+ */
+export type EditorMode = "inspecting" | "annotating" | "interactive"
+
+export function editorMode(): EditorMode {
+  if (state.annotating) return "annotating"
+  return state.interactive ? "interactive" : "inspecting"
+}
+
+/**
+ * Moves to one of the three, clearing whatever the last one set.
+ *
+ * Dropping the hover target on the way out of `inspecting` is the same
+ * housekeeping `setInteractive` always did: `hovered` is written on every
+ * pointermove and a stale one keeps the canvas frame loop awake painting an
+ * outline over an app the editor has stood down from.
+ */
+export function setMode(mode: EditorMode): void {
+  setState({
+    interactive: mode === "interactive",
+    annotating: mode === "annotating",
+    ...(mode === "inspecting" ? {} : { hovered: null }),
+  })
 }
 
 /**

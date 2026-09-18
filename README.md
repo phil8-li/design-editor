@@ -91,9 +91,10 @@ edit, which page of it to open, and where its source is.
   and says so, rather than leaving the previous row's folder standing.
 - **Which page.** The URL is where you say it. Type `127.0.0.1:3000/pricing` and
   that is the page you land on, not the app's `/`.
-- **Where its source is.** Paste a folder path, or browse to one — "Browse"
-  opens the machine's own dialog, so Finder's sidebar, favourites and search are
-  all there rather than a list this tool drew. It reads that folder's
+- **Where its source is.** Type or paste the folder's full path. `~` works, and
+  so does a folder dragged onto a terminal — the shell's escaping is undone for
+  you — so Finder's Copy as Pathname, `pwd`, and the command line of the running
+  dev server all produce something the field takes as-is. It reads that folder's
   `package.json` to confirm it is the right project and to find the dev script,
   and tells you what it is about to run before you commit to it.
 
@@ -108,6 +109,52 @@ found, and a broken render is exactly when you want the overlay in front of it.
 That is the whole flow, so nothing about your project has to change first. There
 is no config file to write, no script to add, and no dependency to install into
 the app you are editing.
+
+### Getting the editor out of the way
+
+**⌘. — Ctrl+. on Windows and Linux**, the same key Figma uses, and the collapse
+button in the toolbar does the same thing. The panels slide out to the edges
+they are docked to, the bar drops through the bottom, and the app gets the full
+window and its own clicks back — the same pass-through as interactive mode, with
+nothing left on screen to argue with it. What stays is one round button in the
+bottom-right corner; press it, or the shortcut again, and everything comes back.
+
+The shortcut works from anywhere on the page, including while the editor is
+hidden and the focus is somewhere in your app — it is the way back, so it cannot
+depend on the editor having the keyboard. Typing a full stop into one of the
+editor's own fields is left alone.
+
+Drag that button somewhere else if it is standing where you want to look. It
+stays inside the window, it remembers where you left it, and the drag that ends
+on it does not also count as a press.
+
+### Resizing the panels
+
+Grab the inner edge of either panel and pull. There is no gutter and no grip to
+find — the hairline between the chrome and your app *is* the handle, and it
+lights up when the pointer is near enough to take it. Your app reflows while you
+drag rather than when you let go, so the layout you widened the inspector to
+look at is the layout you end up looking at.
+
+| Gesture | Does |
+| --- | --- |
+| **Drag** the inner edge | Resize. The app follows live. |
+| **Arrow keys** on a focused edge | 10px a press; 50px with Shift, or Page Up/Down |
+| **Home / End** | Straight to the narrowest or widest the panel may be |
+| **Double-click** the edge | Back to the width it started at |
+| **Drag past half the minimum** | Closes the panel, same as its toolbar toggle |
+
+Each panel keeps its own bounds: it will not go narrower than its contents can
+use, and neither may take more than about a third of the window, so the canvas
+stays the largest thing on screen. Shrink the window under two wide panels and
+they give room back until the app has room to be looked at; grow it again and
+they return to the widths you set. Those widths outlive the tab.
+
+The resizing is [`motion-panels`](https://motion-panels.letstri.dev), wired
+through its framework-agnostic core rather than its React adapter, because this
+overlay is plain DOM. The library owns the drag, the bounds, the keyboard map
+and the settle; the panels keep their own stylesheet, and nothing about how the
+chrome looks at rest moved to make room for it.
 
 ### Switching apps
 
@@ -251,10 +298,12 @@ Responsive section writes Tailwind breakpoint variants, so it appears only where
 Tailwind is compiled — hidden on a React app without it, shown on an Angular app
 with it. The Code tab drops its JSX view for an Angular element, because
 `className=` describes a file that does not exist, and the class list stops
-calling itself "Tailwind classes" in a project that has none. The Ask AI brief
-tells the agent to edit a `class` attribute in a template and to leave
-`[class.x]`, `[ngClass]`, `@if` and `{{ }}` alone. `test/host-parity-cases.mjs`
-renders the panel under each host and fails if any of that drifts.
+calling itself "Tailwind classes" in a project that has none. The handoff record
+follows the same rule: on an Angular host it reports the element's `class`, not
+its `className`, because a brief that names a JSX attribute sends an agent
+looking through `.html` templates for something that was never there.
+`test/host-parity-cases.mjs` renders the panel under each host, files a real
+request through each, and fails if any of that drifts.
 
 Under the hood the vendored `react-rewrite-cli` still supplies the proxy, the
 script injection and the overlay's hit-testing, none of which know what
@@ -499,6 +548,38 @@ Activating “Show affected” dispatches
 `{ path, relationship, selectors, elements }`; a canvas integration may draw
 those elements without coupling the options inventory to canvas state.
 
+## Deleting a layer
+
+Select an element and press **Delete** or **Backspace** — the same pair Figma
+takes, from the canvas or from a row in the Layers panel. Each row also carries
+a trash button beside its lock and eye, for when the keyboard is not where your
+hand is. A multi-select deletes as one step, and selecting a parent along with
+one of its own children deletes the parent once rather than cutting two
+overlapping holes in one file.
+
+**Cmd+Z puts it back**, between the same two siblings it came from, and takes
+the pending source write back with it. A delete that is undone and never redone
+leaves nothing for "Apply to code" to write.
+
+Locked layers are not deleted. The tree can still select one — that is the only
+way back out of the lock — so the refusal lives with the delete itself rather
+than with the canvas.
+
+The source write is the one edit this package performs itself on both hosts. On
+Angular it splices the element out of its template; on React it splices the JSX
+element out of the file, as bytes rather than as a reprint, so nothing else in
+the file is reformatted. Both take the element's whole line when it had that
+line to itself, and both refuse rather than guess:
+
+| Refused | Because |
+| --- | --- |
+| An element matching two places in the file equally well | The wrong one would disappear, and nothing would say so |
+| A component's root element in JSX | `return ;` does not parse — delete the component instead |
+| An element inside `{open && …}` or a `.map()` callback | The branch would be left empty; delete the branch |
+
+A refusal is reported by name in the Apply toast, and the change stays on screen
+with a line in the Prompts tab an agent can act on.
+
 ## Where a change ends up
 
 Two surfaces catch an edit, and between them nothing is dropped.
@@ -524,6 +605,91 @@ in it. Only while it is the tab being looked at — a hidden pane is read when y
 switch to it, which is what keeps both it and the Code view off the hot path of
 a drag.
 
+## Handing a change to your coding agent
+
+The Prompts tab has two buttons. **Copy change prompts** writes the brief to the
+clipboard. **Send to agent** delivers the same bytes straight into a coding
+agent that is already running, with no paste.
+
+Copy is not a fallback and does not go away. The editor cannot see whether an
+agent is attached, so the paste path has to stay a peer.
+
+### How it works
+
+An MCP server cannot push work to an agent. The protocol's set of
+server-to-client messages is a closed list — pings, elicitation, roots, task
+bookkeeping, and notifications that a list has gone stale. There is no "here is
+a task, go do it". An agent's turn runs when a human types, or while a tool call
+it made has not yet returned, so a server's only way into that loop is to be
+*inside a tool call that has not returned yet*.
+
+The handoff is therefore not a push. It is a pull that was already parked: the
+agent calls a tool that blocks, you click, the tool returns.
+
+So the editor is the MCP **server** and your agent is the client, which reads
+backwards until you notice that MCP's roles are about who offers context, not
+who has a window.
+
+### Turning it on
+
+The editor serves MCP on its own fixed port — `ports.mcp`, default `5747` —
+rather than on the proxy, because `ports.proxy` is `auto` and this URL goes into
+an agent's config by hand. It prints the URL at startup:
+
+```
+[design-editor] MCP http://127.0.0.1:5747/mcp — point your agent at it
+```
+
+Point the agent at it as a **remote** server, not a local one. A local entry
+would spawn a second copy of this package with no editor attached to it:
+
+```jsonc
+// CloudCode: ~/.config/cloudcode/cloudcode.jsonc
+"mcp": {
+  "design-editor": { "type": "remote", "url": "http://127.0.0.1:5747/mcp", "enabled": true }
+}
+```
+
+```bash
+# Claude Code
+claude mcp add --transport http design-editor http://127.0.0.1:5747/mcp
+```
+
+Set `ports.mcp` to `null` to turn the endpoint off. A port already in use is a
+warning and nothing more — the editor starts, and Copy still works.
+
+### The loop
+
+Four tools, which together are a workflow rather than a verb:
+
+| Tool | What it does |
+|---|---|
+| `wait_for_change` | Drains anything already queued, otherwise blocks. Returns the changes with their brief, files and selected element. |
+| `list_changes` | The same, without blocking. |
+| `get_change` | One change by id. |
+| `resolve_change` | Marks it `applied` or `rejected` with a summary. |
+
+Tell the agent to work the loop — wait, apply, resolve, wait again — and
+pressing the button becomes the whole interaction.
+
+`resolve_change` is not bookkeeping. A change that stays pending is a change the
+next `wait_for_change` hands back, and an agent that never resolves will re-apply
+its own finished work until you stop it.
+
+### The 55-second ceiling
+
+`wait_for_change` blocks for at most 55 seconds and then returns
+`{"timeout": true}`. That is not an error; it means nobody has clicked yet, and
+the reply says so, so a model calls again instead of giving up.
+
+The number is not arbitrary. MCP clients abort a request at 60 seconds by
+default, and the escape hatch — progress notifications with
+`resetTimeoutOnProgress` — needs an SSE response stream, which this endpoint
+deliberately does not open. A timed-out request is worse than it sounds: the
+client stops listening and the server is never told, so the block is left
+holding the next click. A loop of short waits is indistinguishable from one long
+wait and cannot strand a watcher, so that is what this does.
+
 ## What it writes, and where
 
 - **Your component source**, only through an explicit edit, and only for files
@@ -531,7 +697,10 @@ a drag.
   (`.env*`, `*.config.*`, `node_modules`, `.git`). If `source.roots` is set,
   files outside those roots are refused as well.
 - **`<stateDir>/options.json`** — saved option sets, written atomically.
-- **`<stateDir>/requests/`** — AI handoff files, when no Claude CLI is on PATH.
+- **`<stateDir>/requests/`** — one markdown file per handover, carrying the same
+  brief the Copy button writes. Written even when an agent is attached over MCP:
+  the file is the durable record, the queue push is only the trigger, and the
+  two answer different questions a week later.
 - **`<stateDir>/endpoint.json`** — the ports actually bound, so tooling can find
   a running instance without guessing. Best-effort: the start screen learns that
   an editor is up over IPC from the child that bound the ports, so a project
@@ -544,35 +713,38 @@ nothing else. Ship it nowhere near production.
 
 - Every route refuses a request that is not loopback, by peer address, `Host`,
   and `Origin`.
-- Both servers are forced to bind `127.0.0.1`, overriding the vendored CLI,
+- All three servers are forced to bind `127.0.0.1`, overriding the vendored CLI,
   which binds every interface.
+- The MCP endpoint applies that same guard, rather than a second copy of it. The
+  transport spec requires `Origin` validation against DNS rebinding, and it is
+  reachable by anything on the machine that can open a socket — so it shares the
+  routes' own `isLocalRequest`, including the part that treats `Origin: null` as
+  hostile rather than absent.
 - The file allowlist above is the only thing standing between the browser and
   `.env.local`, which lives in the same project root as your components. Keep
   `source.extensions` restrictive.
 
 ### What leaves your machine
 
-By default, nothing. With no `ANTHROPIC_API_KEY` in the environment, the editor
-opens no connection to anything but your own dev server. A free-form prompt it
-cannot write itself is queued to a handoff file for your own coding agent to
-pick up, and the reply says so rather than pretending the edit landed.
+Nothing, and there is no setting that changes it. The editor opens no connection
+to anything but the dev server you pointed it at and loopback. It holds no API
+key, sends no telemetry, and never calls a model: handing work over means writing
+a brief to `<stateDir>/requests/` and waking a coding agent you are already
+running, over MCP on `127.0.0.1`.
 
-Set `ANTHROPIC_API_KEY` and leave `agent.transport` at `auto`, and free-form
-prompts take a different path: the prompt, the selected element, and the
-surrounding source are sent to the Anthropic API so the change can be applied
-for you. That is an opt-in you make by setting the key, but it is the difference
-between a tool that stays on your machine and one that transmits your source
-code, so it should not be a surprise.
+That agent is of course free to send your source anywhere it likes — but it is
+*your* agent, running under whatever rules you already gave it, and this tool
+adds nothing to that.
 
-To keep the local behavior even when a key happens to be set:
-
-```js
-export default { agent: { transport: "handoff" } }
-```
+It was not always true. An earlier version could send the selected element and
+its whole source file to the Anthropic API when `ANTHROPIC_API_KEY` was set, and
+the `agent.transport` setting existed to turn that off. Both are gone with the
+"Ask AI" panel that was the only way to reach them, so the answer no longer
+depends on your environment.
 
 If your employer restricts which AI services may see your source code — many do,
-and the rule usually covers anything you write at work — that setting is the one
-to check before pointing this at a work project.
+and the rule usually covers anything you write at work — the question to ask is
+about the coding agent on the other end of the handoff, not about this editor.
 
 ## Performance boundary
 
@@ -603,11 +775,21 @@ this one. With neither present they print a skip and exit 0, so a bare clone is
 green and a skip never reads as a pass.
 
 The package suite covers its npm-bin entry point, options, selection, shell,
-hydration readiness, and offline source translation. It also covers the paths
+hydration readiness, and offline source translation. `test/resize-cases.mjs`
+drives the panel seams through jsdom — a supplied viewport rather than a real
+one, because a bounds check against a window that is always zero wide cannot
+tell a clamp from a no-op — and pins the parts the library does not own: the
+group it needs in order to work, the seam as a `role="separator"`, the app's
+inset following a live drag, and the rule that a panel gives room up when the
+window shrinks and takes exactly that room back when it grows. It also covers the paths
 this tool is judged on and cannot watch itself: the start screen and its folder
 dialog, bundle freshness, whole drag gestures driven through jsdom — pinning the
 value each one records as its "from" — and the two ways a write can fail to
 reach source, which must land in the Prompts tab rather than vanish.
+`test/delete-cases.mjs` runs the delete path end to end on both hosts, against
+real files in a temp project: the key, the undo that restores an element between
+its original siblings, and every refusal the two source writers are allowed to
+make — because a refusal that quietly becomes a write deletes the wrong element.
 `test/host-agnostic-cases.mjs` is the decoupling proof: three synthetic hosts
 under `test/fixtures` — a Tailwind v4 app whose `@theme` namespaces are spelled
 differently from this repo's, a Tailwind v3 app with a classic config scale and
@@ -631,10 +813,12 @@ runtime/start-screen.mjs    the loopback server behind the no-arguments flow
 runtime/start-screen-page.mjs   its document, and the script that drives it
 runtime/start-screen-style.mjs  its stylesheet, built from the editor's tokens
 runtime/local-apps.mjs      port scan, project inspection, folder listing
-runtime/folder-dialog.mjs   the machine's own folder picker, one entry per platform
 runtime/launcher.mjs        vendor resolution, monkey-patches, route mount
 runtime/vendor-patch.mjs    the 23 splices against react-rewrite-cli 0.1.1
+tools/build-icons.mjs       vendors src/core/icons.ts from Reicon; owns the name mapping
 server/angular-source.mjs   Angular component index, template scan, template writer
+server/react-source.mjs     JSX element removal, the one React write not in the vendor
+server/element-match.mjs    descriptor scoring and byte-range splicing, shared by both
 server/design-system-config.mjs token manifest and authored-alias normalization
 server/icon-set.mjs         the host icon set, read once and served on request
 server/routes.mjs           loopback-guarded HTTP routes
@@ -642,6 +826,9 @@ server/options-store.mjs    saved option sets
 server/control-defaults.mjs configured literal default reader/writer
 server/agent.mjs            AI edit transport
 src/core/angular.ts         the Angular resolver, edit queue and commit
+src/core/element-target.ts  how the browser describes an element to a source writer
+src/core/removal.ts         the delete queue, one for both hosts
+src/shell/resize.ts         the panel rail: motion-panels' core wired to plain DOM
 src/                        the editor UI, bundled to an IIFE
 test/host.mjs               where this package is, and where a host app is
 test/ui-change-cases.mjs    the harness
@@ -667,3 +854,24 @@ counts as one — and report it privately rather than in an issue.
 ## License
 
 [MIT](LICENSE) © Haoyang Li
+
+The editor's glyphs are [Reicon](https://reicon.dev) (MIT, © the Reicon
+authors), vendored as path data by `tools/build-icons.mjs` rather than imported
+— the overlay bundle takes no runtime dependencies. Change which glyph a name
+draws by editing the mapping in that script and re-running it; `npm run verify`
+fails if its output has gone stale.
+
+Three rules hold that set together, and each is enforced rather than documented
+and hoped for:
+
+- **One size ramp: 12, 16, 20, 24, 32.** Call sites name a role from
+  `tokens.icon` — `row`, `control`, `launcher`, `display`, `hero` — and
+  `IconSize` makes anything off the ramp a compile error. It had drifted to
+  seven sizes, including a 13 and a 14 that read as blur rather than as scale.
+- **Every glyph inks the same 20 of its 24 grid.** Reicon's own extents vary by
+  half again across the set, so the generator measures each glyph and fits its
+  viewBox. One window per icon, shared by both weights, so a control's mark
+  never changes size when it is pressed.
+- **On is filled, off is outline.** Each glyph ships both weights and the
+  stylesheet picks, reading `aria-pressed` / `aria-selected` off the control
+  itself — so a button's state and its icon cannot disagree.

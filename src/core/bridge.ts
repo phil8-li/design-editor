@@ -9,6 +9,7 @@
 
 import { isAngularHost, owningComponentName, resolveAngularSource } from "./angular"
 import type { ClassUpdate } from "./tailwind"
+import { notify } from "./toast"
 import type { SourceRef } from "./types"
 
 /**
@@ -67,6 +68,25 @@ export interface RewriteStore {
     operation: UpdateClassOperation,
     propertyKeys: string[]
   ): void
+  /**
+   * The inverse: take named properties back out of a merged operation.
+   *
+   * The Changes tab's delete button has to mean "this will not be written".
+   * Without this it could only ever mean "this row is now hidden" — the
+   * operation stayed queued, and Apply wrote it anyway, minutes after the
+   * designer watched the row disappear.
+   *
+   * OPTIONAL, because it is reached by patching the vendor bundle
+   * (`runtime/vendor-patch.mjs` exposes the engine's own `su`), and a prebuilt
+   * `dist/` served against an unpatched bundle still has to run. A caller that
+   * finds it missing must say so rather than report a withdrawal that did not
+   * happen; `core/withdraw.ts` is the single place that decides what to do
+   * about that.
+   *
+   * Dropping every property of an element removes the pending entry outright,
+   * which is what lets `hasChanges()` go quiet again on the last withdrawal.
+   */
+  removePendingPropertyOperation?(mergeKey: string, propertyKeys: string[]): void
   buildBatchOperations(): unknown[]
   hasChanges(): boolean
   addMove(move: unknown): unknown
@@ -157,10 +177,31 @@ function withAngularElementInfo(bridge: RewriteBridge): RewriteBridge {
   }
 }
 
+/**
+ * The bridge with `toast` answering in OUR voice, not the vendor's.
+ *
+ * `bridge.toast` is the vendor's `V`: one fixed `div` at bottom-left, two
+ * seconds, and a `kind` argument it accepts and then discards — so every
+ * `toast(message, "error")` in this package rendered exactly like a success.
+ * Forty-odd call sites reach it, directly or through `context.toast`, and
+ * replacing the method here rather than at each of them is what makes the
+ * swap total: there is no path left that can paint the old toast by accident.
+ *
+ * `Object.create` rather than a spread, unlike the wrapper above. `tokens` is
+ * defined on the bridge as GETTERS over the vendor's live values; spreading
+ * would freeze them into a snapshot taken at boot, and a prototype link keeps
+ * them live for the cost of the same one line.
+ */
+function withEditorToast(bridge: RewriteBridge): RewriteBridge {
+  const wrapped: RewriteBridge = Object.create(bridge)
+  wrapped.toast = (message: string, kind: "info" | "error" = "info") => notify(message, kind)
+  return wrapped
+}
+
 /** Resolves once the patched vendor overlay has installed the bridge. */
 export function whenBridgeReady(): Promise<RewriteBridge> {
   if (window.__DESIGN_EDITOR_BRIDGE__) {
-    return Promise.resolve(withAngularElementInfo(window.__DESIGN_EDITOR_BRIDGE__))
+    return Promise.resolve(withEditorToast(withAngularElementInfo(window.__DESIGN_EDITOR_BRIDGE__)))
   }
 
   return new Promise((resolve, reject) => {
@@ -168,7 +209,7 @@ export function whenBridgeReady(): Promise<RewriteBridge> {
     const poll = () => {
       const bridge = window.__DESIGN_EDITOR_BRIDGE__
       if (bridge) {
-        resolve(withAngularElementInfo(bridge))
+        resolve(withEditorToast(withAngularElementInfo(bridge)))
         return
       }
       if (Date.now() - started > BRIDGE_TIMEOUT_MS) {

@@ -20,6 +20,17 @@
  * which is the smallest operation that can express a style, a class or a text
  * change, and the only one that cannot silently rewrite control flow.
  *
+ * Inserting an element is the one operation that reaches past the template. A
+ * standalone component compiles its template against the symbols in its OWN
+ * `@Component({ imports: [...] })` array, and nothing else: a component that is
+ * imported into the `.ts` file but missing from that array is simply not in
+ * scope for the template, so the new tag is left as an unknown element and
+ * renders nothing (or fails the build outright under strict templates). The
+ * template splice alone therefore produces markup that looks correct in the
+ * file and is invisible in the browser, which is the worst outcome available —
+ * so an insertion writes the import statement and the `imports` entry too, and
+ * fails as a whole if it cannot.
+ *
  * What it deliberately will not do is guess. A descriptor that matches two
  * template elements equally well returns `null` rather than a coin flip; the
  * caller strands the change into the Prompts tab, which is the behaviour the
@@ -30,6 +41,23 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { isEditableSourcePath } from "../config.mjs"
+import { applyEdits, lineExtendedRange, matchNode } from "./element-match.mjs"
+import {
+  formatImport,
+  importDecision,
+  importSpecifier,
+  insertionEdit,
+  isSameModule,
+  scanImportBindings,
+} from "./source-insert.mjs"
+
+/**
+ * Re-exported because `matchNode` is the Angular lane's own answer to "which
+ * template node is this", and every caller and test here has always asked this
+ * module for it. The implementation moved to `element-match.mjs` when the React
+ * lane needed the identical scoring to delete a JSX element.
+ */
+export { matchNode }
 
 /** Directories never worth walking for component sources. */
 const SKIP_DIRECTORIES = new Set([
@@ -52,12 +80,6 @@ const VOID_ELEMENTS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input",
   "link", "meta", "param", "source", "track", "wbr",
 ])
-
-/**
- * Angular stamps these onto every element at runtime for style encapsulation.
- * They are not in the template, so a descriptor must never be matched on them.
- */
-const RUNTIME_ATTRIBUTE = /^_ng(content|host)-/
 
 /* -------------------------------------------------------------------------
  * The component index
@@ -177,6 +199,12 @@ function scanComponentFile(absolutePath, source) {
       componentName: named[1],
       selector: decoratorString(decorator, "selector"),
       tsFile: absolutePath,
+      // The decorator's own byte range, `(` through `)`. Inserting an element
+      // into the template is only half of what makes it render: a standalone
+      // component resolves the tags in its template against the `imports`
+      // array written HERE, so the writer needs to find and edit that array.
+      decoratorStart: open,
+      decoratorEnd: close + 1,
       templateFile: templateUrl ? path.resolve(directory, templateUrl) : null,
       styleFile: styleUrl ? path.resolve(directory, styleUrl) : null,
       inlineTemplate: templateUrl ? null : inlineTemplateRange(source, open, close + 1),
@@ -286,7 +314,15 @@ export function scanTemplate(html) {
   }
   END_TAG.lastIndex = 0
   while ((match = END_TAG.exec(source))) {
-    tokens.push({ kind: "end", index: match.index, name: match[1].toLowerCase() })
+    // `end` as well as `index`, because deleting an element needs the offset
+    // PAST `</div>` and `</div   >` is legal markup — recomputing it later from
+    // the tag name would be a second, subtly different parse of the same token.
+    tokens.push({
+      kind: "end",
+      index: match.index,
+      end: match.index + match[0].length,
+      name: match[1].toLowerCase(),
+    })
   }
   tokens.sort((a, b) => a.index - b.index)
 
@@ -301,6 +337,7 @@ export function scanTemplate(html) {
       for (let depth = stack.length - 1; depth >= 0; depth -= 1) {
         if (stack[depth].tagName === token.name) {
           stack[depth].contentEnd = token.index
+          stack[depth].closeEnd = token.end
           stack.length = depth
           counters.length = depth + 1
           break
@@ -337,6 +374,8 @@ export function scanTemplate(html) {
       selfClosing: Boolean(selfClosing) || VOID_ELEMENTS.has(tagName),
       contentStart: token.index + whole.length,
       contentEnd: -1,
+      /** Past the closing tag; the start tag's own end for a self-closing one. */
+      closeEnd: -1,
     }
     nodes.push(node)
     if (!node.selfClosing) {
@@ -358,82 +397,6 @@ function lineColumnAt(source, offset) {
     }
   }
   return { lineNumber: line, columnNumber: offset - lastBreak }
-}
-
-/* -------------------------------------------------------------------------
- * Matching a live element to a template node
- * ---------------------------------------------------------------------- */
-
-const REQUIRED_TAG_SCORE = 1
-
-/**
- * How well a template node answers a descriptor of a live element.
- *
- * Returns `-1` for a node that is disqualified rather than merely unlikely.
- * The distinction matters: the caller needs a UNIQUE best score, and a scale
- * where impossible candidates score zero makes two impossible nodes tie.
- *
- * Every static class the template declares must be on the live element. The
- * converse is not required and must not be: `[class.active]`, `[ngClass]` and
- * a component's own host classes all add classes at runtime that were never in
- * the template.
- */
-function scoreNode(node, descriptor) {
-  if (node.tagName !== descriptor.tagName) return -1
-
-  const live = new Set(descriptor.classes ?? [])
-  for (const name of node.classes) {
-    if (!live.has(name)) return -1
-  }
-
-  let score = REQUIRED_TAG_SCORE + node.classes.length * 4
-
-  const id = node.attributes.get("id")
-  if (id && descriptor.id && id.value === descriptor.id) score += 6
-
-  if (descriptor.parentTagName && node.parentTagName === descriptor.parentTagName) score += 2
-  const liveParent = new Set(descriptor.parentClasses ?? [])
-  for (const name of node.parentClasses) {
-    if (liveParent.has(name)) score += 1
-  }
-
-  // Static attributes the template declares and the live element still has.
-  for (const [name, attribute] of node.attributes) {
-    if (name === "class" || name === "style" || RUNTIME_ATTRIBUTE.test(name)) continue
-    if (name.startsWith("[") || name.startsWith("(") || name.startsWith("*") || name.startsWith("#")) continue
-    if (descriptor.attributes?.[name] === attribute.value) score += 2
-  }
-
-  if (typeof descriptor.nthOfType === "number" && node.nthOfType === descriptor.nthOfType) {
-    score += 1
-  }
-
-  return score
-}
-
-/**
- * The one template node a descriptor names, or null when that is not a fact.
- *
- * `null` on a tie is the whole point. The alternative — taking the first of two
- * equal candidates — writes a style onto an element the user was not looking at,
- * and the user's only clue is that the wrong thing moved.
- */
-export function matchNode(nodes, descriptor) {
-  let best = null
-  let bestScore = 0
-  let tied = false
-  for (const node of nodes) {
-    const score = scoreNode(node, descriptor)
-    if (score < 0) continue
-    if (score > bestScore) {
-      best = node
-      bestScore = score
-      tied = false
-    } else if (score === bestScore) {
-      tied = true
-    }
-  }
-  return tied ? null : best
 }
 
 /* -------------------------------------------------------------------------
@@ -482,6 +445,189 @@ function escapeAttribute(value) {
 }
 
 /**
+ * The whole element, plus the blank line it would otherwise leave behind.
+ *
+ * Deleting exactly `<div …>…</div>` is correct and looks like a bug: the line
+ * the element sat on stays, now holding nothing but its own indentation, and
+ * the next person to open the file sees a ragged hole rather than markup with
+ * one thing taken out of it. So the range grows to the line when — and only
+ * when — the element had that line to itself. An element sharing a line with a
+ * sibling or with text keeps every byte of that line that is not its own.
+ */
+function elementRange(node, template) {
+  if (!node.selfClosing && node.closeEnd === -1) {
+    throw new Error("element has no closing tag, so its end cannot be found")
+  }
+  const end = node.selfClosing ? node.end : node.closeEnd
+  return lineExtendedRange(node.start, end, template)
+}
+
+/**
+ * A reference node's bounds, in the shape `source-insert.mjs` splices against.
+ *
+ * A template node's `end` is the end of its START tag — `<div class="a">` — and
+ * its `closeEnd` is what sits past `</div>`, so the whole-element range has to
+ * be stated here rather than read off one field. A JSX node spells the same
+ * facts differently, which is exactly why the shared helper is handed this
+ * shape instead of either scanner's own.
+ */
+function insertAnchor(node) {
+  return {
+    tagName: node.tagName,
+    elementStart: node.start,
+    elementEnd: node.selfClosing ? node.end : node.closeEnd,
+    contentStart: node.selfClosing ? -1 : node.contentStart,
+    contentEnd: node.selfClosing ? -1 : node.contentEnd,
+    selfClosing: node.selfClosing,
+  }
+}
+
+/**
+ * The whole template as a container, for an insertion that named no reference
+ * element.
+ *
+ * A template's root is not an element — it is a file, which may hold several
+ * top-level tags or none — so there is nothing to locate and nothing to sit
+ * beside. `prepend` and `append` still mean something against it, and that is
+ * all the route allows with a null target.
+ */
+function templateAnchor(template) {
+  return {
+    tagName: "template",
+    elementStart: 0,
+    elementEnd: template.length,
+    contentStart: 0,
+    contentEnd: template.length,
+    selfClosing: false,
+  }
+}
+
+/**
+ * The end of a `[ ... ]` or `{ ... }` list's last entry, and how to write one
+ * more after it.
+ *
+ * Used for both halves of the standalone wiring — adding a symbol to
+ * `imports: [...]`, and adding the whole `imports: [X]` property to a decorator
+ * that has none — because the formatting question is identical and the answer
+ * has to come out looking hand-written either way. A list already broken across
+ * lines gets a new line at the same indentation as its last entry; a list on
+ * one line stays on one line; an empty list is simply filled in.
+ */
+function listInsertion(source, open, close, entry) {
+  const inner = source.slice(open + 1, close)
+  if (!inner.trim()) return { start: open + 1, end: close, text: entry }
+
+  let last = close - 1
+  while (last > open && /\s/.test(source[last])) last -= 1
+  const multiline = inner.includes("\n")
+  const indent = multiline ? lineIndentOf(source, last) : ""
+  // A list whose last entry already ends in a comma is written in the style
+  // that expects one on every entry, so the new entry gets one too — otherwise
+  // the addition is visible as the one line the author would not have written.
+  const dangling = source[last] === ","
+  const opener = dangling ? "" : ","
+  const closer = dangling ? "," : ""
+  const text = multiline
+    ? `${opener}\n${indent}${entry}${closer}`
+    : `${opener} ${entry}${closer}`
+  return { start: last + 1, end: last + 1, text }
+}
+
+/** The whitespace at the start of the line `offset` sits on. */
+function lineIndentOf(source, offset) {
+  let start = offset
+  while (start > 0 && source[start - 1] !== "\n") start -= 1
+  return /^[ \t]*/.exec(source.slice(start))[0]
+}
+
+/**
+ * The `.ts` edits that make an inserted tag resolve: the ES import, and the
+ * symbol in the component's `imports` array.
+ *
+ * Returns `{ edits }` with however many of the two are missing, or `{ reason }`
+ * when the file cannot be given the symbol at all. Both refusals are real
+ * cases, not defensive noise:
+ *
+ *   - the name is already bound to a different module, so a second import of
+ *     it would not compile, and splicing the tag in anyway would silently point
+ *     at whatever that other module exports;
+ *   - the component declares `standalone: false`, which means its directives
+ *     come from the NgModule that declares it. That module is somewhere else in
+ *     the project, this index does not hold it, and guessing which one to edit
+ *     is how an editor breaks a build it was asked to help with.
+ *
+ * A component with no `standalone` key at all is treated as standalone, which
+ * is what Angular itself does from v19 on; one that opted out says so.
+ */
+function standaloneImportEdits(source, component, request, planned) {
+  const specifier = importSpecifier(request.from, request.receiving)
+  // `planned` is what an earlier operation in this same batch already decided
+  // to write. Without it a page inserting two of the same component imports it
+  // twice and lists it twice, because neither edit is on disk yet for the
+  // second one to see.
+  const alreadyPlanned = planned.get(request.name) ?? null
+  const bound = scanImportBindings(source).get(request.name) ?? alreadyPlanned
+  // A class declared in the very file receiving the tag — a component used
+  // inside its own template — needs the decorator entry but must never be
+  // given the import statement: see `isSameModule`. The two halves are
+  // separate here, so skipping one still writes the other.
+  const decision = isSameModule(request.from, request.receiving)
+    ? { add: false, reason: null }
+    : importDecision(request.name, specifier, bound)
+  if (decision.reason) return { reason: decision.reason }
+
+  const edits = []
+  if (decision.add) {
+    const statement = formatImport(request.name, request.defaultImport, specifier)
+    edits.push(importStatementEdit(source, statement))
+  }
+  if (alreadyPlanned) return { edits, specifier }
+
+  const decorator = source.slice(component.decoratorStart, component.decoratorEnd)
+  const array = /\bimports\s*:\s*\[/.exec(decorator)
+  if (array) {
+    const open = component.decoratorStart + array.index + array[0].length - 1
+    const close = matchingClose(source, open)
+    if (close === -1) return { reason: `the imports array in ${path.basename(component.tsFile)} does not close` }
+    const listed = source.slice(open + 1, close)
+    if (!new RegExp(`(^|[^\\w$])${request.name}([^\\w$]|$)`).test(listed)) {
+      edits.push(listInsertion(source, open, close, request.name))
+    }
+  } else if (/\bstandalone\s*:\s*false\b/.test(decorator)) {
+    return {
+      reason: `${component.componentName} is not standalone, so ${request.name} belongs to the NgModule that declares it`,
+    }
+  } else {
+    const objectOpen = source.indexOf("{", component.decoratorStart)
+    const objectClose = objectOpen === -1 ? -1 : matchingClose(source, objectOpen)
+    if (objectOpen === -1 || objectClose === -1 || objectClose > component.decoratorEnd) {
+      return { reason: `${component.componentName} has no decorator object to add imports to` }
+    }
+    edits.push(listInsertion(source, objectOpen, objectClose, `imports: [${request.name}]`))
+  }
+
+  return { edits, specifier }
+}
+
+/**
+ * A new import statement, under the last one the `.ts` file already has.
+ *
+ * The trailing `[ \t]*;?` is deliberately not `\s*`: a greedy whitespace run
+ * swallows the blank line between the imports and the decorator, and the
+ * statement then lands glued to `@Component`.
+ */
+function importStatementEdit(source, statement) {
+  let at = 0
+  const pattern = /^[ \t]*import\s[\s\S]*?(?:from\s*['"][^'"\n]+['"]|['"][^'"\n]+['"])[ \t]*;?/gm
+  let match
+  while ((match = pattern.exec(source))) {
+    at = match.index + match[0].length
+  }
+  if (at === 0) return { start: 0, end: 0, text: `${statement}\n` }
+  return { start: at, end: at, text: `\n${statement}` }
+}
+
+/**
  * The splices one operation makes to one template node.
  *
  * Returned rather than applied so a batch can sort every splice across every
@@ -489,6 +635,15 @@ function escapeAttribute(value) {
  * earlier offsets stay valid.
  */
 function editsFor(node, operation, template) {
+  if (operation.op === "removeElement") {
+    const { start, end } = elementRange(node, template)
+    return [{ start, end, text: "" }]
+  }
+
+  if (operation.op === "insertElement") {
+    return [insertionEdit(insertAnchor(node), operation.position, operation.markup, template)]
+  }
+
   if (operation.op === "setStyles") {
     const attribute = node.attributes.get("style")
     const declarations = parseStyleAttribute(attribute?.value ?? "")
@@ -534,20 +689,6 @@ function editsFor(node, operation, template) {
   }
 
   throw new Error(`unsupported operation ${operation.op}`)
-}
-
-function applyEdits(source, edits) {
-  const ordered = [...edits].sort((a, b) => b.start - a.start)
-  let output = source
-  let previousStart = Number.POSITIVE_INFINITY
-  for (const edit of ordered) {
-    // Two operations on one element can produce overlapping splices — merging
-    // them is the caller's job, so an overlap here is a bug worth surfacing.
-    if (edit.end > previousStart) throw new Error("overlapping edits to one template")
-    output = output.slice(0, edit.start) + edit.text + output.slice(edit.end)
-    previousStart = edit.start
-  }
-  return output
 }
 
 /* -------------------------------------------------------------------------
@@ -630,7 +771,11 @@ export function createAngularSource(config) {
     return value.startsWith("..") ? absolute : value
   }
 
-  const locate = (componentName, descriptor) => {
+  /**
+   * The component and its template text, which is as far as an operation with
+   * no reference element needs to get. `locate` is this plus the match.
+   */
+  const openTemplate = (componentName) => {
     const component = lookup(componentName)
     if (!component) return { ok: false, reason: `no component class named ${componentName}` }
     let template
@@ -640,6 +785,13 @@ export function createAngularSource(config) {
       return { ok: false, reason: `template unreadable (${error.message})` }
     }
     if (!template) return { ok: false, reason: `${component.componentName} has no template` }
+    return { ok: true, component, template }
+  }
+
+  const locate = (componentName, descriptor) => {
+    const opened = openTemplate(componentName)
+    if (!opened.ok) return opened
+    const { component, template } = opened
 
     const node = matchNode(scanTemplate(template.text), descriptor ?? {})
     if (!node) {
@@ -710,11 +862,65 @@ export function createAngularSource(config) {
     apply(operations) {
       const applied = []
       const failed = []
-      /** file -> { text, whole, offset, edits[] } */
+      /**
+       * absolute file -> { source, edits[], reports[], touched, planned }
+       *
+       * Keyed by FILE rather than by template, which used to be the same thing
+       * and stopped being one when insertion arrived: an inserted element needs
+       * the component's `.ts` edited as well as its template, and for an inline
+       * template those are the same file. Keying on the path is what lets the
+       * two sets of splices merge into one write when they land in one file and
+       * stay separate when they do not.
+       *
+       * `touched` is every operation with a splice in this file, while
+       * `reports` is only the operations this file answers for — an operation
+       * appears in the `touched` of both files it edits and in the `reports` of
+       * one, so it is written once and reported once.
+       */
       const batches = new Map()
 
+      const batchFor = (file, source) => {
+        const existing = batches.get(file)
+        if (existing) return existing
+        const batch = { source, edits: [], reports: [], touched: new Set(), planned: new Map() }
+        batches.set(file, batch)
+        return batch
+      }
+
+      /** The `.ts` side of an insertion: the import, and the `imports` entry. */
+      const wireImport = (operation, component) => {
+        const tsFile = component.tsFile
+        if (!isEditableSourcePath(config, tsFile)) {
+          return { reason: `${relative(tsFile)} is outside the editable roots` }
+        }
+        let batch = batches.get(tsFile)
+        if (!batch) {
+          let text
+          try {
+            text = fs.readFileSync(tsFile, "utf8")
+          } catch (error) {
+            return { reason: `${relative(tsFile)} is unreadable (${error.message})` }
+          }
+          batch = batchFor(tsFile, text)
+        }
+        const plan = standaloneImportEdits(
+          batch.source,
+          component,
+          { ...operation.import, receiving: relative(tsFile) },
+          batch.planned
+        )
+        if (plan.reason) return { reason: plan.reason }
+        batch.planned.set(operation.import.name, plan.specifier)
+        return { batch, edits: plan.edits }
+      }
+
       for (const operation of operations) {
-        const found = locate(operation.componentName, operation.target)
+        // An insertion with no target names the template itself rather than an
+        // element in it, so there is nothing to match and nothing to tie.
+        const rootInsert = operation.op === "insertElement" && !operation.target
+        const found = rootInsert
+          ? openTemplate(operation.componentName)
+          : locate(operation.componentName, operation.target)
         if (!found.ok) {
           failed.push({ operation, reason: found.reason })
           continue
@@ -724,43 +930,110 @@ export function createAngularSource(config) {
           failed.push({ operation, reason: `${relative(file)} is outside the editable roots` })
           continue
         }
-        let batch = batches.get(file)
-        if (!batch) {
-          batch = { template: found.template, edits: [], operations: [] }
-          batches.set(file, batch)
-        }
+
+        const whole = found.template.whole ?? found.template.text
+        const offset = found.template.offset
+        const batch = batchFor(file, whole)
+
+        let edits
         try {
-          batch.edits.push(...editsFor(found.node, operation, found.template.text))
-          batch.operations.push({ operation, node: found.node, position: found.position })
+          edits = rootInsert
+            ? [
+                insertionEdit(
+                  templateAnchor(found.template.text),
+                  operation.position,
+                  operation.markup,
+                  found.template.text
+                ),
+              ]
+            : editsFor(found.node, operation, found.template.text)
         } catch (error) {
           failed.push({ operation, reason: error.message })
+          continue
+        }
+
+        let companion = null
+        if (operation.op === "insertElement" && operation.import) {
+          companion = wireImport(operation, found.component)
+          if (companion.reason) {
+            // The import is not a follow-up to the markup, it is half of it —
+            // so a failure here takes the template splice with it rather than
+            // leaving a tag the component cannot resolve.
+            failed.push({ operation, reason: companion.reason })
+            continue
+          }
+        }
+
+        // Splices are computed against the template TEXT; an inline template is
+        // a window into the `.ts`, so its offsets are rebased before they join
+        // a batch that is keyed by, and written as, the whole file.
+        for (const edit of edits) {
+          batch.edits.push({ start: edit.start + offset, end: edit.end + offset, text: edit.text })
+        }
+        batch.touched.add(operation)
+        batch.reports.push({
+          operation,
+          filePath: relative(file),
+          lineNumber: rootInsert
+            ? lineColumnAt(whole, offset + edits[0].start).lineNumber
+            : found.position.lineNumber,
+        })
+
+        if (companion) {
+          for (const edit of companion.edits) companion.batch.edits.push(edit)
+          companion.batch.touched.add(operation)
         }
       }
 
+      /** operation -> why its file could not be written. */
+      const writeFailures = new Map()
+
+      // Every file is composed before any of them is written. Composition is
+      // where an overlap between two splices is caught, and catching it after
+      // the first file was already on disk would leave a component half-edited
+      // for a reason that was knowable before anything was touched.
+      const outputs = []
       for (const [file, batch] of batches) {
+        if (!batch.edits.length) continue
         try {
-          // Splices are computed against the template TEXT; an inline template
-          // is a window into the `.ts`, so its offsets are rebased before use.
-          const offset = batch.template.offset
-          const edits = batch.edits.map((edit) => ({
-            start: edit.start + offset,
-            end: edit.end + offset,
-            text: edit.text,
-          }))
-          const whole = batch.template.whole ?? batch.template.text
-          fs.writeFileSync(file, applyEdits(whole, edits), "utf8")
-          for (const entry of batch.operations) {
-            applied.push({
-              op: entry.operation.op,
-              componentName: entry.operation.componentName,
-              filePath: relative(file),
-              lineNumber: entry.position.lineNumber,
-            })
-          }
+          outputs.push({ file, batch, text: applyEdits(batch.source, batch.edits) })
         } catch (error) {
-          for (const entry of batch.operations) {
-            failed.push({ operation: entry.operation, reason: error.message })
+          for (const operation of batch.touched) writeFailures.set(operation, error.message)
+        }
+      }
+      for (const output of outputs) {
+        // A file whose every operation has already failed has nothing left to
+        // write: this is the template of an insertion whose import could not be
+        // composed, and writing it would produce exactly the unresolvable tag
+        // the whole arrangement exists to prevent.
+        if ([...output.batch.touched].every((operation) => writeFailures.has(operation))) continue
+        try {
+          fs.writeFileSync(output.file, output.text, "utf8")
+          // Every record in the index carries byte offsets into a `.ts` file —
+          // the decorator's range, and an inline template's window. Adding an
+          // import moves everything after it, so a cache kept across that write
+          // hands the NEXT operation positions that were true a moment ago and
+          // splices into the middle of something. Dropping it costs one walk of
+          // the project on the next lookup and is the only correct answer.
+          if (output.file.endsWith(".ts")) index = null
+        } catch (error) {
+          for (const operation of output.batch.touched) writeFailures.set(operation, error.message)
+        }
+      }
+
+      for (const batch of batches.values()) {
+        for (const report of batch.reports) {
+          const reason = writeFailures.get(report.operation)
+          if (reason) {
+            failed.push({ operation: report.operation, reason })
+            continue
           }
+          applied.push({
+            op: report.operation.op,
+            componentName: report.operation.componentName,
+            filePath: report.filePath,
+            lineNumber: report.lineNumber,
+          })
         }
       }
 

@@ -9,8 +9,9 @@
  */
 
 import { el, isChrome } from "../core/dom"
+import { focusControl } from "../core/focus"
 import { getResolver, toSelectable } from "../core/resolve"
-import { editorOwnsInput } from "../core/store"
+import { selectionOwnsInput } from "../core/store"
 import type { EditorContext } from "../core/context"
 
 /** Deeper than this the stack is layout wrappers, and the menu is a wall of divs. */
@@ -39,7 +40,7 @@ export function installLayerMenu(context: EditorContext): void {
     // closing rather than via a `pointermove` over the canvas. Without this the
     // preview outline sticks to the last row until the pointer moves again.
     context.setState({ hovered: null })
-    if (restoreFocus && returnFocus?.isConnected) returnFocus.focus()
+    if (restoreFocus && returnFocus?.isConnected) focusControl(returnFocus)
     returnFocus = null
   }
 
@@ -81,7 +82,7 @@ export function installLayerMenu(context: EditorContext): void {
     // Its own window listener, so it needs its own mode gate: interactive mode
     // is a promise that every gesture reaches the app, and a right-click that
     // opened the layer stack instead would break it as surely as a left one.
-    if (!editorOwnsInput()) return
+    if (!selectionOwnsInput()) return
     const { tool } = context.getState()
     if (tool !== "move") return
     if (isChrome(event.target)) return
@@ -113,7 +114,7 @@ export function installLayerMenu(context: EditorContext): void {
     const first = menu.querySelector<HTMLButtonElement>(".de-layer-menu-row")
     if (first) {
       first.tabIndex = 0
-      first.focus()
+      focusControl(first)
     }
   }
 
@@ -125,7 +126,7 @@ export function installLayerMenu(context: EditorContext): void {
     if (!rows.length) return
     const target = rows[(index + rows.length) % rows.length]
     for (const row of rows) row.tabIndex = row === target ? 0 : -1
-    target.focus()
+    focusControl(target)
   }
 
   window.addEventListener("contextmenu", onContextMenu, true)

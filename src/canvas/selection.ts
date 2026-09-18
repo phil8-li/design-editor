@@ -8,6 +8,7 @@
  */
 
 import { el } from "../core/dom"
+import { selectionOwnsInput } from "../core/store"
 import type { EditorContext } from "../core/context"
 
 const HANDLES = [
@@ -134,10 +135,13 @@ export function installSelectionFrame(context: EditorContext): void {
     const state = context.getState()
     const selection = state.selection
 
-    // Interactive mode is a claim that the editor is not there. An outline left
-    // standing over an app the user is now clicking through is the one thing
-    // that would disprove it, so the chrome goes before the handlers do.
-    if (state.interactive) {
+    // Interactive mode is a claim that the editor is not there, and hidden
+    // chrome is the same claim made louder. An outline left standing over an
+    // app the user is now clicking through is the one thing that would
+    // disprove either, so the chrome goes before the handlers do. Asked
+    // through the store's gate rather than off `state.interactive`, so a
+    // second reason to stand down cannot forget to reach the painter.
+    if (!selectionOwnsInput()) {
       hideAll()
       return
     }
@@ -236,10 +240,10 @@ export function installSelectionFrame(context: EditorContext): void {
     const state = context.getState()
     // Selected or hovered app content may move under Motion, so track it. Once
     // both are empty, stop entirely until the store wakes the painter again.
-    // Interactive mode stops it too: a selection survives the mode switch so
-    // the user gets it back on the way out, but tracking geometry nobody is
-    // drawing would cost a layout read per frame for a blank overlay.
-    if (state.interactive) return
+    // Standing down stops it too — either reason: a selection survives the mode
+    // switch so the user gets it back on the way out, but tracking geometry
+    // nobody is drawing would cost a layout read per frame for a blank overlay.
+    if (!selectionOwnsInput()) return
     if (state.selection.length > 0 || state.hovered || highlighted.length > 0) schedule()
   }
 
@@ -249,7 +253,8 @@ export function installSelectionFrame(context: EditorContext): void {
       next.selection !== previous.selection ||
       next.hovered !== previous.hovered ||
       next.tool !== previous.tool ||
-      next.interactive !== previous.interactive
+      next.interactive !== previous.interactive ||
+      next.chromeHidden !== previous.chromeHidden
     ) {
       schedule()
     }

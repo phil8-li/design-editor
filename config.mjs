@@ -71,7 +71,11 @@ export const DEFAULT_CONFIG = {
   // rather than assumed to be `next dev`, because the script is where a host
   // keeps the env, the flags and the wrapper its app actually needs.
   app: { port: null, host: "127.0.0.1", open: false, openQuery: "design", devScript: "dev" },
-  ports: { proxy: "auto", ws: "auto" },
+  // `proxy` and `ws` are `auto` because the vendor abandons its own defaults the
+  // moment either is busy, and nothing outside this process has to predict them.
+  // `mcp` is the opposite case: its URL is typed into a coding agent's config
+  // file by hand, so it has to be the same number tomorrow. `null` turns it off.
+  ports: { proxy: "auto", ws: "auto", mcp: 5747 },
   projectRoot: null,
   stateDir: ".local/design-editor",
   apiPrefix: "/__design-editor",
@@ -118,6 +122,21 @@ export const DEFAULT_CONFIG = {
     trackingUnit: null,
   },
   controls: { leva: null },
+  /**
+   * Agentation's annotation toolbar, mounted beside the editor's own chrome.
+   *
+   * Configurable rather than hard-wired because it is the only surface in this
+   * package that talks to a process the editor does not start: `endpoint` is
+   * the `agentation-mcp` HTTP server a coding agent reads annotations from. The
+   * toolbar is local-first, so an endpoint nothing answers on degrades to
+   * copy-paste rather than to an error, and `endpoint: null` asks for that
+   * deliberately.
+   *
+   * 4747 is that package's own default and, like `ports.mcp` above, it is typed
+   * into an agent's config by hand — so it is a fixed number rather than
+   * "auto". `enabled: false` leaves the toolbar unmounted entirely.
+   */
+  agentation: { enabled: true, endpoint: "http://127.0.0.1:4747" },
   tailwind: {
     version: 3,
     colorWords: [],
@@ -144,15 +163,33 @@ export const DEFAULT_CONFIG = {
   // React CLI's detection gates have to be answered, which file extensions the
   // writer may touch, and which resolver the editor bundle uses.
   host: { framework: "auto", tailwind: null },
+  /*
+   * Design-system libraries added by URL.
+   *
+   * `fetchCommand` is the escape hatch for a catalog this process cannot
+   * authenticate to on its own — an internal Storybook behind an SSO proxy, say.
+   * The editor already asks for a bearer token or a cookie and stores it per
+   * origin (see `server/library-auth.mjs`); this is for the organisations whose
+   * proxy has a command-line client instead, where a stored token would expire
+   * daily and the tool can mint one per request.
+   *
+   * An argv array with `{url}` substituted per argument. The command must PRINT
+   * a full HTTP response — status line, headers, blank line, body — which is
+   * what `curl -i` and most such clients already emit. A bare body is refused,
+   * because an error page and a catalog are then indistinguishable.
+   *
+   *   libraries: { fetchCommand: ["curl", "-sSi", "--cert", "…", "{url}"] }
+   *
+   * Empty by default: out of the box the editor runs no external command.
+   */
+  libraries: { fetchCommand: [] },
   vendor: { package: "react-rewrite-cli" },
-  agent: {
-    transport: "auto",
-    // Mirrors the vendor's dist/claude-apply.js, which reserves Sonnet for
-    // changes that have to reason about structure — every free-form prompt does.
-    model: "claude-sonnet-4-6-20250514",
-    maxTokens: 4096,
-    systemPrompt: null,
-  },
+  // No `agent` block, and the absence is the point. The editor used to be able
+  // to call a model itself, which needed a transport to choose, a model name, a
+  // token budget and an overridable system prompt. The only surface that
+  // reached that path has been removed; `/agent` writes a handoff brief and
+  // wakes an agent the designer already runs, and not one of those settings has
+  // anything left to select.
 }
 
 function isPlainObject(value) {
@@ -497,6 +534,14 @@ export function resolveConfig(raw = {}, { configPath = null, cwd = process.cwd()
     designSystem,
     icons,
     controls: Object.freeze({ leva }),
+    // Frozen with its array copied, so a caller cannot push an argument onto
+    // the command this process will later execute.
+    libraries: Object.freeze({
+      fetchCommand: Object.freeze(
+        (Array.isArray(merged.libraries?.fetchCommand) ? merged.libraries.fetchCommand : [])
+          .filter((part) => typeof part === "string" && part.length > 0)
+      ),
+    }),
     host: Object.freeze({ framework, devServer, tailwind: tailwindPresent }),
     source: Object.freeze({
       ...merged.source,
@@ -564,6 +609,22 @@ export async function loadConfig({ configPath, cwd = process.cwd(), overrides = 
 }
 
 /**
+ * What the host project calls itself, for the chrome that has to name the app
+ * on screen before it has asked the server anything.
+ *
+ * A name and not the folder it lives in. The prelude has never carried a source
+ * path and this is not the reason to start: a package name is what a person
+ * calls the project, while the path is a fact about this machine that the page
+ * has no use for and no business holding. A project with no package.json, or
+ * none with a name in it, gets null rather than the folder's basename — that is
+ * the path again, one hop shorter.
+ */
+function hostPackageName(projectRoot) {
+  const name = readManifest(projectRoot)?.name
+  return typeof name === "string" && name.length > 0 ? name : null
+}
+
+/**
  * The browser half of the contract. Prepended to the overlay bundle rather than
  * fetched, so the injected vendor functions and the first-party chrome read one
  * object and invariant 4 (no `import` in the served bundle) still holds.
@@ -599,6 +660,15 @@ export function browserPrelude(config, runtime = {}) {
         : null,
     },
     ports: { proxy: runtime.proxyPort ?? null, ws: runtime.wsPort ?? null },
+    // Whether to mount the annotation toolbar, and where it syncs. A URL and a
+    // boolean, which is the whole of what the browser half needs: the endpoint
+    // is contacted by the toolbar itself, not by this process, so nothing here
+    // has checked that anything answers on it.
+    agentation: {
+      enabled: config.agentation.enabled !== false,
+      endpoint:
+        typeof config.agentation.endpoint === "string" ? config.agentation.endpoint : null,
+    },
     // The screen this editor was chosen from, so the chrome can offer a way
     // back to it. Null for every session that had no such screen, and the
     // launcher has already refused anything that is not a loopback http URL —
@@ -609,9 +679,58 @@ export function browserPrelude(config, runtime = {}) {
     // prelude has never named a source path, and the chooser knowing which
     // folder it started is not a reason for the browser to.
     chooserUrl: typeof runtime.chooserUrl === "string" ? runtime.chooserUrl : null,
+    // The app under the overlay, so the chooser control can say which one is
+    // being edited on first paint instead of after a round trip.
+    //
+    // `url` is written the way the chooser's own rows are addressed —
+    // `http://127.0.0.1:<port>`, the form runtime/local-apps.mjs builds — and
+    // not from `app.host`, because its only job is to be comparable to those
+    // rows: that string match is how the menu knows which of them is the
+    // current one. Null when this launch never resolved a port, which is the
+    // `--dev` case before the app has started.
+    //
+    // `name` travels and the project PATH does not, for the reason the chooser
+    // URL is the only navigable string in this payload: a name is a label, and
+    // a path is a fact about the machine the page is not owed.
+    app: {
+      url: Number.isFinite(runtime.appPort) ? `http://127.0.0.1:${runtime.appPort}` : null,
+      name: hostPackageName(config.projectRoot),
+    },
   }
 
-  return `window.__DESIGN_EDITOR_CONFIG__=${JSON.stringify(payload)};${wsPortPin(runtime.wsPort)}`
+  return (
+    `window.__DESIGN_EDITOR_CONFIG__=${JSON.stringify(payload)};` +
+    `${wsPortPin(runtime.wsPort)}${onboardingDismissal()}`
+  )
+}
+
+/**
+ * The one piece of vendor chrome that cannot be suppressed with a selector.
+ *
+ * Its onboarding bar — "Click any element to edit its properties" — is a bare
+ * `<div>` with inline styles and no class, fixed across the top of the viewport
+ * at z-index 2147483647. `base.ts` names the other eight surfaces by class; this
+ * one has nothing to name. Matching it structurally (`:host > div:not([class])`)
+ * was tried and rejected: the vendor's error toast is also a class-less
+ * top-level div, and a rule broad enough to catch the bar swallows the notice
+ * that something went wrong with a write.
+ *
+ * So it is turned off at the source. `showOnboarding` reads
+ * `react-rewrite-onboarding-dismissed` and returns before creating anything, and
+ * the prelude runs ahead of the vendor bundle — the same ordering `wsPortPin`
+ * relies on. Writing the key the bar's own × writes is exactly the state the
+ * vendor already supports, not a patch of its behaviour.
+ *
+ * It matters more than one bar of text: the panels are docked to the viewport
+ * edges, so they start at y=0, and 32px of fixed banner lands squarely on the
+ * inspector's tab strip and the layers filter.
+ *
+ * `try`: localStorage throws outright when a browser blocks third-party or
+ * file-origin storage, and losing the whole prelude — the API base, the ports,
+ * the host — over a cosmetic banner would take the editor down with it.
+ */
+function onboardingDismissal() {
+  return `try{localStorage.setItem("react-rewrite-onboarding-dismissed","1")}catch(e){}`
 }
 
 /**

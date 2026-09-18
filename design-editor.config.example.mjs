@@ -199,14 +199,10 @@ const config = {
     extensions: [".tsx", ".jsx", ".ts", ".js"],
   },
 
-  agent: {
-    // "auto" uses the Claude CLI when it is on PATH and otherwise writes a
-    // handoff file under stateDir. "handoff" never shells out.
-    transport: "auto",
-    model: "claude-sonnet-4-6-20250514",
-    maxTokens: 4096,
-    systemPrompt: null,
-  },
+  // There is no `agent` block to configure. The editor never calls a model
+  // itself: handing work over means writing a brief under `stateDir/requests/`
+  // and waking a coding agent attached over MCP, which needs no key, no model
+  // name and no transport to choose between.
 }
 
 export default config

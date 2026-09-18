@@ -1,32 +1,67 @@
 /**
  * Right-hand inspector.
  *
- * Three tabs over one selection. **Design** is the historical panel: a stack
- * of collapsible sections, each owning one file, each returning `null` when it
- * has nothing to say about the current selection — which keeps the panel as
- * short as the element is simple. **Code** shows that same selection as
- * source, and **Change prompts** holds the queue of edits the writer cannot
- * express as classes.
+ * Three tabs. **Design** is the historical panel: a stack of collapsible
+ * sections, each owning one file, each returning `null` when it has nothing to
+ * say about the current selection — which keeps the panel as short as the
+ * element is simple. **Changes** holds the session's outbox. **Design system**
+ * holds the project's libraries and the audit against them.
  *
- * They are tabs rather than three more sections because they are not more to
- * scroll past: each is a different thing to be looking at, and two of them own
- * a footer that has to stay put while their body scrolls.
+ * They are tabs rather than more sections because they are not more to scroll
+ * past: each is a different thing to be looking at, and two of them own a
+ * footer that has to stay put while their body scrolls.
+ *
+ * ## What came, what went, and why the panel is not "one selection" any more
+ *
+ * **Code** used to be the third tab and is now in the left rail beside Layers.
+ * Both of those answer "what IS this" — one as a position in the page, one as
+ * source — and neither is a control you change anything with, which is what
+ * this panel is otherwise entirely made of. `panels/left.ts` carries the rest
+ * of that argument.
+ *
+ * **Library** sat second here for a release, left for the left rail, grew into
+ * a catalogue of cards and previews there, and has now come back as half of
+ * **Design system** — without the catalogue. The thing that was wrong about it
+ * as a tab was never the subject, it was the browsing: a grid of four hundred
+ * components you scroll through is most useful in the one state a selection
+ * panel has nothing to say, and least useful when you have actually selected
+ * something. What is here now is the SETTING that argument was always sound
+ * about — which libraries this project draws from, and what each one contains —
+ * plus the design-system audit, which was the left rail's third tab. The
+ * components themselves did not go anywhere: they reach the Design tab through
+ * `instanceSection`, which shows a component's properties when you have one
+ * selected, which is when they are worth showing.
+ *
+ * So two of these three tabs are views of the selection and the third is a view
+ * of the project. That is a real difference and the strip does not hide it —
+ * `tab-design-system.ts` documents why it deliberately does not repaint when
+ * the selection moves.
+ *
+ * `css/inspector.ts` keeps the strip a scroller, and it has to be: "Design
+ * system" is a two-word label and the seam drags down to `inspectorMinWidth`,
+ * which is 200px. `activate()` below carries the other half, scrolling the
+ * chosen tab into view so the keyboard path never depends on a scrollbar that
+ * is deliberately not drawn.
  */
 
 import { onPreviewOnlyChange } from "../../core/change-prompt"
+import { registerCommand } from "../../core/commands"
+import { onAnnotationsChange } from "../../annotations/store"
+import { onEditsChange } from "../../annotations/journal"
+import { owedCount } from "../../annotations/output"
 import { clear, el } from "../../core/dom"
-import { icon, type IconName } from "../../core/icons"
+import { focusControl } from "../../core/focus"
 import { createWriter, type Writer } from "../../core/writer"
 import type { EditorContext } from "../../core/context"
 import type { Selection } from "../../core/types"
 
-import { codeTab, type InspectorTab } from "./tab-code"
-import { promptsTab } from "./tab-prompts"
+import type { InspectorTab } from "./tab-code"
+import { annotationsTab } from "./tab-annotations"
+import { designSystemTab } from "./tab-design-system"
 import { iconSection } from "./section-icon"
-import { variantsSection } from "./section-variants"
+import { instanceSection } from "./section-instance"
 import { positionSection } from "./section-position"
 import { unifiedLayoutSection } from "./section-unified-layout"
-import { designSystemSection } from "./section-design-system"
 import { responsiveSection } from "./section-responsive"
 import { appearanceSection } from "./section-appearance"
 import { fillSection } from "./section-fill"
@@ -36,12 +71,27 @@ import { typographySection } from "./section-typography"
 import { classesSection } from "./section-classes"
 import { optionsActionsSection, optionsSection } from "../../options/panel"
 import { openOptionsBrowser } from "../../options/inventory-panel"
-import { aiSection } from "../../ai/panel"
 
 export interface SectionContext {
   editor: EditorContext
   writer: Writer
   selection: Selection
+  /**
+   * Everything selected, primary first — `selection` is this one's head.
+   *
+   * Both are here rather than one, because a section that describes a box
+   * (fill, typography, the frame readout) is answering a question about ONE
+   * box however many are picked, and a section that places boxes relative to
+   * each other is answering a question about the set. Making every section
+   * read `selections[0]` would have been the same information with every
+   * existing call site rewritten to say it.
+   *
+   * Optional, and a reader must treat an absent one as "just the primary".
+   * The section suites build this object by hand to drive one section in
+   * isolation, so a section that reaches for `.length` on an assumption
+   * throws where the assertion should have failed.
+   */
+  selections?: Selection[]
   /** Computed style of the selected element, read once per render. */
   computed: CSSStyleDeclaration
   /** Re-renders the inspector after a write. */
@@ -55,11 +105,18 @@ const SECTIONS: InspectorSection[] = [
   // First, like Figma's instance properties: the first question about a placed
   // symbol is which symbol it is.
   iconSection,
-  // Directly under it, the way Figma stacks an instance's block: the main
-  // component swap first, then the variant properties that component declares.
-  variantsSection,
+  // Directly under it, the way Figma stacks an instance's block: which main
+  // component this is, then every property that component declares.
+  //
+  // One section and not two. The variant axes read out of the project's own
+  // source and the props an installed library documents used to be a block
+  // each, and a designer selecting one `<x-button>` got both — visibly about
+  // the same component, disagreeing about how much of it was editable. Two
+  // sources of truth is the right number to have and the wrong number to show,
+  // so `section-instance.ts` merges them by name and says, per row, which of
+  // them can actually be written.
+  instanceSection,
   optionsSection,
-  designSystemSection,
   responsiveSection,
   // Above layout, the way every editor stacks it: where the thing sits and how
   // it lines up with its siblings is the first question, and it is answerable
@@ -72,7 +129,6 @@ const SECTIONS: InspectorSection[] = [
   effectsSection,
   typographySection,
   classesSection,
-  aiSection,
   // Last, and always drawn: the options actions outlive the options list, which
   // is absent until the element has one. See `options/panel.ts`.
   optionsActionsSection,
@@ -137,7 +193,7 @@ function restoreFocus(host: HTMLElement, memory: FocusMemory | null): void {
     : null
   const target = byField ?? nodeAtPath(host, memory.path)
   if (!target || !target.isConnected) return
-  target.focus({ preventScroll: true })
+  focusControl(target, { preventScroll: true })
   if (memory.start === null) return
   if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return
   const limit = target.value.length
@@ -147,7 +203,6 @@ function restoreFocus(host: HTMLElement, memory: FocusMemory | null): void {
 interface TabDefinition {
   id: string
   label: string
-  glyph: IconName
   tab: InspectorTab
 }
 
@@ -156,20 +211,103 @@ export function installInspector(editor: EditorContext): void {
   const host = el("div")
 
   /*
-   * Design is a tab like the other two, but its body is built by `render()`
+   * Design is a tab like the other three, but its body is built by `render()`
    * rather than by a controller — so it hands over the same `{node, update}`
    * shape and the strip below never has to know which is which.
    */
   const design: InspectorTab = { node: host, update: () => render() }
+  /*
+   * The order is a claim about what the panel is for, and it is read left to
+   * right as a widening scope: this element, then what you have done to it,
+   * then the system both of those are measured against.
+   *
+   * Changes REPLACED the Prompts tab rather than joining it. Prompts held one
+   * half of the handover — the edits the writer could not spell as classes — so
+   * a designer with something to say about the page had nowhere to put it, and
+   * a designer with both had two surfaces to gather from before they could hand
+   * anything over. Notes and edits are one message: the notes say what is
+   * wrong, the edits say what has already been done about it, and an agent sent
+   * only one of them either redoes finished work or acts with no reason given.
+   * One outbox, or neither half is trustworthy.
+   *
+   * Design system is last and is the odd one out: it is the only tab here that
+   * is NOT a view of the selection. It sits in this panel anyway because both
+   * of its halves are about the vocabulary the other two tabs speak — the
+   * libraries are where the Design tab's tokens and instance properties come
+   * from, and the audit is a list of places the page ignored them. Its own
+   * header explains why it does not re-render on selection.
+   */
+  /**
+   * A count on the tab, because the tab is the only place unfinished work shows.
+   *
+   * It counts what is still OWED, which is every row the Changes tab does not
+   * badge "In your files": the notes, the edits no commit can write, and — the
+   * one that is easy to get wrong — the edits that are merely QUEUED. A badge
+   * is read as "this many things want you", so a session that has applied
+   * everything must stop wearing a number, and a session that has applied
+   * nothing must not read as zero.
+   *
+   * `written` alone cannot answer this. The writer sets it at the moment of the
+   * edit for anything it can spell, so counting `!written` silently omitted
+   * every Ready row — the tab said 3 with four things waiting. `isEditQueued`
+   * is the other half, exactly as it is for the badge, and the two must agree:
+   * the number on the tab is a promise about what the list below it shows.
+   *
+   * It is an ATTRIBUTE the stylesheet draws, not a child element, and that is
+   * the whole of why. A tab's text content is its name: every reader of this
+   * strip — the switcher below, the three suites that find a pane by its label,
+   * a person reading the DOM — takes `textContent` to be the word. Appending a
+   * `<span>` with a number in it makes the name "Changes3" for all of them at
+   * once, and it does so only once there is something to count, so the failure
+   * arrives later than the change that caused it.
+   *
+   * `aria-label` pins the accessible name for the same reason, and against the
+   * opposite risk: generated content is announced by some screen readers, and a
+   * name that changes on every keystroke is a name announced on every
+   * keystroke.
+   */
+  function installChangeCount(button: HTMLElement, label: string): void {
+    button.setAttribute("aria-label", label)
+    const paint = (): void => {
+      const owed = owedCount()
+      if (owed > 0) button.dataset.deCount = String(owed)
+      else delete button.dataset.deCount
+    }
+    paint()
+    onAnnotationsChange(paint)
+    onEditsChange(paint)
+  }
+
   const tabs: TabDefinition[] = [
-    { id: "design", label: "Design", glyph: "SlidersHorizontal", tab: design },
-    { id: "code", label: "Code", glyph: "Code", tab: codeTab(editor) },
-    { id: "prompts", label: "Prompts", glyph: "Sparkles", tab: promptsTab(editor) },
+    { id: "design", label: "Design", tab: design },
+    { id: "annotations", label: "Changes", tab: annotationsTab(editor) },
+    { id: "system", label: "Design system", tab: designSystemTab(editor) },
   ]
 
   let activeId = tabs[0].id
   const buttons = new Map<string, HTMLElement>()
   const panels = new Map<string, HTMLElement>()
+
+  /*
+   * ⌥8 / ⌥9 / ⌥0, registered BY SLOT rather than by name.
+   *
+   * Figma's three right-panel keys select its first, second and third view, and
+   * so do these — which is also what keeps them working through a change to the
+   * array above. An earlier version named the tabs and went silently dead the
+   * afternoon the tab set was reshuffled; a command nobody registers is a no-op
+   * by design, so nothing failed and three keys simply stopped.
+   *
+   * Only the slots that exist are registered, so a shorter strip leaves the
+   * spare key to the page rather than eating it. Opening the panel is part of
+   * the command: a key that switched a tab inside a closed panel would look
+   * like a key that did nothing. One `setState`, because the subscription below
+   * runs per notification and two writes paint the old tab for a frame.
+   */
+  tabs.slice(0, 3).forEach((definition, index) => {
+    registerCommand(`panel.inspector.tab${index + 1}`, () =>
+      editor.setState({ inspectorOpen: true, inspectorTab: definition.id })
+    )
+  })
 
   const strip = el("div", { class: "de-tabs", role: "tablist", "aria-label": "Inspector views" })
   for (const definition of tabs) {
@@ -184,10 +322,11 @@ export function installInspector(editor: EditorContext): void {
         "aria-selected": String(definition.id === activeId),
         onclick: () => activate(definition.id),
       },
-      [icon(definition.glyph, 13), definition.label]
+      [definition.label]
     )
     buttons.set(definition.id, button)
     strip.append(button)
+    if (definition.id === "annotations") installChangeCount(button, definition.label)
 
     const panel = el(
       "div",
@@ -215,12 +354,44 @@ export function installInspector(editor: EditorContext): void {
    */
   function activate(id: string): void {
     activeId = id
+    /*
+     * Published, so the bar can ask for a tab without reaching into this
+     * closure.
+     *
+     * Written on every switch and not only on a user click, because the store
+     * is the record of WHICH TAB IS SHOWING — a switch this function made for
+     * some other reason is still a switch, and a record that skips those is one
+     * the toolbar would read as stale. Guarded on inequality so the write that
+     * comes back from the subscription below cannot loop.
+     */
+    if (editor.getState().inspectorTab !== id) editor.setState({ inspectorTab: id })
     for (const definition of tabs) {
       const selected = definition.id === id
       buttons.get(definition.id)?.setAttribute("aria-selected", String(selected))
       const panel = panels.get(definition.id)
       if (panel) panel.hidden = !selected
     }
+    /*
+     * The strip scrolls and draws no scrollbar, so the chosen tab has to bring
+     * itself into view or there is no way to know another one is out there.
+     * Three tabs clear the panel's mounted width — but the seam is draggable
+     * down to `inspectorMinWidth`, which is 200px and a good 50 short of what
+     * the strip measures, so the overflow is an everyday state now rather than
+     * the backstop it was when the width was fixed.
+     *
+     * `nearest` on both axes, and the inline half is the one that matters: a
+     * `center` would slide the strip on every switch even when nothing was ever
+     * off screen, which is motion answering a click that needed none. The block
+     * half is `nearest` for a stricter reason — the strip lives inside the
+     * panel body, and asking to scroll it vertically would drag the whole right
+     * panel to put a 34px landmark where the browser thinks it belongs.
+     *
+     * Guarded, because JSDOM does not implement it and the tab suite drives
+     * this function directly; an unguarded call would make every tab-switch
+     * case fail on a method that has nothing to do with what they assert.
+     */
+    const button = buttons.get(id)
+    button?.scrollIntoView?.({ block: "nearest", inline: "nearest" })
     tabs.find((definition) => definition.id === id)?.tab.update()
   }
 
@@ -236,6 +407,7 @@ export function installInspector(editor: EditorContext): void {
   function render(): void {
     const focus = captureFocus(host)
     clear(host)
+    const selections = editor.getState().selection
     const selection = editor.primarySelection()
 
     // Nothing selected is not nothing to do. With no element to scope them to,
@@ -263,11 +435,37 @@ export function installInspector(editor: EditorContext): void {
       return
     }
 
+    /*
+     * A third mark in the header, because the header is the only thing that
+     * says WHAT the panel below is describing.
+     *
+     * Everything under it still names one element — the tag, the source line,
+     * the fill, the frame — so a five-element selection reads as a panel that
+     * has quietly forgotten four of them unless something up here says
+     * otherwise. It is appended beside the two spans rather than folded into
+     * either: the first span is the component's name and the second is its
+     * tag, and a count spliced into either would make `textContent` read
+     * `Card4`, which is what the tab strip's own count already had to learn.
+     *
+     * Absent at one, not zeroed. "1 selected" is a badge on the ordinary case,
+     * and a number that is always on screen stops being read.
+     */
+    const extra = selections.length - 1
     host.append(
       el("div", { class: "de-section" }, [
-        el("div", { class: "de-section-header" }, [
+        el("div", {
+          // The header is a two-column grid, so a third child lands on an
+          // implicit second row inside a fixed-height bar and is clipped. The
+          // modifier opens a third column, and only when one is occupied.
+          class: extra > 0 ? "de-section-header de-section-header--counted" : "de-section-header",
+        }, [
           el("span", {}, [selection.componentName]),
           el("span", { class: "de-tagname" }, [`<${selection.tagName}>`]),
+          extra > 0
+            ? el("span", { class: "de-tagname de-selection-count" }, [
+                `+${extra} selected`,
+              ])
+            : null,
         ]),
         selection.source
           ? el("div", { class: "de-section-body de-source" }, [
@@ -281,6 +479,7 @@ export function installInspector(editor: EditorContext): void {
       editor,
       writer,
       selection,
+      selections,
       computed: getComputedStyle(selection.element),
       invalidate,
     }
@@ -302,6 +501,13 @@ export function installInspector(editor: EditorContext): void {
   // written on every pointermove; rebuilding on it would tear the focused
   // control out of the DOM mid-edit and drop a drag-scrub's pointer capture.
   editor.subscribe((next, previous) => {
+    // Somebody else asked for a tab — today the bar's pending indicator, which
+    // is the only way to reach the Changes tab from outside this panel. Handled
+    // before the selection check below because a tab switch is not a selection
+    // change and would otherwise be dropped by it.
+    if (next.inspectorTab !== previous.inspectorTab && next.inspectorTab !== activeId) {
+      activate(next.inspectorTab)
+    }
     if (
       next.selection === previous.selection &&
       next.optionSets === previous.optionSets
@@ -317,15 +523,15 @@ export function installInspector(editor: EditorContext): void {
    * A write that turns out to have no file to land in reaches the ledger from
    * `ensureSource(...).then(...)` in the writer, long after the store settled
    * and long after the edit that caused it. Neither the subscription above nor
-   * `onRefresh` fires for that, so the Prompts tab could be sitting open,
-   * already rendered from an empty ledger, insisting there was nothing to hand
-   * over while the change was on screen behind it.
+   * `onRefresh` fires for that, so the outbox could be sitting open, already
+   * rendered, insisting there was nothing to hand over while the change was on
+   * screen behind it.
    *
-   * Only when Prompts is the tab being looked at. `invalidate()` repaints
+   * Only when the outbox is the tab being looked at. `invalidate()` repaints
    * whichever tab is active, and a ledger write says nothing whatsoever about
    * the Design or Code views — repainting either of them on a write they do not
    * show is exactly the hot-path cost `activate()` is written to avoid. A
-   * hidden Prompts pane needs nothing: switching to it updates it.
+   * hidden pane needs nothing: switching to it updates it.
    *
    * Routed through `invalidate()` rather than rendering here so the repaint
    * lands on the next frame. A commit carrying four properties records four
@@ -334,7 +540,7 @@ export function installInspector(editor: EditorContext): void {
    * loop, with the element half-styled.
    */
   onPreviewOnlyChange(() => {
-    if (activeId === "prompts") invalidate()
+    if (activeId === "annotations") invalidate()
   })
   // Every tab once at boot, so a tab that is switched to before the first write
   // is not empty. After this, only the visible one is kept current.

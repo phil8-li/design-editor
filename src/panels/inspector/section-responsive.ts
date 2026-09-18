@@ -2,6 +2,8 @@
 
 import { config } from "../../core/config"
 import { el } from "../../core/dom"
+import { icon } from "../../core/icons"
+import { tokens } from "../../core/tokens"
 import {
   activeBreakpoint,
   breakpointSteps,
@@ -81,7 +83,21 @@ function descendantContainerUtilities(element: LayerElement): string[] {
 
 interface RowSpec {
   id: string
+  /** Drawn in the field's leading strip. The bare prefix — `sm`, `@lg`. */
   label: string
+  /**
+   * The field's ACCESSIBLE name, which is not the drawn label and not the
+   * heading.
+   *
+   * Three strings, three jobs, and they were two: `label` used to be the long
+   * phrase and served as both the drawing and the name, which made the strip
+   * wide enough to squeeze the input. Shortening it to `sm` fixed the column
+   * and silently renamed the control to "sm" for anyone not looking at it.
+   * Splitting the name out is what lets the drawing be two characters without
+   * the announcement following it down.
+   */
+  name: string
+  /** The heading above the row. */
   title: string
   usage?: string
   owner?: string
@@ -132,6 +148,7 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
       textField({
         id: spec.id,
         label: spec.label,
+        title: spec.name,
         value: spec.bindings.map((binding) => binding.utility).join(" "),
         placeholder: "e.g. grid-cols-2 gap-6",
         onCommit: (raw) => {
@@ -152,7 +169,30 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
   const viewportRows = viewportSteps.map((step) =>
     row({
       id: `responsive.${step.name}`,
-      label: `${step.name} breakpoint utilities`,
+      /*
+       * The prefix alone, not a sentence.
+       *
+       * This read `sm breakpoint utilities` — twenty-three characters in a
+       * field's leading strip, which is sized for `W`. It never truncated
+       * visibly, and that is the worse failure: the strip simply grew, so the
+       * input beside it shrank, and each of the five breakpoint rows ended up
+       * with a different amount of room for its value. The column they are
+       * meant to form never lined up.
+       *
+       * Nothing is lost by shortening it, because the DRAWN label and the
+       * ACCESSIBLE name are two different jobs and only the first one had a
+       * width problem. `title` below carries the full phrase — it is what
+       * `textField` hands to `aria-label` as well as to the tooltip — so a
+       * screen reader still hears "sm breakpoint utilities" where a sighted
+       * reader sees `sm` next to a heading that already says "640px and up".
+       *
+       * Getting that split wrong is not hypothetical: shortening the label
+       * alone silently shortened the accessible name with it, because the
+       * fallback is the label, and `host-parity-cases.mjs` caught it as five
+       * controls Angular appeared to be missing.
+       */
+      label: step.name,
+      name: `${step.name} breakpoint utilities`,
       title: `${step.name} · ${step.px}px and up${active?.name === step.name ? " · active now" : ""}`,
       usage: step.usage,
       owner: step.owner,
@@ -178,7 +218,10 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
         const basePrefix = step.prefix.endsWith(":") ? step.prefix.slice(0, -1) : step.prefix
         return row({
           id: `responsive.@${step.name}`,
-          label: `@${step.name} container utilities`,
+          // Same split as the viewport rows above: the bare prefix is drawn,
+          // the phrase is the accessible name and the tooltip.
+          label: `@${step.name}`,
+          name: `@${step.name} container utilities`,
           title: `@${step.name} · ${step.px}px and up${activeContainer?.name === step.name ? " · active now" : ""}`,
           usage: step.usage,
           owner: step.owner,
@@ -210,7 +253,9 @@ export const responsiveSection: InspectorSection = ({ selection, computed, write
   const containerToggle = containerContext && containerSteps.length > defaultContainerSteps.length
     ? miniButton({
         label: showAllContainers ? "Show documented and authored container steps" : "Show all container steps",
-        glyph: showAllContainers ? "⊟" : "⊞",
+        // The same show-more pair as the per-side token rows: this lengthens a
+        // LIST of container steps rather than splitting one value into four.
+        glyph: icon(showAllContainers ? "ChevronsDownUp" : "ChevronsUpDown", tokens.icon.row),
         pressed: showAllContainers,
         onClick: () => {
           setExpanded(CONTAINER_EXPANDER, !showAllContainers)

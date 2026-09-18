@@ -10,6 +10,7 @@
 import { toSourceRef } from "../core/bridge"
 import { LAYER_INDENT } from "../core/css/layers"
 import { el } from "../core/dom"
+import { focusControl } from "../core/focus"
 import { icon, type IconName } from "../core/icons"
 import { isDeepSelect } from "../core/keymap"
 import { getResolver } from "../core/resolve"
@@ -17,6 +18,7 @@ import { elementKey } from "../core/store"
 import { createWriter } from "../core/writer"
 import type { EditorContext } from "../core/context"
 import type { LayerElement, Selection } from "../core/types"
+import { tokens } from "../core/tokens"
 
 const INDENT = LAYER_INDENT, MAX_DEPTH = 40
 /** Filtering is the only full-tree walk; bound it so typing can never lock up. */
@@ -54,7 +56,7 @@ function glyphFor(element: LayerElement, promoted: boolean): IconName {
 function setAction(button: HTMLElement, on: boolean, glyph: IconName, label: string): void {
   if (button.dataset.glyph !== glyph) {
     button.dataset.glyph = glyph
-    button.replaceChildren(icon(glyph, 12))
+    button.replaceChildren(icon(glyph, tokens.icon.row))
   }
   setAttr(button, "aria-pressed", String(on))
   // The label names the OUTCOME, not the state: a button that says "Locked"
@@ -67,8 +69,10 @@ export function installLayersPanel(context: EditorContext): void {
   const resolver = getResolver(context.bridge)
   const writer = createWriter(context.bridge)
   const childrenOf = (element: Element): LayerElement[] => resolver.layerChildren(element)
-  const search = el("input", { class: "de-ai-input", type: "search", placeholder: "Filter layers",
-    "aria-label": "Filter layers", style: "min-height:0;height:24px;resize:none" }) as HTMLInputElement
+  const search = el("input", {
+    class: "de-layer-filter", type: "search", placeholder: "Filter layers",
+    "aria-label": "Filter layers",
+  }) as HTMLInputElement
   const tree = el("div", { class: "de-layers-tree", role: "tree", "aria-label": "Layers" })
   const indicator = el("div", { class: "de-layer-drop", "aria-hidden": "true", style: "display:none" })
   const header = el("div", { class: "de-section-header" }, ["Layers"])
@@ -148,6 +152,8 @@ export function installLayersPanel(context: EditorContext): void {
         el("span", { class: "de-layer-actions" }, [
           el("button", { class: "de-layer-action", type: "button", "data-action": "lock" }),
           el("button", { class: "de-layer-action", type: "button", "data-action": "eye" }),
+          el("button", { class: "de-layer-action de-layer-action--danger", type: "button",
+            "data-action": "delete" }),
         ]),
       ])
       // open-pencil stops the press on the action itself rather than filtering
@@ -161,6 +167,7 @@ export function installLayersPanel(context: EditorContext): void {
         const current = rowInfo.get(fresh)
         if (!action || !current) return
         if (action.dataset.action === "lock") toggleLock(current)
+        else if (action.dataset.action === "delete") deleteRow(current)
         else toggleVisible(current)
       })
       node = fresh
@@ -168,18 +175,18 @@ export function installLayersPanel(context: EditorContext): void {
     }
     rowInfo.set(node, row)
     const [twisty, glyph, label, strip] = Array.from(node.children) as HTMLElement[]
-    const [lock, eye] = Array.from(strip.children) as HTMLElement[]
+    const [lock, eye, remove] = Array.from(strip.children) as HTMLElement[]
     const openState = row.hasChildren ? String(row.open) : null
     // Rows are recycled across renders, so the twisty is toggled by presence
     // rather than rebuilt — a fresh <svg> per frame would churn the whole tree.
-    if (row.hasChildren && twisty.childElementCount === 0) twisty.append(icon("ChevronRight", 10))
+    if (row.hasChildren && twisty.childElementCount === 0) twisty.append(icon("ChevronRight", tokens.icon.row))
     else if (!row.hasChildren && twisty.childElementCount > 0) twisty.replaceChildren()
     // Same reason the mark is remembered on the node: it can only change when
     // the element does, and redrawing it is another whole <svg>.
     const mark = glyphFor(row.element, row.meta.promoted)
     if (glyph.dataset.glyph !== mark) {
       glyph.dataset.glyph = mark
-      glyph.replaceChildren(icon(mark, 12))
+      glyph.replaceChildren(icon(mark, tokens.icon.row))
     }
     if (label.textContent !== row.meta.name) label.textContent = row.meta.name
     // The stylesheet rotates the twisty off its own aria-expanded; the row
@@ -192,6 +199,14 @@ export function installLayersPanel(context: EditorContext): void {
     const isLocked = context.getState().locked.has(row.element)
     setAction(lock, isLocked, isLocked ? "Lock" : "LockOpen", `${isLocked ? "Unlock" : "Lock"} ${row.meta.name}`)
     setAction(eye, isHidden, isHidden ? "EyeOff" : "EyeOpen", `${isHidden ? "Show" : "Hide"} ${row.meta.name}`)
+    // Not through `setAction`: that one writes `aria-pressed`, which would
+    // announce delete as a toggle that is currently off.
+    if (remove.dataset.glyph !== "Trash") {
+      remove.dataset.glyph = "Trash"
+      remove.replaceChildren(icon("Trash", tokens.icon.row))
+    }
+    setAttr(remove, "aria-label", `Delete ${row.meta.name}`)
+    setAttr(remove, "title", `Delete ${row.meta.name}`)
     setAttr(node, "class", `de-layer${row.meta.promoted ? " de-layer--component" : ""}` +
       `${isLocked ? " de-layer--locked" : ""}${isHidden ? " de-layer--hidden" : ""}`)
     setAttr(node, "style", `padding-left:${8 + row.depth * INDENT}px;--de-indent:${row.depth * INDENT}px`)
@@ -264,6 +279,47 @@ export function installLayersPanel(context: EditorContext): void {
     render()
   }
 
+  /**
+   * Delete from the tree, keeping the keyboard where it was.
+   *
+   * A row acts on the whole selection when it is part of it — pressing Delete
+   * after shift-picking six rows deletes six, which is the only reading of that
+   * gesture — and on itself alone otherwise, because the trash icon on a row
+   * points at that row whatever else happens to be selected.
+   *
+   * Where focus lands is decided BEFORE the write. Afterwards the rows are gone
+   * and `visible` has been rebuilt, so there is nothing left to compute it
+   * from; a tree that drops focus to the body on Delete cannot be driven from
+   * the keyboard at all.
+   */
+  function deleteRow(row: Row): void {
+    const selection = context.getState().selection
+    const inSelection = selection.some((entry) => entry.element === row.element)
+    const targets = inSelection ? selection : [describe(row.element)]
+    const gone = (element: LayerElement) =>
+      targets.some((entry) => entry.element === element || entry.element.contains(element))
+
+    const index = visible.indexOf(row)
+    let next: LayerElement | null = null
+    for (let at = index + 1; at < visible.length && !next; at += 1) {
+      if (!gone(visible[at].element)) next = visible[at].element
+    }
+    for (let at = index - 1; at >= 0 && !next; at -= 1) {
+      if (!gone(visible[at].element)) next = visible[at].element
+    }
+
+    writer.applyDelete(targets)
+    context.select(null)
+    const scope = context.getState().scope
+    if (scope && !scope.isConnected) context.setState({ scope: null })
+    context.bridge.refreshGeometry()
+    // Every other panel repaints from this; the tree repaints inside `activate`
+    // (or here, when the deleted row was the last one and nothing can take focus).
+    context.refresh()
+    if (next) activate(next, false)
+    else render()
+  }
+
   /** A new Set per toggle: `setState` compares by identity. */
   function toggleLock(row: Row): void {
     const locked = new Set(context.getState().locked)
@@ -294,7 +350,7 @@ export function installLayersPanel(context: EditorContext): void {
       context.setState({ scope: resolver.layerParent(element) })
     }
     render()
-    rowByElement.get(element)?.focus()
+    focusControl(rowByElement.get(element))
   }
 
   /**
@@ -388,6 +444,7 @@ export function installLayersPanel(context: EditorContext): void {
       if (row.hasChildren && row.open) toggle(row, false)
       else activate(row.parent, false)
     } else if (key === "Enter" || key === " ") activate(row.element, true)
+    else if (key === "Delete" || key === "Backspace") deleteRow(row)
     else return
     event.preventDefault()
   })

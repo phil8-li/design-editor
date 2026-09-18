@@ -26,7 +26,6 @@ import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 
-import { chooseFolder } from "./folder-dialog.mjs"
 import { DEFAULT_SCAN_PORTS, describeProject, isDirectory, scanLocalApps } from "./local-apps.mjs"
 import { startScreenPage } from "./start-screen-page.mjs"
 
@@ -71,11 +70,11 @@ function isLoopbackHost(value) {
 /**
  * The one thing a pasted path may be that `path.isAbsolute` refuses.
  *
- * A path arrives here from a text field, and the field is the fast way in for
- * anyone whose project is not one of the detected apps. Every other source of a
- * path on this machine — the shell, `pwd`, Finder's Copy as Pathname — writes
- * `~` for the home directory, so a field that rejected it would be rejecting
- * the most likely thing to be typed into it.
+ * A path arrives here from a text field, and that field is the only way to name
+ * a project the scan did not find for itself. Every other source of a path on
+ * this machine — the shell, `pwd`, Finder's Copy as Pathname — writes `~` for
+ * the home directory, so a field that rejected it would be rejecting the most
+ * likely thing to be typed into it, with nothing else left to try.
  */
 function expandHome(value) {
   if (typeof value !== "string") return value
@@ -317,9 +316,6 @@ export async function createStartScreen({
   host = LOOPBACK,
   port = PREFERRED_START_SCREEN_PORT,
   log = console.log,
-  // The one route that puts a window on the user's screen, so it is the one
-  // piece a test can stand in for rather than drive.
-  openFolderDialog = chooseFolder,
 } = {}) {
   if (!isLoopbackHost(host)) throw new Error(`The start screen is loopback-only and cannot bind ${host}`)
 
@@ -338,7 +334,6 @@ export async function createStartScreen({
   let readyPath = ""
   let editing = null
   let stopped = null
-  let picking = false
   let closed = false
   /*
    * Per round, not per session.
@@ -363,35 +358,6 @@ export async function createStartScreen({
       const dir = pastedPath(url.searchParams.get("path") ?? "")
       if (!path.isAbsolute(dir)) throw badRequest("Ask for a folder by its full path.")
       sendJson(res, 200, { project: describeProject(dir) })
-    },
-    /*
-     * The native folder dialog, opened on the machine the files are on. It is a
-     * POST because it is the one read-only-looking route that has an effect: a
-     * window appears in front of whatever the user is doing.
-     *
-     * The dialog is modal to itself but not to this server, and it can end up
-     * behind the browser window — so a second press has to say where the first
-     * one went rather than stack another panel behind the same one.
-     */
-    "POST /api/browse": async (req, res) => {
-      if (picking) throw badRequest("The folder picker is already open — it may be behind this window.", 409)
-      const body = await readJsonBody(req)
-      const startIn = pastedPath(body?.startIn ?? "")
-      picking = true
-      let result
-      try {
-        result = await openFolderDialog({ startIn: path.isAbsolute(startIn) ? startIn : os.homedir() })
-      } catch (error) {
-        // The page will say this too, under the field. It is said here as well
-        // because a picker that fails on someone else's machine is reported as
-        // "nothing happened", and this is the line that makes it a bug report.
-        log(`[design-editor] ${error.message}`)
-        throw error
-      } finally {
-        picking = false
-      }
-      if (result.canceled) sendJson(res, 200, { canceled: true })
-      else sendJson(res, 200, { canceled: false, project: describeProject(result.path) })
     },
     /*
      * What the page needs to decide which face to show: the editor's URL if one

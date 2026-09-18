@@ -9,8 +9,8 @@ export const codeCss = `/* ---------- code tab ---------- */
 }
 .de-code-header {
   flex: none;
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px;
+  display: flex; align-items: center; gap: ${t.space.md}px;
+  padding: ${t.space.md}px;
   border-bottom: 1px solid ${t.color.border};
 }
 /* The picker takes the row; the file reference keeps whatever is left. */
@@ -19,14 +19,17 @@ export const codeCss = `/* ---------- code tab ---------- */
   flex: none; max-width: 50%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: ${t.font.mono};
-  font-size: ${t.type.caption};
+  font-size: ${t.type.body};
   color: ${t.color.textDim};
 }
 /* Stands in for the code view, so it has to fill the same slot. */
 .de-code .de-empty { flex: 1; min-height: 0; }
 .de-code-view {
   flex: 1; min-height: 0;
-  margin: 0; padding: 10px;
+  /* The slab's inset is the header's and the footer's, so the first character
+     of code sits on the same column as the file picker above it; at 10 it was
+     two pixels inboard of both and the panel had three left edges. */
+  margin: 0; padding: ${t.space.md}px;
   overflow: auto;
   background: ${t.color.bgSunken};
   color: ${t.color.text};
@@ -49,8 +52,14 @@ export const codeCss = `/* ---------- code tab ---------- */
  * the code and leaves the gutter behind. It counts lines in THIS view, not in
  * the file; the file's own line is in the header beside the name.
  */
+/* \`minmax(2ch, auto)\` and not \`2ch\`: the gutter reserves two digits, and a
+   fixed track made line 100 of a long file spill left out of its own column
+   and under the code. Files this view opens routinely run past 99 lines. */
 .de-code-line {
-  display: grid; grid-template-columns: 2ch 1fr; gap: 10px;
+  /* The tight step, not the group one: this gutter is 260px of panel away from
+     the code it numbers, and every pixel spent parting the two columns is a
+     character the wrapped line loses. 8 still reads as a gutter. */
+  display: grid; grid-template-columns: minmax(2ch, auto) 1fr; gap: ${t.space.md}px;
 }
 .de-code-line::before {
   content: attr(data-line);
@@ -58,6 +67,17 @@ export const codeCss = `/* ---------- code tab ---------- */
   color: ${t.color.textDim};
   user-select: none; -webkit-user-select: none;
 }
+/*
+ * The tints, re-measured against the ground they are tuned to.
+ *
+ * \`bgSunken\` moved with the chrome — \`#25292e\` to \`#121316\` — and the obvious
+ * worry was that a palette picked for the old one had gone flat. It went the
+ * other way: every tint gained about 2 points of contrast because the ground
+ * dropped, and the set now runs 9.8:1 (number) to 13.2:1 (string), with
+ * punctuation the floor at 6.8:1. Nothing here needs re-cutting, and the note
+ * is the useful part — the next person to move the ground should re-measure
+ * rather than re-derive, and the value that goes first is the punctuation.
+ */
 .de-code-text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .de-code-tag { color: ${t.code.tag}; }
 .de-code-attribute { color: ${t.code.attribute}; }
@@ -66,12 +86,12 @@ export const codeCss = `/* ---------- code tab ---------- */
 .de-code-punctuation { color: ${t.code.punctuation}; }
 .de-code-footer {
   flex: none;
-  display: flex; align-items: center; justify-content: space-between; gap: 6px;
-  padding: 8px;
+  display: flex; align-items: center; justify-content: space-between; gap: ${t.space.md}px;
+  padding: ${t.space.md}px;
   border-top: 1px solid ${t.color.border};
 }
-.de-code-status { font-size: ${t.type.caption}; color: ${t.color.textDim}; }
+.de-code-status { font-size: ${t.type.body}; color: ${t.color.textDim}; }
 .de-code-status--success { color: ${t.color.success}; }
 .de-code-status--error { color: ${t.color.danger}; }
-.de-code-actions { display: inline-flex; align-items: center; gap: 4px; }
+.de-code-actions { display: inline-flex; align-items: center; gap: ${t.space.sm}px; }
 `

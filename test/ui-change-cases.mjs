@@ -512,7 +512,19 @@ async function serverGuardCases() {
     await fetch(`${API}/options/${key}`, { method: "DELETE" })
   })
 
-  await checkAsync("the agent refuses a non-source file", async () => {
+  await checkAsync("naming a sensitive file at the agent route is inert", async () => {
+    /*
+     * This used to be "the agent refuses a non-source file", and it branched on
+     * `ANTHROPIC_API_KEY`: with a key set the route read the named file, so an
+     * extension gate had to stop it at `.env.local`; without one it fell
+     * through to the handoff. The route reads no file at all now — the only
+     * transport writes a brief — so the gate has nothing to refuse and the
+     * branch would have failed for anyone who happens to export that variable.
+     *
+     * The claim worth keeping is stronger than the one it replaces: a path
+     * named by the browser is a label the record repeats, never something the
+     * server opens.
+     */
     const response = await fetch(`${API}/agent`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -522,14 +534,13 @@ async function serverGuardCases() {
       }),
     })
     const result = await response.json()
-    // Without a key the handoff path answers; with one the extension gate must.
-    if (process.env.ANTHROPIC_API_KEY) {
-      assert.equal(result.ok, false)
-      assert.match(result.message, /component source files/)
-    } else {
-      const stateRelative = path.relative(config.projectRoot, config.stateDir)
-      assert.equal(result.handoffPath?.startsWith(stateRelative), true)
-    }
+
+    const stateRelative = path.relative(config.projectRoot, config.stateDir)
+    assert.equal(result.handoffPath?.startsWith(stateRelative), true)
+    assert.equal(result.filesChanged, undefined, "the route edited something")
+    // That the file's CONTENTS never reach the record is checked hermetically
+    // in mcp-handoff-cases, which owns a temp project root and can plant a
+    // secret in it; this level talks to whichever server is already up.
   })
 
   await checkAsync("an unknown route 404s instead of falling through to the app", async () => {
