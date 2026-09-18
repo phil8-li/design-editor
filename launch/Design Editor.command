@@ -1,8 +1,8 @@
 #!/bin/bash
-# Double-click this in Finder to open the design editor.
+# Double-click this in Finder to open the design editor against a REMOTE dev box.
 #
 # It lands you on the PROJECT CHOOSER, which lists the prototypes running on
-# your Cloudtop and lets you pick one — and switch to another later without
+# that machine and lets you pick one — and switch to another later without
 # coming back here. It does the parts you would otherwise do by hand: start the
 # chooser, connect the ports, open the browser.
 #
@@ -11,12 +11,42 @@
 # shape for a script you run in one repo all day and the wrong one for a
 # launcher, which is exactly the moment you have not yet said which prototype
 # you mean.
-
-# ---------------- CONFIG ----------------
-CLOUDTOP="philhaoyang1.c.googlers.com"
-# ----------------------------------------
+#
+# ---------------------------------------------------------------------------
+# Settings, and why none of them is written into this file.
+#
+# This script used to hardcode one person's dev host, the jump-host helper their
+# employer ships, and the path their checkout happens to live at. That makes it
+# a script exactly one machine can run, and it puts an internal hostname in a
+# public repository — so the three facts that differ per person are read from
+# the environment instead, and the only one with no sensible default is refused
+# rather than guessed.
+#
+#   DESIGN_EDITOR_REMOTE_HOST   required. Anything `ssh` accepts: `devbox`,
+#                               `user@10.0.0.4`, or a Host alias from
+#                               ~/.ssh/config — which is the better place for
+#                               the user, port, key and any ProxyCommand.
+#   DESIGN_EDITOR_REMOTE_PATH   where design-editor is checked out over there.
+#                               Default: ~/src/design-editor
+#   DESIGN_EDITOR_SSH_PROXY     a ProxyCommand, for a network that needs one to
+#                               reach the host at all. Usually unset, because
+#                               ~/.ssh/config is where this belongs.
+#
+# Set them for a double-clicked script — which inherits no shell profile — by
+# putting them in `launch/.env` next to this file. That path is gitignored, so
+# your host stays yours.
+# ---------------------------------------------------------------------------
 
 set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit 1
+
+# Sourced before anything reads a setting, and optional: the environment still
+# works for anyone running this from a terminal that already has it.
+[ -f "launch/.env" ] && . "launch/.env"
+
+REMOTE_HOST="${DESIGN_EDITOR_REMOTE_HOST:-}"
+REMOTE_PATH="${DESIGN_EDITOR_REMOTE_PATH:-\$HOME/src/design-editor}"
 
 # The chooser, and the two ports it hands to whichever editor you start from it.
 # All three are forwarded up front, because pressing Start sends your tab
@@ -24,28 +54,53 @@ set -uo pipefail
 CHOOSER=3455
 PROXY=3456
 WS=3457
-SSH_OPTS=(-o ConnectTimeout=20 -o ProxyCommand="corp-ssh-helper %h %p")
+
+SSH_OPTS=(-o ConnectTimeout=20)
+# Appended only when asked for. An empty ProxyCommand is not the same as none —
+# ssh treats it as a command to run, and every connection fails.
+[ -n "${DESIGN_EDITOR_SSH_PROXY:-}" ] && SSH_OPTS+=(-o ProxyCommand="$DESIGN_EDITOR_SSH_PROXY")
 
 say() { printf "\n\033[1m%s\033[0m\n" "$1"; }
 die() { printf "\n\033[31m%s\033[0m\n\n" "$1"; echo "Press any key to close."; read -r -n 1; exit 1; }
 
-cd "$(dirname "$0")/.." || exit 1
+if [ -z "$REMOTE_HOST" ]; then
+  cat <<'HELP'
 
-say "1/4  Connecting to your Cloudtop…"
+  No remote host is configured.
+
+  This launcher opens the editor against a dev machine you reach over SSH.
+  Tell it which one, once:
+
+      echo 'DESIGN_EDITOR_REMOTE_HOST=my-devbox' > launch/.env
+
+  Anything ssh accepts works — a Host alias from ~/.ssh/config is the best of
+  them, because the user, port, key and any ProxyCommand belong there rather
+  than in this script.
+
+  Running the editor on THIS machine needs none of it: `npm start` in the
+  project root opens the same chooser with no tunnel in the way.
+
+HELP
+  echo "Press any key to close."; read -r -n 1; exit 1
+fi
+
+say "1/4  Connecting to $REMOTE_HOST…"
 echo "     (if your security key blinks, touch it)"
 # Deliberately NOT BatchMode. The ssh-agent often wants a security-key touch or
 # a passphrase, and BatchMode suppresses exactly that prompt — the check would
 # then fail for a connection that would have worked if it had been allowed to
 # ask. This window has a terminal, so let ssh use it.
-if ! ssh "${SSH_OPTS[@]}" "$CLOUDTOP" 'echo ok' >/dev/null; then
-  cat <<'HELP'
+if ! ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" 'echo ok' >/dev/null; then
+  cat <<HELP
 
-Could not reach the Cloudtop.
+Could not reach $REMOTE_HOST.
 
-Almost always one of two things:
-  • Your security key needs a touch — run `gcertstatus`, then `gcert` if it has
-    expired, and touch the key when it blinks.
-  • You are off the corp network.
+Almost always one of three things:
+  • Your SSH credentials expired, or your key wants a touch. Run
+    \`ssh $REMOTE_HOST\` in a terminal and see what it asks for.
+  • You are off the network that host is on, or its jump host is down.
+  • The name is wrong. It comes from DESIGN_EDITOR_REMOTE_HOST, which
+    launch/.env is the usual place to set.
 
 Then double-click this again.
 HELP
@@ -55,14 +110,14 @@ fi
 # A forward left on the shared connection by an older version of this script,
 # or by a run that was killed outright. Harmless when there is none.
 ssh "${SSH_OPTS[@]}" -O cancel -L $PROXY:127.0.0.1:$PROXY -L $WS:127.0.0.1:$WS \
-  "$CLOUDTOP" >/dev/null 2>&1
+  "$REMOTE_HOST" >/dev/null 2>&1
 
 # Forwards a previous run left on the shared connection, or that a run killed
 # outright never took down. Harmless when there are none.
 FORWARDS=(-L "$CHOOSER:127.0.0.1:$CHOOSER" -L "$PROXY:127.0.0.1:$PROXY" -L "$WS:127.0.0.1:$WS")
-ssh "${SSH_OPTS[@]}" -O cancel "${FORWARDS[@]}" "$CLOUDTOP" >/dev/null 2>&1
+ssh "${SSH_OPTS[@]}" -O cancel "${FORWARDS[@]}" "$REMOTE_HOST" >/dev/null 2>&1
 
-say "2/4  Starting the chooser on the Cloudtop…"
+say "2/4  Starting the chooser on $REMOTE_HOST…"
 # With no port argument the editor opens its project chooser rather than
 # attaching to one app. That is the point of this script: the chooser outlives
 # the choice, so switching prototypes is a click in the editor's toolbar rather
@@ -73,8 +128,13 @@ say "2/4  Starting the chooser on the Cloudtop…"
 # appears in the ssh command being sent, so pkill matches the shell running it
 # and kills itself. The symptom is exit 255 with no output, which reads like the
 # connection dropped.
-ssh "${SSH_OPTS[@]}" "$CLOUDTOP" "
-  export PATH=\$HOME/.local/opt/node-current/bin:\$HOME/.local/bin:\$PATH
+#
+# A non-login ssh command gets a thin PATH, so a node installed under $HOME is
+# not on it. `.local/bin` and a version manager's shim directory are the two
+# places it usually is; add your own with DESIGN_EDITOR_REMOTE_PATH's neighbour
+# in launch/.env if node lives somewhere else on that machine.
+ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "
+  export PATH=\$HOME/.local/bin:\$HOME/.local/opt/node-current/bin:\$PATH
   for port in $CHOOSER $PROXY $WS; do
     old=\$(lsof -ti tcp:\$port -s tcp:LISTEN 2>/dev/null | head -1)
     [ -n \"\$old\" ] && kill \$old 2>/dev/null
@@ -82,7 +142,7 @@ ssh "${SSH_OPTS[@]}" "$CLOUDTOP" "
   sleep 2
   cd \$HOME || exit 1
   rm -f /tmp/design-editor.log
-  setsid nohup node \$HOME/src/design-editor/cli.mjs --no-open \
+  setsid nohup node $REMOTE_PATH/cli.mjs --no-open \
     --start-screen-port $CHOOSER --proxy-port $PROXY --ws-port $WS \
     > /tmp/design-editor.log 2>&1 < /dev/null &
   echo started
@@ -90,7 +150,7 @@ ssh "${SSH_OPTS[@]}" "$CLOUDTOP" "
 
 say "3/4  Waiting for it to come up…"
 for _ in $(seq 1 40); do
-  if ssh "${SSH_OPTS[@]}" "$CLOUDTOP" "grep -q 'to choose an app' /tmp/design-editor.log 2>/dev/null"; then
+  if ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "grep -q 'to choose an app' /tmp/design-editor.log 2>/dev/null"; then
     READY=1; break
   fi
   printf "."
@@ -98,7 +158,7 @@ for _ in $(seq 1 40); do
 done
 echo
 if [ "${READY:-0}" != "1" ]; then
-  ssh "${SSH_OPTS[@]}" "$CLOUDTOP" 'tail -20 /tmp/design-editor.log' 2>/dev/null
+  ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" 'tail -20 /tmp/design-editor.log' 2>/dev/null
   die "The chooser did not come up. Its output is above."
 fi
 
@@ -116,13 +176,13 @@ say "4/4  Connecting and opening your browser…"
 #
 # `-O forward` asks the existing connection to add the forward and returns
 # immediately; `-O cancel` takes it away again. One touch, and a real teardown.
-ssh "${SSH_OPTS[@]}" -O forward "${FORWARDS[@]}" "$CLOUDTOP" >/dev/null 2>&1 \
+ssh "${SSH_OPTS[@]}" -O forward "${FORWARDS[@]}" "$REMOTE_HOST" >/dev/null 2>&1 \
   || die "Could not connect the ports."
 
 # On the signals a closed Terminal window actually sends, not just on a clean
 # exit: an EXIT trap alone does not run when the shell is terminated.
 cleanup() {
-  ssh "${SSH_OPTS[@]}" -O cancel "${FORWARDS[@]}" "$CLOUDTOP" >/dev/null 2>&1
+  ssh "${SSH_OPTS[@]}" -O cancel "${FORWARDS[@]}" "$REMOTE_HOST" >/dev/null 2>&1
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -142,7 +202,7 @@ cat <<EOF
       here.
 
   Keep this window open while you work — closing it disconnects the editor.
-  Your edits land in the real files on the Cloudtop when you press
+  Your edits land in the real files on $REMOTE_HOST when you press
   "Apply to code".
 
 EOF

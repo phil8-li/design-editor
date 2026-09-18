@@ -15,3 +15,16 @@ test/.icon-set-fixture/
 
 # Per-task worktrees. Checkouts, never sources.
 .worktrees/
+
+# Scratch output of tools/panel-harness.mjs: a rendered panel, its
+# screenshots, and its measurements. Regenerate, never commit.
+.harness/
+
+# Scratch output of tools/icon-lab.mjs: the glyph bench, rendered and measured.
+# Regenerate, never commit.
+.icon-lab/
+
+# Which remote machine `launch/Design Editor.command` opens the editor against.
+# One line naming somebody's dev box — theirs, not this repository's, and the
+# launcher refuses to run rather than falling back to a hostname baked in here.
+launch/.env
