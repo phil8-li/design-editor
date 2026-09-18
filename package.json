@@ -2,7 +2,7 @@
   "name": "design-editor",
   "version": "0.1.0",
   "private": true,
-  "description": "A standalone visual editor for running Next.js development servers.",
+  "description": "A standalone visual editor for running React and Angular development servers.",
   "license": "MIT",
   "author": "Haoyang Li",
   "repository": {
@@ -15,10 +15,14 @@
   "homepage": "https://github.com/phil8-li/design-editor#readme",
   "keywords": [
     "nextjs",
+    "angular",
     "tailwindcss",
     "visual-editor",
     "design-tools",
+    "design-systems",
+    "design-tokens",
     "devtools",
+    "mcp",
     "react"
   ],
   "type": "module",

@@ -119,7 +119,7 @@ touched, and not a `feat:`/`fix:` prefix:
 ```
 Open the page you asked for, and never the last app's folder
 Rebuild a bundle that has fallen behind its source, before serving it
-Hand a write that cannot reach source to the Prompts tab
+Hand a write that cannot reach source to the Changes tab
 ```
 
 If there is a body, spend it on why the old behavior was wrong. That is the
@@ -166,7 +166,7 @@ Do not commit `dist/`, `node_modules/`, or anything under `.local/` — the
 
 Open an issue with the version or commit, your OS and Node version, the Next.js
 version and which router the app uses, whether Tailwind is v3 or v4, and what
-you expected instead. If the editor showed the change in the Prompts tab rather
+you expected instead. If the editor showed the change in the Changes tab rather
 than writing it to a file, say so — that is a different failure from silence,
 and it narrows things down fast.
 

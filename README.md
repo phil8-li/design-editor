@@ -1,19 +1,44 @@
 # design-editor
 
-A visual editor for a running Next.js dev server. It proxies your app, lets you
-select an element in the page, edit its Tailwind classes and inline styles, and
-writes the change back into the component source.
+A visual editor for a running React or Angular dev server. It proxies your app,
+lets you select an element in the page, edit its layout, styles and design
+tokens, and writes the change back into the component source.
 
 Nothing in your app imports it, and nothing in it imports your app. It attaches
 from the outside, at the proxy, so adopting it is additive and dropping it
 leaves no trace in your source tree.
 
+What it does, in the order you meet it:
+
+- **Edit the page, and keep the change.** Select an element and work on its
+  layout, spacing, typography, fill and effects. Elements can be inserted and
+  deleted too, and every edit is written back to real source — see
+  [Where a change ends up](#where-a-change-ends-up).
+- **Read whatever design system the app already loads.** Point it at a
+  manifest, a W3C tokens file, or nothing but a stylesheet the app serves, and
+  the token pickers, component catalog and icon set come from *that* system
+  rather than one hardcoded here. See [Design-system catalog](#design-system-catalog)
+  and [A design system that is not a manifest](#a-design-system-that-is-not-a-manifest).
+- **Say what is wrong without writing the fix.** Leave a note on an element, a
+  region or a run of text, then hand the set to your coding agent over MCP — it
+  reads the notes, the elements they point at, and the source that renders them.
+  See [Handing a change to your coding agent](#handing-a-change-to-your-coding-agent).
+- **Move between the apps you have running.** One chooser lists every editor on
+  the machine, so changing prototypes is a click rather than a restart. See
+  [Switching apps](#switching-apps).
+
+Both frameworks are first-class and neither needs configuring. Tailwind is
+detected separately from the framework: durable layout and appearance edits
+write Tailwind utilities, and an app without it still inspects, annotates, and
+edits text.
+
 ## Requirements
 
 - Node >= 20.9
-- A Next.js or Angular app with a dev script (the start screen and `--dev` both
-  run it for you; with neither, start the dev server yourself first). Which one
-  it is is detected from the host's `package.json` — see [Angular hosts](#angular-hosts).
+- A React app (Next.js, or Vite) or an Angular app, with a dev script (the start
+  screen and `--dev` both run it for you; with neither, start the dev server
+  yourself first). Which one it is is detected from the host's `package.json` —
+  see [Angular hosts](#angular-hosts).
 - App Router and Pages Router are both supported, and neither requires a
   `next.config` file. The overlay can inspect any Next app; durable layout and
   appearance edits currently write Tailwind utilities, so full visual editing
@@ -225,7 +250,7 @@ covers the preview and the queued source operation together: undoing a change
 also takes back what "Apply to code" would have written.
 
 Dragging and resizing on the canvas go through that same writer, so a gesture is
-one undo step, one row in the Prompts tab, and — for the width and height a
+one undo step, one row in the Changes tab, and — for the width and height a
 resize settles on — a queued operation "Apply to code" can write. A gesture that
 moved and resized at once is a single step, not three.
 
@@ -272,7 +297,7 @@ and sends its class name to the loopback server, which maps it through the
 is then located inside that template by tag, static classes, parent and sibling
 index. A descriptor that fits two template nodes equally well resolves to
 NOTHING: the inspector still names the component's file, "Apply to code" leaves
-that element alone, and the change goes to the Prompts tab. Guessing between two
+that element alone, and the change goes to the Changes tab. Guessing between two
 candidates would restyle an element the user was not looking at, and the only
 clue would be the wrong thing moving.
 
@@ -578,7 +603,7 @@ line to itself, and both refuse rather than guess:
 | An element inside `{open && …}` or a `.map()` callback | The branch would be left empty; delete the branch |
 
 A refusal is reported by name in the Apply toast, and the change stays on screen
-with a line in the Prompts tab an agent can act on.
+with a line in the Changes tab an agent can act on.
 
 ## Where a change ends up
 
@@ -586,7 +611,7 @@ Two surfaces catch an edit, and between them nothing is dropped.
 
 - **"Apply to code"** writes the changes the codemod can spell, into the
   component source it resolved them to.
-- **The Prompts tab** catches the rest, as a written instruction you hand to an
+- **The Changes tab** catches the rest, as a written instruction you hand to an
   agent. A change can land here because the property is one the writer cannot
   express — but also because the *file* could not be found: under React 19 the
   fibre walk can answer with no path at all, and the async resolver can come
@@ -594,7 +619,7 @@ Two surfaces catch an edit, and between them nothing is dropped.
 
 That second case used to be a hole. The edit was on screen, and no surface in
 the editor admitted it existed: it was dropped on its way to the queue, "Apply
-to code" stayed disabled, and the Prompts tab said there was nothing to hand
+to code" stayed disabled, and the Changes tab said there was nothing to hand
 over. Now a write that cannot reach source falls back to the tab, carrying the
 value it read *before* the element changed, so the instruction says what to
 change it from. A change reaching the queue stays out of the tab, so an agent is
@@ -607,12 +632,25 @@ a drag.
 
 ## Handing a change to your coding agent
 
-The Prompts tab has two buttons. **Copy change prompts** writes the brief to the
-clipboard. **Send to agent** delivers the same bytes straight into a coding
-agent that is already running, with no paste.
+The **Changes** tab holds everything a session produced — the notes you left and
+the edits you made — and finishes them in two groups, because the two halves
+finish differently.
 
-Copy is not a fallback and does not go away. The editor cannot see whether an
-agent is attached, so the paste path has to stay a peer.
+**Apply to code** writes the half the codemod can spell, straight into your
+files: a hundred milliseconds, and exact. **Send to agent** delivers the rest to
+a coding agent that is already running, with no paste, and with the written half
+already in the brief as context. Each button sits under its own rows, so a
+session that only moved some padding never thinks about an agent at all.
+
+There is also **Copy**, which writes the same brief to the clipboard. It is not
+a fallback and does not go away: the editor cannot see whether an agent is
+attached, so the paste path has to stay a peer.
+
+Which half a change lands in is never the designer's question to answer. It used
+to be — "Send to agent" and "Apply to code" sat side by side, and which one
+finished your change depended on whether the writer happened to have a word for
+the CSS property you touched. Recolouring went one way, dragging went the other,
+and nothing on screen said so.
 
 ### How it works
 
@@ -785,7 +823,7 @@ window shrinks and takes exactly that room back when it grows. It also covers th
 this tool is judged on and cannot watch itself: the start screen and its folder
 dialog, bundle freshness, whole drag gestures driven through jsdom — pinning the
 value each one records as its "from" — and the two ways a write can fail to
-reach source, which must land in the Prompts tab rather than vanish.
+reach source, which must land in the Changes tab rather than vanish.
 `test/delete-cases.mjs` runs the delete path end to end on both hosts, against
 real files in a temp project: the key, the undo that restores an element between
 its original siblings, and every refusal the two source writers are allowed to
